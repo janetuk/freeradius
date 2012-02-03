@@ -253,6 +253,7 @@ typedef enum {
 #define PW_OTP_CHALLENGE		1145
 #define PW_EAP_SESSION_ID		1146
 
+#define PW_CHBIND_RESPONSE_CODE		1140
 /*
  *	Integer Translations
  */

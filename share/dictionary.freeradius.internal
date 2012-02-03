@@ -240,6 +240,13 @@ ATTRIBUTE	FreeRADIUS-Client-Src-IPv6-Address	1144	ipv6addr
 
 ATTRIBUTE	OTP-Challenge				1145	string
 ATTRIBUTE	EAP-Session-Id				1146	octets
+#	For EAP channel binding
+
+ATTRIBUTE	Chbind-Response-Code			1147	integer
+
+VALUE	Chbind-Response-Code		success			2
+VALUE	Chbind-Response-Code		failure			3
+
 #
 #	Range:	1200-1279
 #		EAP-SIM (and other EAP type) weirdness.
