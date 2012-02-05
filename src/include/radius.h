@@ -380,4 +380,4 @@ typedef enum {
  * JANET's code for transporting eap channel binding data over ttls
  */
 
-#define PW_UKERNA_CHBIND		134
+#define PW_UKERNA_CHBIND		135
