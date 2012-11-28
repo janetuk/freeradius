@@ -415,6 +415,180 @@ static void null_free(UNUSED void *data)
 {
 }
 
+
+int realms_home_server_add(home_server *home, CONF_SECTION *cs, int dual)
+{
+        CONF_SECTION *parent = NULL;
+	const char * name2 = home->name;
+	
+	/*
+	 *	Make sure that this is set.
+	 */
+	if (home->src_ipaddr.af == AF_UNSPEC) {
+		home->src_ipaddr.af = home->ipaddr.af;
+	}
+
+	free(hs_srcipaddr);
+	hs_srcipaddr = NULL;
+
+	if (rbtree_finddata(home_servers_byname, home) != NULL) {
+		cf_log_err(cf_sectiontoitem(cs),
+			   "Duplicate home server name %s.", name2);
+		goto error;
+	}
+
+	if (!home->server &&
+	    (rbtree_finddata(home_servers_byaddr, home) != NULL)) {
+		cf_log_err(cf_sectiontoitem(cs),
+			   "Duplicate home server IP %s.", name2);
+		goto error;
+	}
+
+	if (!rbtree_insert(home_servers_byname, home)) {
+		cf_log_err(cf_sectiontoitem(cs),
+			   "Internal error %d adding home server %s.",
+			   __LINE__, name2);
+		goto error;
+	}
+
+	if (!home->server &&
+	    !rbtree_insert(home_servers_byaddr, home)) {
+		rbtree_deletebydata(home_servers_byname, home);
+		cf_log_err(cf_sectiontoitem(cs),
+			   "Internal error %d adding home server %s.",
+			   __LINE__, name2);
+		goto error;
+	}
+
+#ifdef WITH_STATS
+	home->number = home_server_max_number++;
+	if (!rbtree_insert(home_servers_bynumber, home)) {
+		rbtree_deletebydata(home_servers_byname, home);
+		if (home->ipaddr.af != AF_UNSPEC) {
+			rbtree_deletebydata(home_servers_byname, home);
+		}
+		cf_log_err(cf_sectiontoitem(cs),
+			   "Internal error %d adding home server %s.",
+			   __LINE__, name2);
+		goto error;
+	}
+#endif
+
+	if (home->max_outstanding < 8) home->max_outstanding = 8;
+	if (home->max_outstanding > 65536*16) home->max_outstanding = 65536*16;
+
+	if (home->ping_interval < 6) home->ping_interval = 6;
+	if (home->ping_interval > 120) home->ping_interval = 120;
+
+	if (home->response_window < 1) home->response_window = 1;
+	if (home->response_window > 60) home->response_window = 60;
+	if (home->response_window > mainconfig.max_request_time) home->response_window = mainconfig.max_request_time;
+
+	if (home->zombie_period < 1) home->zombie_period = 1;
+	if (home->zombie_period > 120) home->zombie_period = 120;
+
+	if (home->zombie_period < home->response_window) {
+		home->zombie_period = home->response_window;
+	}
+
+	if (home->num_pings_to_alive < 3) home->num_pings_to_alive = 3;
+	if (home->num_pings_to_alive > 10) home->num_pings_to_alive = 10;
+
+	if (home->ping_timeout < 3) home->ping_timeout = 3;
+	if (home->ping_timeout > 10) home->ping_timeout = 10;
+
+	if (home->revive_interval < 60) home->revive_interval = 60;
+	if (home->revive_interval > 3600) home->revive_interval = 3600;
+
+#ifdef WITH_COA
+	if (home->coa_irt < 1) home->coa_irt = 1;
+	if (home->coa_irt > 5) home->coa_irt = 5;
+
+	if (home->coa_mrc < 0) home->coa_mrc = 0;
+	if (home->coa_mrc > 20 ) home->coa_mrc = 20;
+
+	if (home->coa_mrt < 0) home->coa_mrt = 0;
+	if (home->coa_mrt > 30 ) home->coa_mrt = 30;
+
+	if (home->coa_mrd < 5) home->coa_mrd = 5;
+	if (home->coa_mrd > 60 ) home->coa_mrd = 60;
+#endif
+
+	if (home->limit.max_connections > 1024) home->limit.max_connections = 1024;
+
+#ifdef WITH_TCP
+	/*
+	 *	UDP sockets can't be connection limited.
+	 */
+	if (home->proto != IPPROTO_TCP) home->limit.max_connections = 0;
+#endif
+
+	if ((home->limit.idle_timeout > 0) && (home->limit.idle_timeout < 5))
+		home->limit.idle_timeout = 5;
+	if ((home->limit.lifetime > 0) && (home->limit.lifetime < 5))
+		home->limit.lifetime = 5;
+	if ((home->limit.lifetime > 0) && (home->limit.idle_timeout > home->limit.lifetime))
+		home->limit.idle_timeout = 0;
+
+	
+	if (cs) {
+		parent = cf_item_parent(cf_sectiontoitem(cs));
+		if (strcmp(cf_section_name1(parent), "server") == 0) {
+			home->parent_server = cf_section_name2(parent);
+		}
+	}
+	
+	if (dual) {
+		home_server *home2 = rad_malloc(sizeof(*home2));
+
+		memcpy(home2, home, sizeof(*home2));
+
+		home2->type = HOME_TYPE_ACCT;
+		home2->port++;
+		home2->ping_user_password = NULL;
+		home2->cs = cs;
+		home2->parent_server = home->parent_server;
+
+		if (!rbtree_insert(home_servers_byname, home2)) {
+			cf_log_err(cf_sectiontoitem(cs),
+				   "Internal error %d adding home server %s.",
+				   __LINE__, name2);
+			free(home2);
+			return 0;
+		}
+		
+		if (!home->server &&
+		    !rbtree_insert(home_servers_byaddr, home2)) {
+			rbtree_deletebydata(home_servers_byname, home2);
+			cf_log_err(cf_sectiontoitem(cs),
+				   "Internal error %d adding home server %s.",
+				   __LINE__, name2);
+			free(home2);
+			return 0;
+		}
+
+#ifdef WITH_STATS
+		home2->number = home_server_max_number++;
+		if (!rbtree_insert(home_servers_bynumber, home2)) {
+			rbtree_deletebydata(home_servers_byname, home2);
+			if (!home2->server) {
+				rbtree_deletebydata(home_servers_byname, home2);
+			}
+			cf_log_err(cf_sectiontoitem(cs),
+				   "Internal error %d adding home server %s.",
+				   __LINE__, name2);
+			free(home2);
+			return 0;
+		}
+#endif
+	}
+
+	return 1;
+ error:
+	return 0;
+}
+
+
 static int home_server_add(realm_config_t *rc, CONF_SECTION *cs)
 {
 	const char *name2;
@@ -697,164 +871,8 @@ static int home_server_add(realm_config_t *rc, CONF_SECTION *cs)
 		goto error;
 	}
 
-	/*
-	 *	Make sure that this is set.
-	 */
-	if (home->src_ipaddr.af == AF_UNSPEC) {
-		home->src_ipaddr.af = home->ipaddr.af;
-	}
-
-	free(hs_srcipaddr);
-	hs_srcipaddr = NULL;
-
-	if (rbtree_finddata(home_servers_byname, home) != NULL) {
-		cf_log_err(cf_sectiontoitem(cs),
-			   "Duplicate home server name %s.", name2);
+	if ( !realms_home_server_add( home, cs, dual))
 		goto error;
-	}
-
-	if (!home->server &&
-	    (rbtree_finddata(home_servers_byaddr, home) != NULL)) {
-		cf_log_err(cf_sectiontoitem(cs),
-			   "Duplicate home server IP %s.", name2);
-		goto error;
-	}
-
-	if (!rbtree_insert(home_servers_byname, home)) {
-		cf_log_err(cf_sectiontoitem(cs),
-			   "Internal error %d adding home server %s.",
-			   __LINE__, name2);
-		goto error;
-	}
-
-	if (!home->server &&
-	    !rbtree_insert(home_servers_byaddr, home)) {
-		rbtree_deletebydata(home_servers_byname, home);
-		cf_log_err(cf_sectiontoitem(cs),
-			   "Internal error %d adding home server %s.",
-			   __LINE__, name2);
-		goto error;
-	}
-
-#ifdef WITH_STATS
-	home->number = home_server_max_number++;
-	if (!rbtree_insert(home_servers_bynumber, home)) {
-		rbtree_deletebydata(home_servers_byname, home);
-		if (home->ipaddr.af != AF_UNSPEC) {
-			rbtree_deletebydata(home_servers_byname, home);
-		}
-		cf_log_err(cf_sectiontoitem(cs),
-			   "Internal error %d adding home server %s.",
-			   __LINE__, name2);
-		goto error;
-	}
-#endif
-
-	if (home->max_outstanding < 8) home->max_outstanding = 8;
-	if (home->max_outstanding > 65536*16) home->max_outstanding = 65536*16;
-
-	if (home->ping_interval < 6) home->ping_interval = 6;
-	if (home->ping_interval > 120) home->ping_interval = 120;
-
-	if (home->response_window < 1) home->response_window = 1;
-	if (home->response_window > 60) home->response_window = 60;
-	if (home->response_window > mainconfig.max_request_time) home->response_window = mainconfig.max_request_time;
-
-	if (home->zombie_period < 1) home->zombie_period = 1;
-	if (home->zombie_period > 120) home->zombie_period = 120;
-
-	if (home->zombie_period < home->response_window) {
-		home->zombie_period = home->response_window;
-	}
-
-	if (home->num_pings_to_alive < 3) home->num_pings_to_alive = 3;
-	if (home->num_pings_to_alive > 10) home->num_pings_to_alive = 10;
-
-	if (home->ping_timeout < 3) home->ping_timeout = 3;
-	if (home->ping_timeout > 10) home->ping_timeout = 10;
-
-	if (home->revive_interval < 60) home->revive_interval = 60;
-	if (home->revive_interval > 3600) home->revive_interval = 3600;
-
-#ifdef WITH_COA
-	if (home->coa_irt < 1) home->coa_irt = 1;
-	if (home->coa_irt > 5) home->coa_irt = 5;
-
-	if (home->coa_mrc < 0) home->coa_mrc = 0;
-	if (home->coa_mrc > 20 ) home->coa_mrc = 20;
-
-	if (home->coa_mrt < 0) home->coa_mrt = 0;
-	if (home->coa_mrt > 30 ) home->coa_mrt = 30;
-
-	if (home->coa_mrd < 5) home->coa_mrd = 5;
-	if (home->coa_mrd > 60 ) home->coa_mrd = 60;
-#endif
-
-	if (home->limit.max_connections > 1024) home->limit.max_connections = 1024;
-
-#ifdef WITH_TCP
-	/*
-	 *	UDP sockets can't be connection limited.
-	 */
-	if (home->proto != IPPROTO_TCP) home->limit.max_connections = 0;
-#endif
-
-	if ((home->limit.idle_timeout > 0) && (home->limit.idle_timeout < 5))
-		home->limit.idle_timeout = 5;
-	if ((home->limit.lifetime > 0) && (home->limit.lifetime < 5))
-		home->limit.lifetime = 5;
-	if ((home->limit.lifetime > 0) && (home->limit.idle_timeout > home->limit.lifetime))
-		home->limit.idle_timeout = 0;
-
-	tls = cf_item_parent(cf_sectiontoitem(cs));
-	if (strcmp(cf_section_name1(tls), "server") == 0) {
-		home->parent_server = cf_section_name2(tls);
-	}
-
-	if (dual) {
-		home_server *home2 = rad_malloc(sizeof(*home2));
-
-		memcpy(home2, home, sizeof(*home2));
-
-		home2->type = HOME_TYPE_ACCT;
-		home2->port++;
-		home2->ping_user_password = NULL;
-		home2->cs = cs;
-		home2->parent_server = home->parent_server;
-
-		if (!rbtree_insert(home_servers_byname, home2)) {
-			cf_log_err(cf_sectiontoitem(cs),
-				   "Internal error %d adding home server %s.",
-				   __LINE__, name2);
-			free(home2);
-			return 0;
-		}
-		
-		if (!home->server &&
-		    !rbtree_insert(home_servers_byaddr, home2)) {
-			rbtree_deletebydata(home_servers_byname, home2);
-			cf_log_err(cf_sectiontoitem(cs),
-				   "Internal error %d adding home server %s.",
-				   __LINE__, name2);
-			free(home2);
-			return 0;
-		}
-
-#ifdef WITH_STATS
-		home2->number = home_server_max_number++;
-		if (!rbtree_insert(home_servers_bynumber, home2)) {
-			rbtree_deletebydata(home_servers_byname, home2);
-			if (!home2->server) {
-				rbtree_deletebydata(home_servers_byname, home2);
-			}
-			cf_log_err(cf_sectiontoitem(cs),
-				   "Internal error %d adding home server %s.",
-				   __LINE__, name2);
-			free(home2);
-			return 0;
-		}
-#endif
-	}
 
 	/*
 	 *	Mark it as already processed
