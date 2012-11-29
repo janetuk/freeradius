@@ -1561,6 +1561,38 @@ static int add_pool_to_realm(realm_config_t *rc, CONF_SECTION *cs,
 #endif
 
 
+int realms_realm_add (REALM *r, CONF_SECTION *cs)
+{
+	#ifdef HAVE_REGEX_H
+	/*
+	 *	It's a regex.  Add it to a separate list.
+	 */
+	if (r->name[0] == '~') {
+		realm_regex_t *rr, **last;
+
+		rr = rad_malloc(sizeof(*rr));
+		
+		last = &realms_regex;
+		while (*last) last = &((*last)->next);  /* O(N^2)... sue me. */
+
+		rr->realm = r;
+		rr->next = NULL;
+
+		*last = rr;
+
+		return 1;
+	}
+#endif
+
+	if (!rbtree_insert(realms_byname, r)) {
+		rad_assert("Internal sanity check failed");
+		return 0;
+	}
+
+	return 1;
+}
+
+
 static int realm_add(realm_config_t *rc, CONF_SECTION *cs)
 {
 	const char *name2;
@@ -1767,38 +1799,12 @@ static int realm_add(realm_config_t *rc, CONF_SECTION *cs)
 		goto error;
 	}
 
-#ifdef HAVE_REGEX_H
-	/*
-	 *	It's a regex.  Add it to a separate list.
-	 */
-	if (name2[0] == '~') {
-		realm_regex_t *rr, **last;
-
-		rr = rad_malloc(sizeof(*rr));
-		
-		last = &realms_regex;
-		while (*last) last = &((*last)->next);  /* O(N^2)... sue me. */
-
-		r->name = name2;
-		rr->realm = r;
-		rr->next = NULL;
-
-		*last = rr;
+	if ( !realms_realm_add(r, cs))
+		goto error;
 
 		cf_log_info(cs, " }");
 		return 1;
-	}
-#endif
-
-	if (!rbtree_insert(realms_byname, r)) {
-		rad_assert("Internal sanity check failed");
-		goto error;
-	}
-
-	cf_log_info(cs, " }");
-
-	return 1;
-
+		
  error:
 	cf_log_info(cs, " } # realm %s", name2);
 	free(r);
