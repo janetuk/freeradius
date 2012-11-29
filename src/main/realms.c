@@ -934,6 +934,16 @@ static int pool_check_home_server(realm_config_t *rc, CONF_PAIR *cp,
 }
 
 
+int realms_pool_add( home_pool_t *pool, UNUSED CONF_SECTION *cs)
+{
+		if (!rbtree_insert(home_pools_byname, pool)) {
+		rad_assert("Internal sanity check failed");
+		return 0;
+	}
+		return 1;
+}
+
+
 static int server_pool_add(realm_config_t *rc,
 			   CONF_SECTION *cs, int server_type, int do_print)
 {
@@ -1096,8 +1106,7 @@ static int server_pool_add(realm_config_t *rc,
 		cf_log_info(cs, "\tfallback = %s", pool->fallback->name);
 	}
 
-	if (!rbtree_insert(home_pools_byname, pool)) {
-		rad_assert("Internal sanity check failed");
+	if (! realms_pool_add(pool, cs)) {
 		goto error;
 	}
 
