@@ -91,13 +91,13 @@ int chbind_process(REQUEST *req, CHBIND_REQ *chbind_req)
   
   /* Add the username to the fake request */
   if (chbind_req->username) {
-    vp = paircreate(PW_USER_NAME, 0, PW_TYPE_STRING);
+    vp = paircreate(PW_USER_NAME, 0);
     rad_assert(vp);
     memcpy(vp->vp_octets, chbind_req->username, chbind_req->username_len);
     vp->length = chbind_req->username_len;
 
     pairadd(&fake->packet->vps, vp);
-  fake->username = pairfind(fake->packet->vps, PW_USER_NAME, 0);
+    fake->username = pairfind(fake->packet->vps, PW_USER_NAME, 0, TAG_ANY);
   }
 
   /* Copy the request state into the fake request */
@@ -145,7 +145,7 @@ int chbind_process(REQUEST *req, CHBIND_REQ *chbind_req)
     /* If rad_authenticate succeeded, build a reply */
   case RLM_MODULE_OK:
   case RLM_MODULE_HANDLED:
-    if (chbind_req->chbind_resp = chbind_build_response(fake, &chbind_req->chbind_resp_len))
+    if (!(chbind_req->chbind_resp = chbind_build_response(fake, &chbind_req->chbind_resp_len)))
       rcode = PW_AUTHENTICATION_ACK;
     else
       rcode = PW_AUTHENTICATION_REJECT;
@@ -209,7 +209,7 @@ uint8_t *chbind_build_response(REQUEST *req, size_t *resp_len)
   rad_assert(resp);
 
   /* Set-up the chbind header fields (except length, computed later) */
-  vp = pairfind(req->config_items, PW_CHBIND_RESPONSE_CODE, 0);
+  vp = pairfind(req->config_items, PW_CHBIND_RESPONSE_CODE, 0, TAG_ANY);
   if (vp)
     resp[0] = vp->vp_integer;
   else resp[0] = 3; /*failure*/
@@ -226,7 +226,7 @@ uint8_t *chbind_build_response(REQUEST *req, size_t *resp_len)
   for (vp = req->reply->vps, rlen = 4; 
        (vp != NULL) && (rlen < MAX_PACKET_LEN + 4); 
        rlen += len) {
-    len = rad_vp2attr(NULL, NULL, NULL, &vp, &resp[rlen], (MAX_PACKET_LEN + 4) - rlen);
+    len = rad_vp2attr(NULL, NULL, NULL, (const VALUE_PAIR **) &vp, &resp[rlen], (MAX_PACKET_LEN + 4) - rlen);
   }
 
   /* Write the length field into the header */

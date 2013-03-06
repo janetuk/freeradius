@@ -447,8 +447,7 @@ VALUE_PAIR *eap_chbind_packet2vp(const eap_chbind_packet_t *packet, size_t len)
 		size = len;
 		if (size > 247) size = 247;
 
-		vp = paircreate(PW_UKERNA_CHBIND, VENDORPEC_UKERNA,
-				PW_TYPE_OCTETS);
+		vp = paircreate(PW_UKERNA_CHBIND, VENDORPEC_UKERNA);
 		if (!vp) {
 			pairfree(&head);
 			return NULL;
@@ -478,14 +477,14 @@ size_t eap_chbind_vp2packet(VALUE_PAIR *vps, eap_chbind_packet_t **result)
 	unsigned char *ptr;
 	size_t len;
 
-	first = pairfind(vps, PW_UKERNA_CHBIND, VENDORPEC_UKERNA);
+	first = pairfind(vps, PW_UKERNA_CHBIND, VENDORPEC_UKERNA, TAG_ANY);
 
 	/*
 	 *	Compute total length
 	 */
 	len = 0;
 	for (vp = first; vp; 
-	     vp = pairfind(vp->next, PW_UKERNA_CHBIND, VENDORPEC_UKERNA)) {
+	     vp = pairfind(vp->next, PW_UKERNA_CHBIND, VENDORPEC_UKERNA, TAG_ANY)) {
 		len += vp->length;
 	}
 
@@ -505,7 +504,7 @@ size_t eap_chbind_vp2packet(VALUE_PAIR *vps, eap_chbind_packet_t **result)
 
 	/* RADIUS ensures order of attrs, so just concatenate all */
 	for (vp = first; vp; 
-	     vp = pairfind(vp->next, PW_UKERNA_CHBIND, VENDORPEC_UKERNA)) {
+	     vp = pairfind(vp->next, PW_UKERNA_CHBIND, VENDORPEC_UKERNA, TAG_ANY)) {
 		memcpy(ptr, vp->vp_octets, vp->length);
 		ptr += vp->length;
 	}
