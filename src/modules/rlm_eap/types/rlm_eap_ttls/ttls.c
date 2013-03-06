@@ -739,7 +739,7 @@ static int process_reply(EAP_HANDLER *handler, tls_session_t *tls_session,
 		}
 
 		/* move channel binding responses; we need to send them */
-		pairmove2(&vp, &reply->vps, PW_UKERNA_CHBIND, VENDORPEC_UKERNA);
+		pairmove2(&vp, &reply->vps, PW_UKERNA_CHBIND, VENDORPEC_UKERNA, TAG_ANY);
 
 		/*
 		 *	Handle the ACK, by tunneling any necessary reply
@@ -811,7 +811,8 @@ static int process_reply(EAP_HANDLER *handler, tls_session_t *tls_session,
 		pairmove2(&vp, &reply->vps, PW_REPLY_MESSAGE, 0, TAG_ANY);
 
 		/* also move chbind messages, if any */
-		pairmove2(&vp, &reply->vps, PW_UKERNA_CHBIND, VENDORPEC_UKERNA);
+		pairmove2(&vp, &reply->vps, PW_UKERNA_CHBIND, VENDORPEC_UKERNA,
+			  TAG_ANY);
 
 		/*
 		 *	Handle the ACK, by tunneling any necessary reply
