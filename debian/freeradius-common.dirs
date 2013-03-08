@@ -1,2 +1,3 @@
 etc/freeradius
 usr/share/freeradius
+var/log/freeradius
