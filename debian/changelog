@@ -1,3 +1,9 @@
+freeradius (3.0.0git+dfsg+moonshot1-1) unstable; urgency=low
+
+  * Moonshot packaging
+
+ -- Sam Hartman <hartmans@debian.org>  Fri, 08 Mar 2013 10:20:24 -0500
+
 freeradius (3.0.0git+dfsg-1) unstable; urgency=medium
 
   * New upstream version.
