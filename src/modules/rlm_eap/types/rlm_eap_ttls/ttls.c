@@ -25,6 +25,7 @@
 RCSID("$Id$")
 
 #include "eap_ttls.h"
+#include "eap_chbind.h"
 
 /*
  *    0                   1                   2                   3
@@ -258,6 +259,9 @@ static VALUE_PAIR *diameter2vp(REQUEST *request, SSL *ssl,
 			pairfree(&first);
 			return NULL;
 		}
+		if (vendor == VENDORPEC_UKERNA) {
+			RDEBUG("Received UKERNA attr %d!", attr);
+		}	
 
 		/*
 		 *	If it's a type from our dictionary, then
@@ -734,11 +738,17 @@ static int process_reply(EAP_HANDLER *handler, tls_session_t *tls_session,
 			pairfree(&vp);
 		}
 
+		/* move channel binding responses; we need to send them */
+		pairmove2(&vp, &reply->vps, PW_UKERNA_CHBIND, VENDORPEC_UKERNA, TAG_ANY);
+
 		/*
 		 *	Handle the ACK, by tunneling any necessary reply
 		 *	VP's back to the client.
 		 */
 		if (vp) {
+			RDEBUG("sending tunneled reply attributes");
+			debug_pair_list(vp);
+			RDEBUG("end tunneled reply attributes");
 			vp2diameter(request, tls_session, vp);
 			pairfree(&vp);
 		}
@@ -799,6 +809,10 @@ static int process_reply(EAP_HANDLER *handler, tls_session_t *tls_session,
 		 *	it's value.
 		 */
 		pairmove2(&vp, &reply->vps, PW_REPLY_MESSAGE, 0, TAG_ANY);
+
+		/* also move chbind messages, if any */
+		pairmove2(&vp, &reply->vps, PW_UKERNA_CHBIND, VENDORPEC_UKERNA,
+			  TAG_ANY);
 
 		/*
 		 *	Handle the ACK, by tunneling any necessary reply
@@ -973,6 +987,8 @@ int eapttls_process(EAP_HANDLER *handler, tls_session_t *tls_session)
 	const uint8_t *data;
 	size_t data_len;
 	REQUEST *request = handler->request;
+	eap_chbind_packet_t *chbind_packet;
+	size_t chbind_len;
 
 	rad_assert(request != NULL);
 
@@ -1210,6 +1226,46 @@ int eapttls_process(EAP_HANDLER *handler, tls_session_t *tls_session)
 
 		fprintf(fr_log_fp, "server %s {\n",
 			(fake->server == NULL) ? "" : fake->server);
+	}
+
+	/*
+	 *	Process channel binding here.
+	 */
+	chbind_len = eap_chbind_vp2packet(fake->packet->vps, &chbind_packet);
+	if (chbind_len > 0) {
+		int chbind_rcode;
+		CHBIND_REQ *req = chbind_allocate();
+
+		RDEBUG("received chbind request");
+		req->chbind_req_pkt = (uint8_t *)chbind_packet;
+		req->chbind_req_len = chbind_len;
+		if (fake->username) {
+			req->username = fake->username->vp_octets;
+			req->username_len = fake->username->length;
+		} else {
+			req->username = NULL;
+			req->username_len = 0;
+		}
+		chbind_rcode = chbind_process(request, req);
+
+		/* free the chbind packet; we're done with it */
+		free(chbind_packet);
+
+		/* encapsulate response here */
+		if (req->chbind_resp_len > 0) {
+			RDEBUG("sending chbind response");
+			pairadd(&fake->reply->vps,
+				 eap_chbind_packet2vp((eap_chbind_packet_t *)req->chbind_resp,
+						      req->chbind_resp_len));
+		} else {
+			RDEBUG("no chbind response");
+		}
+
+		/* clean up chbind req */
+		chbind_free(req);
+
+		if (chbind_rcode != PW_AUTHENTICATION_ACK)
+			return chbind_rcode;
 	}
 
 	/*
