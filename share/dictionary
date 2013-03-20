@@ -114,6 +114,7 @@ $INCLUDE dictionary.iana
 #	This is a prelimanary dictionary until the RFC is published.
 #
 $INCLUDE dictionary.extended
+$INCLUDE dictionary.abfab
 
 #
 #	Vendor dictionaries are listed after the standard ones.
