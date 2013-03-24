@@ -145,7 +145,7 @@ int chbind_process(REQUEST *req, CHBIND_REQ *chbind_req)
     /* If rad_authenticate succeeded, build a reply */
   case RLM_MODULE_OK:
   case RLM_MODULE_HANDLED:
-    if (!(chbind_req->chbind_resp = chbind_build_response(fake, &chbind_req->chbind_resp_len)))
+    if ((chbind_req->chbind_resp = chbind_build_response(fake, &chbind_req->chbind_resp_len)) != NULL)
       rcode = PW_AUTHENTICATION_ACK;
     else
       rcode = PW_AUTHENTICATION_REJECT;
