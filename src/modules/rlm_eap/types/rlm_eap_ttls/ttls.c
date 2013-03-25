@@ -740,7 +740,18 @@ static int process_reply(EAP_HANDLER *handler, tls_session_t *tls_session,
 
 		/* move channel binding responses; we need to send them */
 		pairmove2(&vp, &reply->vps, PW_UKERNA_CHBIND, VENDORPEC_UKERNA, TAG_ANY);
-
+		if (pairfind(vp, PW_UKERNA_CHBIND, VENDORPEC_UKERNA, TAG_ANY) != NULL) {
+			t->authenticated = TRUE;
+			/*
+			 *	Use the tunneled reply, but not now.
+			 */
+			if (t->use_tunneled_reply) {
+				t->accept_vps = reply->vps;
+				reply->vps = NULL;
+			}
+			rcode = RLM_MODULE_HANDLED;
+		}
+		
 		/*
 		 *	Handle the ACK, by tunneling any necessary reply
 		 *	VP's back to the client.
