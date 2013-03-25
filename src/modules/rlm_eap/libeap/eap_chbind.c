@@ -201,7 +201,7 @@ size_t chbind_get_data(CHBIND_PACKET_T *chbind_packet,
 uint8_t *chbind_build_response(REQUEST *req, size_t *resp_len)
 {
   uint8_t *resp;
-  uint16_t rlen, len = 0;
+  uint16_t pos, len = 0;
   VALUE_PAIR *vp = NULL;
 
   *resp_len = 0;
@@ -223,18 +223,19 @@ uint8_t *chbind_build_response(REQUEST *req, size_t *resp_len)
 	  DEBUG("end chbind response\n");
   }
   /* Encode the chbind attributes into the response */
-  for (vp = req->reply->vps, rlen = 4; 
-       (vp != NULL) && (rlen < MAX_PACKET_LEN + 4); 
-       rlen += len) {
-    len = rad_vp2attr(NULL, NULL, NULL, (const VALUE_PAIR **) &vp, &resp[rlen], (MAX_PACKET_LEN + 4) - rlen);
+  for (vp = req->reply->vps, pos = 4; 
+       (vp != NULL) && (pos < MAX_PACKET_LEN + 4); 
+       pos += len) {
+    len = rad_vp2attr(NULL, NULL, NULL, (const VALUE_PAIR **) &vp, &resp[pos], (MAX_PACKET_LEN + 4) - pos);
   }
 
+  len = pos-4; /*length covers ns-specific only*/
   /* Write the length field into the header */
-  resp[1] = (uint8_t)(rlen >> 8);
-  resp[2] = (uint8_t)(rlen & 0x00FF);
+  resp[1] = (uint8_t)(len >> 8);
+  resp[2] = (uint8_t)(len & 0x00FF);
   
   /* Output the length of the entire response (attrs + header) */
-  *resp_len = rlen + 4;
+  *resp_len = len + 4;
 
   return resp;
 }
