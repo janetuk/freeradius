@@ -61,21 +61,53 @@ static unsigned int 	record_minus(record_t *buf, void *ptr,
 				     unsigned int size);
 
 #ifdef PSK_MAX_IDENTITY_LEN
+
+int identity_is_safe( const char *identity)
+{
+	while (identity &&identity[0]) {
+		char c = identity[0];
+		identity++;
+		if (isalpha(c) || isdigit(c))
+			continue;
+		else if ((c == '@') || (c == '-') || (c == '_'))
+			continue;
+		else if (isspace(c) || (c == '.'))
+			continue;
+		else return 0;
+	}
+	return 1;
+}
+
 static unsigned int psk_server_callback(SSL *ssl, const char *identity,
 					unsigned char *psk,
 					unsigned int max_psk_len)
 {
-	unsigned int psk_len;
+	unsigned int psk_len = 0;
 	fr_tls_server_conf_t *conf;
+	REQUEST *request;
+	
 
 	conf = (fr_tls_server_conf_t *)SSL_get_ex_data(ssl,
 						       FR_TLS_EX_INDEX_CONF);
 	if (!conf) return 0;
 
-	/*
-	 *	FIXME: Look up the PSK password based on the identity!
-	 */
-	if (strcmp(identity, conf->psk_identity) != 0) {
+	request = (REQUEST *)SSL_get_ex_data(ssl,
+					     FR_TLS_EX_INDEX_REQUEST);
+	if (request) {
+		VALUE_PAIR *vp;
+		vp = rad_pairmake(request, &request->config_items,
+				  "tls-psk-identity",
+				  identity, T_OP_SET);
+		if (vp) {
+			if (identity_is_safe(identity))
+				psk_len = radius_xlat(psk, max_psk_len,
+						      "%{psksql:select key from psk_keys where keyid = '%{control:tls-psk-identity}';}",
+						      NULL, NULL);
+			if (psk_len > 0)
+				return psk_len;
+	}
+	
+		if ((strcmp(identity, conf->psk_identity) != )) {
 		return 0;
 	}
 
