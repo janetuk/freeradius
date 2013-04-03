@@ -925,6 +925,12 @@ static CONF_PARSER tls_client_config[] = {
 	  offsetof(fr_tls_server_conf_t, ca_file), NULL, NULL },
 	{ "private_key_password", PW_TYPE_STRING_PTR,
 	  offsetof(fr_tls_server_conf_t, private_key_password), NULL, NULL },
+#ifdef PSK_MAX_IDENTITY_LEN
+	{ "psk_identity", PW_TYPE_STRING_PTR,
+	  offsetof(fr_tls_server_conf_t, psk_identity), NULL, NULL },
+	{ "psk_hexphrase", PW_TYPE_STRING_PTR,
+	  offsetof(fr_tls_server_conf_t, psk_password), NULL, NULL },
+#endif
 	{ "dh_file", PW_TYPE_STRING_PTR,
 	  offsetof(fr_tls_server_conf_t, dh_file), NULL, NULL },
 	{ "random_file", PW_TYPE_STRING_PTR,
