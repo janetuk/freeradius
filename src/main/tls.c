@@ -1879,7 +1879,7 @@ static void sess_free_vps(UNUSED void *parent, void *data_ptr,
  *	- Load the Private key & the certificate
  *	- Set the Context options & Verify options
  */
-static SSL_CTX *init_tls_ctx(fr_tls_server_conf_t *conf, int client)
+ SSL_CTX *tls_init_ctx(fr_tls_server_conf_t *conf, int client)
 {
 	SSL_CTX *ctx;
 	X509_STORE *certstore;
@@ -2326,7 +2326,7 @@ fr_tls_server_conf_t *tls_server_conf_parse(CONF_SECTION *cs)
 	/*
 	 *	Initialize TLS
 	 */
-	conf->ctx = init_tls_ctx(conf, 0);
+	conf->ctx = tls_init_ctx(conf, 0);
 	if (conf->ctx == NULL) {
 		goto error;
 	}
@@ -2400,7 +2400,7 @@ fr_tls_server_conf_t *tls_client_conf_parse(CONF_SECTION *cs)
 	/*
 	 *	Initialize TLS
 	 */
-	conf->ctx = init_tls_ctx(conf, 1);
+	conf->ctx = tls_init_ctx(conf, 1);
 	if (conf->ctx == NULL) {
 		goto error;
 	}
