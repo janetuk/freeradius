@@ -1,3 +1,25 @@
+#include <trust_router/tid.h>
+#include "trustrouter_integ.h"
+
+static TIDC_INSTANCE *global_tidc;
+static int tidc_response_received = 0;
+
+int tr_init(void) 
+{
+  if (NULL == (global_tidc = tidc_create()))
+    return -1;
+  else
+    return 0;
+}
+
+static void tr_response_func (TIDC_INSTANCE *tidc, TID_REQ *req, TID_RESP *resp, void *cookie)
+{
+
+}
+
+
+#if 0
+
 static void tr_response_func(UNUSED tpqc_instance *inst,
 			     const tpq_resp *response, void *cookie)
 {
@@ -62,10 +84,40 @@ static void tr_response_func(UNUSED tpqc_instance *inst,
 		/*I guess we could have partial unwinding for the parts we haven't added yet*/
 
 		
+#endif
 
-
-REALM *tr_query_realm(const char *q_realm, ,
-		      const char  *q_community)
+REALM *tr_query_realm(const char *q_realm,
+		      const char  *q_community,
+		      const char *q_rprealm,
+		      const char *q_trustrouter)
 {
-	/*This function is called when there is no applicable realm to give trust router a chance to query the realm.*/
-	
+  int conn = 0;
+  int rc;
+  gss_ctx_id_t gssctx;
+  struct resp_opaque *cookie;
+
+  /* clear the cookie structure */
+  cookie = malloc(sizeof(struct resp_opaque));
+  memset (cookie, 0, sizeof(struct resp_opaque));
+
+  /* Set-up TID connection */
+  if (-1 == (conn = tidc_open_connection(global_tidc, (char *)q_trustrouter, &gssctx))) {
+    /* Handle error */
+    printf("Error in tidc_open_connection.\n");
+    return NULL;
+  };
+
+  /* Send a TID request */
+  if (0 > (rc = tidc_send_request(global_tidc, conn, gssctx, (char *)q_rprealm, 
+				  (char *) q_realm, (char *)q_community, 
+				  &tr_response_func, cookie))) {
+    /* Handle error */
+    printf("Error in tidc_send_request, rc = %d.\n", rc);
+    return NULL;
+  }
+    
+  /* Wait for a response */
+  while (!tidc_response_received);
+
+  return cookie->output_realm;
+}
