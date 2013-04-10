@@ -26,15 +26,20 @@ RCSID("$Id$")
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/modules.h>
 
+#include "trustrouter_integ.h"
+
 #define  REALM_FORMAT_PREFIX   0
 #define  REALM_FORMAT_SUFFIX   1
 
 typedef struct realm_config_t {
-        int        format;
-        char       *formatstring;
-        char       *delim;
-	int        ignore_default;
-	int        ignore_null;
+  int        format;
+  char       *formatstring;
+  char       *delim;
+  int        ignore_default;
+  int        ignore_null;
+  char	     *default_community;
+  char       *rp_realm;
+  char       *trust_router;
 } realm_config_t;
 
 static CONF_PARSER module_config[] = {
@@ -46,6 +51,12 @@ static CONF_PARSER module_config[] = {
     offsetof(realm_config_t,ignore_default), NULL, "no" },
   { "ignore_null", PW_TYPE_BOOLEAN,
     offsetof(realm_config_t,ignore_null), NULL, "no" },
+  { "default_community", PW_TYPE_STRING_PTR,
+    offsetof(realm_config_t,default_community), NULL, "none" },
+  { "rp_realm", PW_TYPE_STRING_PTR,
+    offsetof(realm_config_t,rp_realm), NULL, "none" },
+  { "trust_router", PW_TYPE_STRING_PTR,
+    offsetof(realm_config_t,trust_router), NULL, "none" },
   { NULL, -1, 0, NULL, NULL }    /* end the list */
 };
 
@@ -159,6 +170,8 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 	 *	Allow DEFAULT realms unless told not to.
 	 */
 	realm = realm_find(realmname);
+       	if (!realm) 
+	  realm = tr_query_realm(realmname, inst->default_community, inst->rp_realm, inst->trust_router);
 	if (!realm) {
 		RDEBUG2("No such realm \"%s\"",
 		       (realmname == NULL) ? "NULL" : realmname);
@@ -359,6 +372,10 @@ static int realm_instantiate(CONF_SECTION *conf, void **instance)
         *instance = inst = talloc_zero(conf, struct realm_config_t);
 	if (!inst) return -1;
 
+	/* initialize the trust router integration code */
+	if (tr_init() < 0)
+	       return -1;
+
 	if(cf_section_parse(conf, inst, module_config) < 0) {
                return -1;
 	}
@@ -481,6 +498,7 @@ static rlm_rcode_t realm_coa(UNUSED void *instance, REQUEST *request)
 
 	realm = realm_find(vp->vp_strvalue + 1);
 	if (!realm) return RLM_MODULE_NOTFOUND;
+
 
 	if (!realm->coa_pool) {
 		RDEBUG2("CoA realm is LOCAL.");
