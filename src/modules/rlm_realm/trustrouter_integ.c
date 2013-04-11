@@ -125,11 +125,11 @@ static void tr_response_func( TIDC_INSTANCE *inst,
 
     server = resp->servers;
     while (server) {
-      home_server_ip.af = 4;
+      home_server_ip.af = AF_INET;
       home_server_ip.scope = 0;
       home_server_ip.ipaddr.ip4addr = server->aaa_server_addr;
 	  
-      hs = home_server_find( &home_server_ip, htons(2083),
+      hs = home_server_find( &home_server_ip, 2083,
 			     IPPROTO_TCP);
       if (hs) {
 	DEBUG2("Found existing home_server %s", hs->name);
@@ -141,7 +141,7 @@ static void tr_response_func( TIDC_INSTANCE *inst,
 	hs->ipaddr = home_server_ip;
 	hs-> name = strdup("blah");
 	  hs->hostname =strdup("blah");
-	  hs->port = htons(2083);
+	  hs->port = 2083;
 	hs->proto = IPPROTO_TCP;
 	hs->tls = construct_tls(inst, server);
 	if (hs->tls == NULL) goto error;
@@ -150,6 +150,7 @@ static void tr_response_func( TIDC_INSTANCE *inst,
       }
       pool->servers[i++] = hs;
       hs = NULL;
+      server = server->next;
     }
 			
     if (!realms_pool_add(pool, NULL)) goto error;
