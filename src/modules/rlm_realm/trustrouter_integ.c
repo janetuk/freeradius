@@ -23,10 +23,6 @@ int tr_init(void)
     return 0;
 }
 
-
-
-
-
 static fr_tls_server_conf_t *construct_tls( TIDC_INSTANCE *inst,
 					    TID_SRVR_BLK *server)
 {
@@ -51,6 +47,7 @@ static fr_tls_server_conf_t *construct_tls( TIDC_INSTANCE *inst,
   tls->psk_password = hexbuf;
   tls->psk_identity = tr_name_strdup(server->key_name);
   tls->cipher_list = strdup("PSK");
+  tls->fragment_size = 4200;
   tls->ctx = tls_init_ctx(tls, 1);
   if (tls->ctx == NULL)
     goto error;
@@ -139,10 +136,12 @@ static void tr_response_func( TIDC_INSTANCE *inst,
 	memset(hs, 0, sizeof(*hs));
 	hs->type = HOME_TYPE_AUTH;
 	hs->ipaddr = home_server_ip;
+	/* TBD -- update name to be unique per server */
 	hs-> name = strdup("blah");
 	  hs->hostname =strdup("blah");
 	  hs->port = 2083;
 	hs->proto = IPPROTO_TCP;
+	hs->secret = strdup("radsec");
 	hs->tls = construct_tls(inst, server);
 	if (hs->tls == NULL) goto error;
 	if (!realms_home_server_add(hs, NULL, 0))
