@@ -17,10 +17,15 @@ struct resp_opaque {
 
 int tr_init(void) 
 {
-  if (NULL == (global_tidc = tidc_create()))
+  if (NULL == (global_tidc = tidc_create())) {
+    fprintf(stderr, "tr_init: Error creating global TIDC instance.\n");
     return -1;
-  else
-    return 0;
+  }
+  if (NULL == (global_tidc->client_dh = tr_create_dh_params(NULL, 0))) {
+    fprintf(stderr, "tr_init: Error creating client DH params.\n");
+    return 1;
+  }
+  return 0;
 }
 
 static fr_tls_server_conf_t *construct_tls( TIDC_INSTANCE *inst,
@@ -30,11 +35,13 @@ static fr_tls_server_conf_t *construct_tls( TIDC_INSTANCE *inst,
   unsigned char *key_buf = NULL;
   ssize_t keylen;
   char *hexbuf = NULL;
+  int i;
+
   if (tls == NULL)
     goto error;
   memset(tls, 0, sizeof(*tls));
   keylen = tr_compute_dh_key(&key_buf, server->aaa_server_dh->pub_key,
-			     inst->priv_dh);
+			     inst->client_dh);
   if (keylen <= 0) {
     DEBUG2("DH error");
     goto error;
@@ -46,6 +53,13 @@ static fr_tls_server_conf_t *construct_tls( TIDC_INSTANCE *inst,
 	     2*keylen + 1);
   tls->psk_password = hexbuf;
   tls->psk_identity = tr_name_strdup(server->key_name);
+
+  fprintf (stderr, "construct_tls: Client key generated (key name = %s):\n", tls->psk_identity);
+  for (i = 0; i < keylen; i++) {
+    printf("%.2x", key_buf[i]); 
+  }
+  printf("\n");
+
   tls->cipher_list = strdup("PSK");
   tls->fragment_size = 4200;
   tls->ctx = tls_init_ctx(tls, 1);
