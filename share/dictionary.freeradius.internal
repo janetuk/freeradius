@@ -240,6 +240,13 @@ ATTRIBUTE	FreeRADIUS-Client-Src-IPv6-Address	1144	ipv6addr
 
 ATTRIBUTE	OTP-Challenge				1145	string
 ATTRIBUTE	EAP-Session-Id				1146	octets
+#	For EAP channel binding
+
+ATTRIBUTE	Chbind-Response-Code			1147	integer
+
+VALUE	Chbind-Response-Code		success			2
+VALUE	Chbind-Response-Code		failure			3
+
 #
 #	Range:	1200-1279
 #		EAP-SIM (and other EAP type) weirdness.
@@ -438,8 +445,9 @@ ATTRIBUTE	TLS-Client-Cert-Subject			1923	string
 ATTRIBUTE	TLS-Client-Cert-Common-Name		1924	string
 ATTRIBUTE	TLS-Client-Cert-Filename		1925	string
 ATTRIBUTE	TLS-Client-Cert-Subject-Alt-Name-Email	1926	string
+ATTRIBUTE	TLS-PSK-Identity			1927	string
 
-# 1927 - 1939: reserved for future cert attributes
+# 1928 - 1939: reserved for future cert attributes
 
 #
 #	Range:	1940-2099

@@ -861,7 +861,6 @@ static int home_server_add(realm_config_t *rc, CONF_SECTION *cs)
 	}
 
 	if ( !realms_home_server_add( home, cs, dual))
-
 		goto error;
 
 	/*

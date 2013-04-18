@@ -1029,13 +1029,11 @@ int fr_dhcp_encode(RADIUS_PACKET *packet, RADIUS_PACKET *original)
 	VALUE_PAIR *vp;
 	uint32_t lvalue, mms;
 	size_t dhcp_size, length;
-#ifndef NDEBUG
 	const char *name;
 #  ifdef WITH_UDPFROMTO
 	char src_ip_buf[256];
 #  endif
 	char dst_ip_buf[256];
-#endif
 
 	if (packet->data) return 0;
 

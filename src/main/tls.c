@@ -40,6 +40,7 @@ RCSID("$Id$")
 #ifdef HAVE_UTIME_H
 #include <utime.h>
 #endif
+#include <ctype.h>
 
 #ifdef WITH_TLS
 #ifdef HAVE_OPENSSL_RAND_H
@@ -61,25 +62,62 @@ static unsigned int 	record_minus(record_t *buf, void *ptr,
 				     unsigned int size);
 
 #ifdef PSK_MAX_IDENTITY_LEN
+
+static int identity_is_safe( const char *identity)
+{
+	while (identity &&identity[0]) {
+		char c = identity[0];
+		identity++;
+		if (isalpha(c) || isdigit(c))
+			continue;
+		else if ((c == '@') || (c == '-') || (c == '_'))
+			continue;
+		else if (isspace(c) || (c == '.'))
+			continue;
+		else return 0;
+	}
+	return 1;
+}
+
 static unsigned int psk_server_callback(SSL *ssl, const char *identity,
 					unsigned char *psk,
 					unsigned int max_psk_len)
 {
-	unsigned int psk_len;
+	unsigned int psk_len = 0;
 	fr_tls_server_conf_t *conf;
+	REQUEST *request;
+	
 
 	conf = (fr_tls_server_conf_t *)SSL_get_ex_data(ssl,
 						       FR_TLS_EX_INDEX_CONF);
 	if (!conf) return 0;
 
-	/*
-	 *	FIXME: Look up the PSK password based on the identity!
-	 */
-	if (strcmp(identity, conf->psk_identity) != 0) {
+	request = (REQUEST *)SSL_get_ex_data(ssl,
+					     FR_TLS_EX_INDEX_REQUEST);
+	if (request) {
+		VALUE_PAIR *vp;
+		char psk_buffer[2*PSK_MAX_PSK_LEN+1];
+		 size_t hex_len = 0;
+		if (max_psk_len > PSK_MAX_PSK_LEN)
+		  max_psk_len = PSK_MAX_PSK_LEN;
+		vp = radius_pairmake(request, &request->config_items,
+				  "tls-psk-identity",
+				  identity, T_OP_SET);
+		if (vp) {
+			if (identity_is_safe(identity))
+			  hex_len = radius_xlat((char *) psk_buffer,
+						2*max_psk_len+1,
+						"%{psksql:select hex(key) from psk_keys where keyid = '%{control:tls-psk-identity}';}",
+						request, NULL, NULL);
+			if (hex_len >0)
+			  return fr_hex2bin(psk_buffer, psk, hex_len);
+		}
+	}
+		if (strcmp(identity, conf->psk_identity) != 0) {
 		return 0;
 	}
 
-	psk_len = strlen(conf->psk_password);
+		psk_len = strlen(conf->psk_password);
 	if (psk_len > (2 * max_psk_len)) return 0;
 
 	return fr_hex2bin(conf->psk_password, psk, psk_len);
@@ -888,6 +926,12 @@ static CONF_PARSER tls_client_config[] = {
 	  offsetof(fr_tls_server_conf_t, ca_file), NULL, NULL },
 	{ "private_key_password", PW_TYPE_STRING_PTR,
 	  offsetof(fr_tls_server_conf_t, private_key_password), NULL, NULL },
+#ifdef PSK_MAX_IDENTITY_LEN
+	{ "psk_identity", PW_TYPE_STRING_PTR,
+	  offsetof(fr_tls_server_conf_t, psk_identity), NULL, NULL },
+	{ "psk_hexphrase", PW_TYPE_STRING_PTR,
+	  offsetof(fr_tls_server_conf_t, psk_password), NULL, NULL },
+#endif
 	{ "dh_file", PW_TYPE_STRING_PTR,
 	  offsetof(fr_tls_server_conf_t, dh_file), NULL, NULL },
 	{ "random_file", PW_TYPE_STRING_PTR,
@@ -1879,7 +1923,7 @@ static void sess_free_vps(UNUSED void *parent, void *data_ptr,
  *	- Load the Private key & the certificate
  *	- Set the Context options & Verify options
  */
-static SSL_CTX *init_tls_ctx(fr_tls_server_conf_t *conf, int client)
+ SSL_CTX *tls_init_ctx(fr_tls_server_conf_t *conf, int client)
 {
 	SSL_CTX *ctx;
 	X509_STORE *certstore;
@@ -1980,6 +2024,19 @@ static SSL_CTX *init_tls_ctx(fr_tls_server_conf_t *conf, int client)
 		return NULL;
 	}
 
+	/*
+	 * There are two ways PSKs can be configured for a server. The
+	 * first is the same as a client: psk_identity and
+	 * psk_hexphrase. The second is to dynamically configure PSKs
+	 * and to have the psk_xlat return them. The second is
+	 * compatible with certificates; either the PSK or cert will
+	 * be used depending on what the client uses.
+	 */
+	if (!client)
+		SSL_CTX_set_psk_server_callback(ctx,
+						psk_server_callback);
+
+
 	if (conf->psk_identity) {
 		size_t psk_len, hex_len;
 		char buffer[PSK_MAX_PSK_LEN];
@@ -1994,10 +2051,7 @@ static SSL_CTX *init_tls_ctx(fr_tls_server_conf_t *conf, int client)
 		if (client) {
 			SSL_CTX_set_psk_client_callback(ctx,
 							psk_client_callback);
-		} else {
-			SSL_CTX_set_psk_server_callback(ctx,
-							psk_server_callback);
-		}
+		} 
 
 		psk_len = strlen(conf->psk_password);
 		if (strlen(conf->psk_password) > (2 * PSK_MAX_PSK_LEN)) {
@@ -2177,10 +2231,11 @@ post_ca:
 	}
 
 	/* Load randomness */
-	if (!(RAND_load_file(conf->random_file, 1024*1024))) {
-		radlog(L_ERR, "rlm_eap: SSL error %s", ERR_error_string(ERR_get_error(), NULL));
-		radlog(L_ERR, "rlm_eap_tls: Error loading randomness");
-		return NULL;
+	if (conf->random_file != NULL)
+		if (!(RAND_load_file(conf->random_file, 1024*1024))) {
+			radlog(L_ERR, "rlm_eap: SSL error %s", ERR_error_string(ERR_get_error(), NULL));
+			radlog(L_ERR, "rlm_eap_tls: Error loading randomness");
+			return NULL;
 	}
 
 	/*
@@ -2326,7 +2381,7 @@ fr_tls_server_conf_t *tls_server_conf_parse(CONF_SECTION *cs)
 	/*
 	 *	Initialize TLS
 	 */
-	conf->ctx = init_tls_ctx(conf, 0);
+	conf->ctx = tls_init_ctx(conf, 0);
 	if (conf->ctx == NULL) {
 		goto error;
 	}
@@ -2400,7 +2455,7 @@ fr_tls_server_conf_t *tls_client_conf_parse(CONF_SECTION *cs)
 	/*
 	 *	Initialize TLS
 	 */
-	conf->ctx = init_tls_ctx(conf, 1);
+	conf->ctx = tls_init_ctx(conf, 1);
 	if (conf->ctx == NULL) {
 		goto error;
 	}
