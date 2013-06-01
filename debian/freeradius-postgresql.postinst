@@ -4,7 +4,7 @@ set -e
 
 case "$1" in
   configure)
-        for file in `find /etc/freeradius/sql/main/postgresql/ -print` 
+        for file in `find /etc/freeradius/sql/main/postgresql -type f -print` 
         do
           if ! dpkg-statoverride --list | grep -qw $file$; then
             dpkg-statoverride --add --update root freerad 0640 $file
@@ -20,9 +20,9 @@ case "$1" in
         done
 
         if [ -x "`which invoke-rc.d 2>/dev/null`" ]; then
-          invoke-rc.d freeradius force-reload
+          invoke-rc.d freeradius force-reload ||true
         else
-          /etc/init.d/freeradius force-reload
+          /etc/init.d/freeradius force-reload ||true
         fi
 	;;
 esac
