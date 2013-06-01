@@ -1,3 +1,10 @@
+freeradius (3.0.0git+dfsg+moonshot3-1) unstable; urgency=low
+
+  * Pull in sql fix for non-xlat values
+  * Update freeradius-postgresql postinst to fix statoverride bug
+
+ -- Sam Hartman <hartmans@debian.org>  Sat, 01 Jun 2013 12:00:40 -0400
+
 freeradius (3.0.0git+dfsg+moonshot2-1) unstable; urgency=low
 
   * New moonshot integration
