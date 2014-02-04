@@ -1,4 +1,91 @@
-FreeRADIUS 3.0.0 Mon 01 Jan 8:00:00 CEST 2010, urgency=medium
+FreeRADIUS 3.0.1 Mon 13 Jan 2014 14:30:00 EDT urgency=medium
+	Feature improvements
+	* Add "timeout" to exec, and "ntlm_auth_timeout" to mschap.
+	  So that run-away child processes are caught earlier.
+	* Allow TLS clients to use "proto = tls", in which case
+	  TLS is required.  The shared secret is then set to "radsec".
+	* More documentation in the tls virtual server.
+	* Add "date" module for date formatting.
+	  See raddb/mods-available/date.
+	* Added unit test suite for internal server functionality
+	* When loading "update" sections, check if the RHS is a literal
+	  value.  If so, syntax check it immediately.
+	* Update LDAP module documentation and functionality.
+	  The generic attribute can now update lists.
+	* Updated dictionary.extreme.
+	* Update sqlippool to do clears as a separate transaction,
+	  and at most once per second.  This should help MySQL.
+	* Respect control:Response-Packet-Type for all types of
+	  requests.
+	* Add support for SSL encryption to the MySQL driver.
+	* Allow arbitrary connection parameters to be used with the
+	  PostgreSQL driver.
+	* Changes to the OpenLDAP schema to fully expose functionality
+	  of the new LDAP module.
+	* Update debian packaging to include a freeradius-config
+	  package. This package may be provided as a site local
+	  package to avoid fighting with the preinstalled config
+	  files.
+
+	Bug fixes
+	* Use correct field for ARP setting in DHCP.
+	* Fix crash on debug condition (#454).
+	* Fix a number of minor issues caught by the clang
+	  analyzer.
+	* Set WARNING messages to yellow instead of normal text.
+	* Correct debug colorise logic.  Patch from Phil Mayers.
+	* Encode attributes of type "ethernet".  No one uses them,
+	  but it makes sense.
+	* Work around regex initialization issues.
+	* Fix build when linking against OpenSSL.
+	* Print IDs as positive numbers, which helps for large DHCP
+	  XIDs.
+	* Fix issue with sql_ippool.
+	* sqlcounter now uses 64-bit counters, to deal with 4G overflow.
+	* Fix issues with DHCP subsystem.
+	* Don't build / install disabled modules, or their config
+	  files.
+	* Fix build for OSX Mavericks, which hid the header files
+	  in a magical place.
+	* Fix LEAP buffer issue.  You should still avoid LEAP.
+	* Mark "unknown" WiMAX attributes as being WiMAX.
+	* Fix typo in packet decoder for fragmented extended attrs
+	* RPM spec fixes.
+	* Fix rlm_perl build issues when not using threads.
+	* Enable %{Response-Packet-Type} again.
+	* Update configuration file parser to handle "bool"
+	  consistently.
+	* Update declarations of global boolean variables to use
+	  "bool" consistently. This fixes an issue where some
+	  modules were instantiated in "config check" mode and
+	  did not work correctly.
+	* Make more messages debug instead of info, to avoid
+	  polluting the logs with messages that can't be fixed.
+	* Set operator in internal unlang code to suppress spurious
+	  warning messages.
+	* Fix debian packaging.
+	* Added "status" to Debian init script.
+	* Fix "update outer.request" to update the outer request.
+	* Don't print TLS debugging messages when not in debug mode.
+	* Correctly manage counters for "limit" sections of TCP / TLS
+	  "listen" sockets.
+	* Fix libldap debug output.
+	* Fix rlm_ldap tls functionality.
+	* Initialise OpenSSL globals early to avoid issues with the
+	  PostgreSQL library.
+	* Fix typo in sqlcounter expansion code.  Fixes #463
+	* Overwrite previous instances of SQL-User-Name when adding
+	  it to the request.
+	* Work around bugs in both MIT and heimdal versions of
+	  krb5_copy_context(), which caused segfaults in
+	  multithreaded mode.
+	* Provide meaningful error messages if Heimdal krb5 is used.
+	* Fix attribute supression in rlm_detail.
+	* Exit with error code if child fails to complete server
+	  initialisation after forking.  This allows init scripts to
+	  correctly report whether the server started ok.
+
+FreeRADIUS 3.0.0 Mon  7 Oct 2013 15:48:14 EDT urgency=medium
 	Feature improvements
 	* Documentation for upgrading from 2.x is in raddb/README.rst
 	  Please follow it.  It will make the upgrade easier.
@@ -24,18 +111,22 @@ FreeRADIUS 3.0.0 Mon 01 Jan 8:00:00 CEST 2010, urgency=medium
 	* New sha1 xlat expansion (thanks to Alan Buxey)
 	* Colourised log messages when logging to stdout.  Look for yellow
 	  warnings and red errors.  Doing this will save you a LOT of grief.
+	* If the PCRE library is available, use it (insted of the POSIX
+	  functions) to process regular expressions (thanks to Phil Mayers).
+	* -xv now displays all the features the server was built with, and
+	  the versions of the core libraries (libtalloc, libssl).
 
 	Module Changes
 	* Moved raddb/modules/ to raddb/mods-available/, and raddb/mods-enabled/,
 	  following the examples of other projects.
-	* Module "extra" configuration files are now in raddb/mods-config/
-	  Each module has a subdirectory where it will place its files.
+	* Additional files for each module are now in raddb/mods-config/.
+	  See raddb/mods-config/README.rst for documentation.
 	* Moved "users" to raddb/mods-config/files/authorize
 	* Moved "hints" and "huntgroups" to raddb/mods-config/preprocess/
 	* Moved eap.conf to mods-available/eap
 	* Moved sql.conf to mods-available/sql
 	* Moved TLS configuration for EAP into a common subsection.
-	  See raddb/mods-available/eap, tls-config section.
+	  See raddb/mods-available/eap, "tls-config" section.
 	* Added for MS-CHAP Change Password from Phil Mayers.
 	  See raddb/mods-available/mschap, "passchange" subsection.
 	* Added EAP-PWD implementation from Dan Harkins
@@ -49,37 +140,39 @@ FreeRADIUS 3.0.0 Mon 01 Jan 8:00:00 CEST 2010, urgency=medium
 	  bootstrapping purposes.
 	* LDAP now uses the connection pool.  The LDAP module has been
 	  completely re-written for performance and simplicity.
-	* LDAP now caches groups.  This makes the server much faster for multiple
-	  group checking.
-	* Removed all limitations on 253 octet attributes.
+	* LDAP now caches groups.  This makes multiple group checks MUCH
+	  faster.
+	* Removed all limitations on 253 octet attributes.  RFC 6929 allows
+	  for attributes up to 4K in length.
 	* New rlm_idn module providing an expansion for performing IDNA encoding
-	of internationalized domain names. (thanks to 'skids').
+	of internationalized domain names.  Thanks to 'skids'.
 	* New rlm_yubikey module to validate yubikey OTP tokens.
+	  See raddb/modules/yubikey
 
 	Bug fixes
-	* All known bug fixes from 2.1.x are included.
+	* All known bug fixes from 2.2.x are included.
 	* Removed "addport" functionality.
 	* Removed many unused or duplicate modules.  See raddb/README.rst.
 
 	Internal / API changes:
 	* All traces of the old build system have been removed.
+	  The new build system is faster and simpler.
 	* clang is fully supported.
 	* We now use "talloc" for memory management.  A number of new
-	  features required this change.
+	  features required this change.  Thanks to the Samba people!
 	* Many internal APIs have been updated to use talloc.
-	* Removed all limitations on 253 octet attributes.
-	* New API for iterating over VALUE_PAIRs, in preparation for nested
-	  attributes.
-	* No new code should directly modify the contents of a VALUE_PAIR.
+	* New API for iterating over VALUE_PAIRs.  This is in preparation
+	  for attributes, in version 3.1.
+	* No new code should directly modify any field of a VALUE_PAIR.
 	* VALUE_PAIRs contain pointers to DICT_ATTR instead of containing
-	  attribute and vendor fields.  This is in preparation for nested
-	  attributes.
+	  attribute and vendor fields.  This will allow nested attributes.
 	* Some protocol specific code has been moved out into proto_* modules.
-	  More will come in subsequent versions.
+	  More will come in subsequent versions.  See proto_dhcp and proto_vmps.
 	* Standardised internal logging macros.  radlog() should not be used.
+	  See src/include/log.h
 	* Use OpenSSL hashing functions when available.
-	* Server now builds with no warnings on most platforms.
-	* New RADIUS encoder/decoder.
+	* The server now builds with no warnings on most platforms.
+	* New RADIUS encoder/decoder, to support new formats.
 	* Added RFC 6929 "extended attributes", via the new encoder/decoder.
 	* Added full WiMAX support, via the new encoder/decoder.  The old
 	  code could not handle some unusual corner cases.

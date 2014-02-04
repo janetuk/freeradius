@@ -1188,7 +1188,7 @@ modules {
 	#  Do server side ip pool management. Should be added in post-auth and
 	#  accounting sections.
 	#
-	#  The module also requires the existance of the Pool-Name
+	#  The module also requires the existence of the Pool-Name
 	#  attribute. That way the administrator can add the Pool-Name
 	#  attribute in the user profiles and use different pools
 	#  for different users. The Pool-Name attribute is a *check* item not
@@ -1204,8 +1204,8 @@ modules {
 
 		#  range-start,range-stop: The start and end ip
 		#  addresses for the ip pool
-		range-start = 192.168.1.1
-		range-stop = 192.168.3.254
+		range-start = 192.0.2.1
+		range-stop = 192.0.2.254
 
 		#  netmask: The network mask used for the ip's
 		netmask = 255.255.255.0
@@ -1342,7 +1342,7 @@ authorize {
 #  Note that it does NOT mean 'try each module in order'.  It means
 #  that you have to have a module from the 'authorize' section add
 #  a configuration attribute 'Auth-Type := FOO'.  That authentication type
-#  is then used to pick the apropriate module from the list below.
+#  is then used to pick the appropriate module from the list below.
 #
 #  The default Auth-Type is Local.  That is, whatever is not included inside
 # an authtype section will be called only if Auth-Type is set to Local.

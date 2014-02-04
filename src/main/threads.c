@@ -131,6 +131,7 @@ typedef struct THREAD_POOL {
 	THREAD_HANDLE *tail;
 
 	int active_threads;	/* protected by queue_mutex */
+	int exited_threads;
 	int total_threads;
 	int max_thread_num;
 	int start_threads;
@@ -157,7 +158,7 @@ typedef struct THREAD_POOL {
 #ifdef WITH_STATS
 	fr_pps_t	pps_in, pps_out;
 #ifdef WITH_ACCOUNTING
-	int		auto_limit_acct;
+	bool		auto_limit_acct;
 #endif
 #endif
 
@@ -326,7 +327,8 @@ int request_enqueue(REQUEST *request)
 	 *	go manage it.
 	 */
 	if ((last_cleaned < request->timestamp) ||
-	    (thread_pool.active_threads == thread_pool.total_threads)) {
+	    (thread_pool.active_threads == thread_pool.total_threads) ||
+	    (thread_pool.exited_threads > 0)) {
 		thread_pool_manage(request->timestamp);
 	}
 
@@ -397,7 +399,7 @@ int request_enqueue(REQUEST *request)
 		}
 
 		gettimeofday(&now, NULL);
-		
+
 		/*
 		 *	Calculate the instantaneous arrival rate into
 		 *	the queue.
@@ -406,7 +408,7 @@ int request_enqueue(REQUEST *request)
 						 &thread_pool.pps_in.pps_now,
 						 &thread_pool.pps_in.time_old,
 						 &now);
-		
+
 		thread_pool.pps_in.pps_now++;
 	}
 #endif	/* WITH_ACCOUNTING */
@@ -424,7 +426,7 @@ int request_enqueue(REQUEST *request)
 			last_complained = now;
 			complain = true;
 		}
-		
+
 		pthread_mutex_unlock(&thread_pool.queue_mutex);
 
 		/*
@@ -472,6 +474,8 @@ static int request_dequeue(REQUEST **prequest)
 {
 	time_t blocked;
 	static time_t last_complained = 0;
+	static time_t total_blocked = 0;
+	int num_blocked;
 	RAD_LISTEN_TYPE i, start;
 	REQUEST *request;
 	reap_children();
@@ -484,7 +488,7 @@ static int request_dequeue(REQUEST **prequest)
 		struct timeval now;
 
 		gettimeofday(&now, NULL);
-		
+
 		/*
 		 *	Calculate the instantaneous departure rate
 		 *	from the queue.
@@ -510,7 +514,7 @@ static int request_dequeue(REQUEST **prequest)
 		request = fr_fifo_peek(thread_pool.fifo[i]);
 		if (!request) continue;
 
-		rad_assert(request->magic == REQUEST_MAGIC);
+		VERIFY_REQUEST(request);
 
 		if (request->master_state != REQUEST_STOP_PROCESSING) {
 			continue;
@@ -521,6 +525,7 @@ static int request_dequeue(REQUEST **prequest)
 		 */
 		request = fr_fifo_pop(thread_pool.fifo[i]);
 		rad_assert(request != NULL);
+		VERIFY_REQUEST(request);
 		request->child_state = REQUEST_DONE;
 		thread_pool.num_queued--;
 	}
@@ -533,6 +538,7 @@ static int request_dequeue(REQUEST **prequest)
 	for (i = start; i < RAD_LISTEN_MAX; i++) {
 		request = fr_fifo_pop(thread_pool.fifo[i]);
 		if (request) {
+			VERIFY_REQUEST(request);
 			start = i;
 			break;
 		}
@@ -575,21 +581,24 @@ static int request_dequeue(REQUEST **prequest)
 
 	blocked = time(NULL);
 	if ((blocked - request->timestamp) > 5) {
+		total_blocked++;
 		if (last_complained < blocked) {
 			last_complained = blocked;
 			blocked -= request->timestamp;
+			num_blocked = total_blocked;
 		} else {
 			blocked = 0;
 		}
 	} else {
+		total_blocked = 0;
 		blocked = 0;
 	}
 
 	pthread_mutex_unlock(&thread_pool.queue_mutex);
 
 	if (blocked) {
-		ERROR("(%u) %s has been waiting in the processing queue for %d seconds.  Check that all databases are running properly!",
-		       request->number, fr_packet_codes[request->packet->code], (int) blocked);
+		ERROR("%d requests have been waiting in the processing queue for %d seconds.  Check that all databases are running properly!",
+		      num_blocked, (int) blocked);
 	}
 
 	return 1;
@@ -660,6 +669,7 @@ static void *request_handler_thread(void *arg)
 		       self->thread_num, self->request->number,
 		       self->request_count);
 
+#ifdef WITH_ACCOUNTING
 		if ((self->request->packet->code == PW_ACCOUNTING_REQUEST) &&
 		    thread_pool.auto_limit_acct) {
 			VALUE_PAIR *vp;
@@ -672,7 +682,7 @@ static void *request_handler_thread(void *arg)
 			vp = radius_paircreate(request, &request->config_items,
 					       182, VENDORPEC_FREERADIUS);
 			if (vp) vp->vp_integer = thread_pool.pps_in.pps;
-			
+
 			vp = radius_paircreate(request, &request->config_items,
 					       183, VENDORPEC_FREERADIUS);
 			if (vp) {
@@ -681,6 +691,7 @@ static void *request_handler_thread(void *arg)
 				vp->vp_integer /= thread_pool.max_queue_size;
 			}
 		}
+#endif
 
 		self->request->process(self->request, FR_ACTION_RUN);
 		self->request = NULL;
@@ -692,6 +703,17 @@ static void *request_handler_thread(void *arg)
 		rad_assert(thread_pool.active_threads > 0);
 		thread_pool.active_threads--;
 		pthread_mutex_unlock(&thread_pool.queue_mutex);
+
+		/*
+		 *	If the thread has handled too many requests, then make it
+		 *	exit.
+		 */
+		if ((thread_pool.max_requests_per_thread > 0) &&
+		    (self->request_count >= thread_pool.max_requests_per_thread)) {
+			DEBUG2("Thread %d handled too many requests",
+			       self->thread_num);
+			break;
+		}
 	} while (self->status != THREAD_CANCELLED);
 
 	DEBUG2("Thread %d exiting...", self->thread_num);
@@ -704,6 +726,10 @@ static void *request_handler_thread(void *arg)
 	 */
 	ERR_remove_state(0);
 #endif
+
+	pthread_mutex_lock(&thread_pool.queue_mutex);
+	thread_pool.exited_threads++;
+	pthread_mutex_unlock(&thread_pool.queue_mutex);
 
 	/*
 	 *  Do this as the LAST thing before exiting.
@@ -843,15 +869,15 @@ static THREAD_HANDLE *spawn_thread(time_t now, int do_trigger)
 #ifdef WNOHANG
 static uint32_t pid_hash(void const *data)
 {
-	const thread_fork_t *tf = data;
+	thread_fork_t const *tf = data;
 
 	return fr_hash(&tf->pid, sizeof(tf->pid));
 }
 
 static int pid_cmp(void const *one, void const *two)
 {
-	const thread_fork_t *a = one;
-	const thread_fork_t *b = two;
+	thread_fork_t const *a = one;
+	thread_fork_t const *b = two;
 
 	return (a->pid - b->pid);
 }
@@ -895,13 +921,13 @@ int thread_pool_init(UNUSED CONF_SECTION *cs, int *spawn_flag)
 	thread_pool.stop_flag = 0;
 #endif
 	thread_pool.spawn_flag = *spawn_flag;
-	
+
 	/*
 	 *	Don't bother initializing the mutexes or
 	 *	creating the hash tables.  They won't be used.
 	 */
 	if (!*spawn_flag) return 0;
-	
+
 #ifdef WNOHANG
 	if ((pthread_mutex_init(&thread_pool.wait_mutex,NULL) != 0)) {
 		ERROR("FATAL: Failed to initialize wait mutex: %s",
@@ -1008,9 +1034,8 @@ int thread_pool_init(UNUSED CONF_SECTION *cs, int *spawn_flag)
 #else
 	thread_pool.queue = dispatch_queue_create("org.freeradius.threads", NULL);
 	if (!thread_pool.queue) {
-		ERROR("Failed creating dispatch queue: %s\n",
-		       strerror(errno));
-		exit(1);
+		ERROR("Failed creating dispatch queue: %s", strerror(errno));
+		fr_exit(1);
 	}
 #endif
 
@@ -1062,7 +1087,7 @@ int request_enqueue(REQUEST *request)
 	dispatch_block_t block;
 
 	block = ^{
-		request->process(request, fun);
+		request->process(request, FR_ACTION_RUN);
 	};
 
 	dispatch_async(thread_pool.queue, block);
@@ -1084,6 +1109,25 @@ static void thread_pool_manage(time_t now)
 	int i, total;
 	THREAD_HANDLE *handle, *next;
 	int active_threads;
+
+	/*
+	 *	Loop over the thread pool, deleting exited threads.
+	 */
+	for (handle = thread_pool.head; handle; handle = next) {
+		next = handle->next;
+
+		/*
+		 *	Maybe we've asked the thread to exit, and it
+		 *	has agreed.
+		 */
+		if (handle->status == THREAD_EXITED) {
+			pthread_join(handle->pthread_id, NULL);
+			delete_thread(handle);
+			pthread_mutex_lock(&thread_pool.queue_mutex);
+			thread_pool.exited_threads--;
+			pthread_mutex_unlock(&thread_pool.queue_mutex);
+		}
+	}
 
 	/*
 	 *	We don't need a mutex lock here, as we're reading
@@ -1142,22 +1186,6 @@ static void thread_pool_manage(time_t now)
 	last_cleaned = now;
 
 	/*
-	 *	Loop over the thread pool, deleting exited threads.
-	 */
-	for (handle = thread_pool.head; handle; handle = next) {
-		next = handle->next;
-
-		/*
-		 *	Maybe we've asked the thread to exit, and it
-		 *	has agreed.
-		 */
-		if (handle->status == THREAD_EXITED) {
-			pthread_join(handle->pthread_id, NULL);
-			delete_thread(handle);
-		}
-	}
-
-	/*
 	 *	Only delete the spare threads if sufficient time has
 	 *	passed since we last created one.  This helps to minimize
 	 *	the amount of create/delete cycles.
@@ -1204,27 +1232,6 @@ static void thread_pool_manage(time_t now)
 				sem_post(&thread_pool.semaphore);
 				spare--;
 				break;
-			}
-		}
-	}
-
-	/*
-	 *	If the thread has handled too many requests, then make it
-	 *	exit.
-	 */
-	if (thread_pool.max_requests_per_thread > 0) {
-		for (handle = thread_pool.head; handle; handle = next) {
-			next = handle->next;
-
-			/*
-			 *	Not handling a request, but otherwise
-			 *	live, we can kill it.
-			 */
-			if ((handle->request == NULL) &&
-			    (handle->status == THREAD_RUNNING) &&
-			    (handle->request_count > thread_pool.max_requests_per_thread)) {
-				handle->status = THREAD_CANCELLED;
-				sem_post(&thread_pool.semaphore);
 			}
 		}
 	}
@@ -1468,5 +1475,5 @@ void exec_trigger(REQUEST *request, CONF_SECTION *cs, char const *name, int quen
 	}
 
 	RDEBUG("Trigger %s -> %s", name, value);
-	radius_exec_program(request, value, false, true, NULL, 0, vp, NULL);
+	radius_exec_program(request, value, false, true, NULL, 0, EXEC_TIMEOUT, vp, NULL);
 }

@@ -30,8 +30,8 @@ RCSID("$Id$")
 #include <freeradius-devel/rad_assert.h>
 
 typedef struct rlm_eap_mschapv2_t {
-	int with_ntdomain_hack;
-	int send_error;
+	bool with_ntdomain_hack;
+	bool send_error;
 } rlm_eap_mschapv2_t;
 
 static CONF_PARSER module_config[] = {
@@ -298,6 +298,7 @@ static int mschap_postproxy(eap_handler_t *handler, UNUSED void *tunnel_data)
 
 	data = (mschapv2_opaque_t *) handler->opaque;
 	rad_assert(data != NULL);
+	rad_assert(request != NULL);
 
 	RDEBUG2("Passing reply from proxy back into the tunnel %d.",
 		request->reply->code);
@@ -591,7 +592,7 @@ static int mschapv2_authenticate(void *arg, eap_handler_t *handler)
 	if (!name) {
 		return 0;
 	}
-	
+
 	/*
 	 *	MS-Length - MS-Value - 5.
 	 */
@@ -637,7 +638,7 @@ packet_ready:
 		rcode = request_data_add(request,
 					 request->proxy,
 					 REQUEST_DATA_EAP_TUNNEL_CALLBACK,
-					 tunnel, NULL);
+					 tunnel, false);
 		rad_assert(rcode == 0);
 
 		/*
@@ -718,7 +719,7 @@ packet_ready:
 			n = sscanf(response->vp_strvalue, "%*cE=%d R=%d C=%32s", &err, &retry, &buf[0]);
 			if (n == 3) {
 				DEBUG2("Found new challenge from MS-CHAP-Error: err=%d retry=%d challenge=%s", err, retry, buf);
-				fr_hex2bin(buf, data->challenge, 16);
+				fr_hex2bin(data->challenge, buf, 16);
 			} else {
 				DEBUG2("Could not parse new challenge from MS-CHAP-Error: %d", n);
 			}

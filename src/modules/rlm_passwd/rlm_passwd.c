@@ -260,8 +260,6 @@ static struct mypasswd * get_next(char *name, struct hashtable *ht,
 	int len;
 	char *list, *nextlist;
 
-	passwd = (struct mypasswd *) ht->buffer;
-
 	if (ht->tablesize > 0) {
 		/* get saved address of next item to check from buffer */
 		hashentry = *last_found;
@@ -324,7 +322,7 @@ static struct mypasswd * get_pw_nam(char * name, struct hashtable* ht,
 				return hashentry;
 			}
 		}
-		
+
 		return NULL;
 	}
 	if (ht->fp) {
@@ -375,14 +373,14 @@ struct passwd_instance {
 	char			*filename;
 	char			*format;
 	char			*delimiter;
-	int			allow_multiple;
-	int			ignore_nislike;
+	bool			allow_multiple;
+	bool			ignore_nislike;
 	int			hash_size;
 	int			nfields;
 	int			keyfield;
 	int			listable;
-	const DICT_ATTR		*keyattr;
-	int			ignore_empty;
+	DICT_ATTR const		*keyattr;
+	bool			ignore_empty;
 };
 
 static const CONF_PARSER module_config[] = {
@@ -392,27 +390,27 @@ static const CONF_PARSER module_config[] = {
 	  offsetof(struct passwd_instance, format), NULL,  NULL },
 	{ "delimiter",   PW_TYPE_STRING_PTR,
 	  offsetof(struct passwd_instance, delimiter), NULL,  ":" },
-	  
+
 	{ "ignorenislike",   PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED,
 	  offsetof(struct passwd_instance, ignore_nislike), NULL,  NULL },
 	{ "ignore_nislike",   PW_TYPE_BOOLEAN,
 	  offsetof(struct passwd_instance, ignore_nislike), NULL,  "yes" },
 
 	{ "ignoreempty",   PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED,
-	  offsetof(struct passwd_instance, ignore_empty), NULL,  NULL },	  
+	  offsetof(struct passwd_instance, ignore_empty), NULL,  NULL },
 	{ "ignore_empty",   PW_TYPE_BOOLEAN,
 	  offsetof(struct passwd_instance, ignore_empty), NULL,  "yes" },
-	  
+
 	{ "allowmultiplekeys",   PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED,
 	  offsetof(struct passwd_instance, allow_multiple), NULL,  NULL },
 	{ "allow_multiple_keys",   PW_TYPE_BOOLEAN,
 	  offsetof(struct passwd_instance, allow_multiple), NULL,  "no" },
 
 	{ "hashsize",   PW_TYPE_INTEGER | PW_TYPE_DEPRECATED,
-	  offsetof(struct passwd_instance, hash_size), NULL,  NULL },  
+	  offsetof(struct passwd_instance, hash_size), NULL,  NULL },
 	{ "hash_size",   PW_TYPE_INTEGER,
 	  offsetof(struct passwd_instance, hash_size), NULL,  "100" },
-	  
+
 	{ NULL, -1, 0, NULL, NULL }
 };
 
@@ -423,7 +421,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	char *lf=NULL; /* destination list flags temporary */
 	size_t len;
 	int i;
-	const DICT_ATTR * da;
+	DICT_ATTR const * da;
 	struct passwd_instance *inst = instance;
 
 	rad_assert(inst->filename && *inst->filename);
@@ -506,7 +504,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	inst->nfields = nfields;
 	inst->keyfield = keyfield;
 	inst->listable = listable;
-	DEBUG("rlm_passwd: nfields: %d keyfield %d(%s) listable: %s", nfields, keyfield, inst->pwdfmt->field[keyfield], listable?"yes":"no");
+	DEBUG2("rlm_passwd: nfields: %d keyfield %d(%s) listable: %s", nfields, keyfield, inst->pwdfmt->field[keyfield], listable?"yes":"no");
 	return 0;
 
 #undef inst
@@ -550,7 +548,7 @@ static rlm_rcode_t passwd_map(void *instance, REQUEST *request)
 	if (!key) {
 		return RLM_MODULE_NOTFOUND;
 	}
-	
+
 	for (i = paircursor(&cursor, &key);
 	     i;
 	     i = pairfindnext(&cursor, inst->keyattr->attr, inst->keyattr->vendor, TAG_ANY)) {
@@ -566,12 +564,12 @@ static rlm_rcode_t passwd_map(void *instance, REQUEST *request)
 			addresult(inst, request, request->reply, &request->reply->vps, pw, 1, "reply_items");
 			addresult(inst, request, request->packet, &request->packet->vps, pw, 2, "request_items");
 		} while ((pw = get_next(buffer, inst->ht, &last_found)));
-		
+
 		if (!inst->allow_multiple) {
 			break;
 		}
 	}
-	
+
 	return RLM_MODULE_OK;
 
 #undef inst

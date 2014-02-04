@@ -51,7 +51,7 @@ typedef enum conf_property {
 const FR_NAME_NUMBER conf_property_name[] = {
 	{ "name",	CONF_PROPERTY_NAME},
 	{ "instance",	CONF_PROPERTY_INSTANCE},
-	
+
 	{  NULL , -1 }
 };
 
@@ -89,7 +89,7 @@ struct conf_part {
 	rbtree_t	*data_tree;
 	void		*base;
 	int depth;
-	const CONF_PARSER *variables;
+	CONF_PARSER const *variables;
 };
 
 CONF_SECTION *root_config = NULL;
@@ -122,46 +122,46 @@ static char const *cf_expand_variables(char const *cf, int *lineno,
 CONF_PAIR *cf_itemtopair(CONF_ITEM const *ci)
 {
 	CONF_PAIR *out;
-	
+
 	if (ci == NULL) {
 		return NULL;
 	}
 	rad_assert(ci->type == CONF_ITEM_PAIR);
-	
+
 	memcpy(&out, &ci, sizeof(out));
 	return out;
 }
 CONF_SECTION *cf_itemtosection(CONF_ITEM const *ci)
 {
 	CONF_SECTION *out;
-	
+
 	if (ci == NULL) {
 		return NULL;
 	}
 	rad_assert(ci->type == CONF_ITEM_SECTION);
-	
+
 	memcpy(&out, &ci, sizeof(out));
 	return out;
 }
 CONF_ITEM *cf_pairtoitem(CONF_PAIR const *cp)
 {
 	CONF_ITEM *out;
-	
+
 	if (cp == NULL) {
 		return NULL;
 	}
-	
+
 	memcpy(&out, &cp, sizeof(out));
 	return out;
 }
 CONF_ITEM *cf_sectiontoitem(CONF_SECTION const *cs)
 {
 	CONF_ITEM *out;
-	
+
 	if (cs == NULL) {
 		return NULL;
 	}
-	
+
 	memcpy(&out, &cs, sizeof(out));
 	return out;
 }
@@ -169,11 +169,11 @@ CONF_ITEM *cf_sectiontoitem(CONF_SECTION const *cs)
 static CONF_ITEM *cf_datatoitem(CONF_DATA const *cd)
 {
 	CONF_ITEM *out;
-	
+
 	if (cd == NULL) {
 		return NULL;
 	}
-	
+
 	memcpy(&out, &cd, sizeof(out));
 	return out;
 }
@@ -231,8 +231,8 @@ static int cf_data_free(void *ctx)
  */
 static int pair_cmp(void const *a, void const *b)
 {
-	const CONF_PAIR *one = a;
-	const CONF_PAIR *two = b;
+	CONF_PAIR const *one = a;
+	CONF_PAIR const *two = b;
 
 	return strcmp(one->attr, two->attr);
 }
@@ -243,8 +243,8 @@ static int pair_cmp(void const *a, void const *b)
  */
 static int section_cmp(void const *a, void const *b)
 {
-	const CONF_SECTION *one = a;
-	const CONF_SECTION *two = b;
+	CONF_SECTION const *one = a;
+	CONF_SECTION const *two = b;
 
 	return strcmp(one->name1, two->name1);
 }
@@ -255,8 +255,8 @@ static int section_cmp(void const *a, void const *b)
  */
 static int name2_cmp(void const *a, void const *b)
 {
-	const CONF_SECTION *one = a;
-	const CONF_SECTION *two = b;
+	CONF_SECTION const *one = a;
+	CONF_SECTION const *two = b;
 
 	rad_assert(strcmp(one->name1, two->name1) == 0);
 
@@ -275,8 +275,8 @@ static int data_cmp(void const *a, void const *b)
 {
 	int rcode;
 
-	const CONF_DATA *one = a;
-	const CONF_DATA *two = b;
+	CONF_DATA const *one = a;
+	CONF_DATA const *two = b;
 
 	rcode = one->flag - two->flag;
 	if (rcode != 0) return rcode;
@@ -449,7 +449,7 @@ static void cf_item_add(CONF_SECTION *cs, CONF_ITEM *ci)
 					cs->section_tree = rbtree_create(section_cmp, NULL, 0);
 					if (!cs->section_tree) {
 						ERROR("Out of memory");
-						_exit(1);
+						fr_exit_now(1);
 					}
 				}
 
@@ -505,7 +505,7 @@ CONF_ITEM *cf_reference_item(CONF_SECTION const *parentcs,
 {
 	CONF_PAIR *cp;
 	CONF_SECTION *next;
-	const CONF_SECTION *cs = outercs;
+	CONF_SECTION const *cs = outercs;
 	char name[8192];
 	char *p;
 
@@ -517,14 +517,14 @@ CONF_ITEM *cf_reference_item(CONF_SECTION const *parentcs,
 	 */
 	if (*p == '.') {
 		p++;
-		
+
 		/*
 		 *	Just '.' means the current section
 		 */
 		if (*p == '\0') {
 			return cf_sectiontoitem(cs);
 		}
-		
+
 		/*
 		 *	..foo means "foo from the section
 		 *	enclosing this section" (etc.)
@@ -533,9 +533,9 @@ CONF_ITEM *cf_reference_item(CONF_SECTION const *parentcs,
 			if (cs->item.parent) {
 				cs = cs->item.parent;
 			}
-			
+
 			/*
-			 *	.. means the section 
+			 *	.. means the section
 			 *	enclosing this section
 			 */
 			if (!*++p) {
@@ -615,7 +615,7 @@ CONF_ITEM *cf_reference_item(CONF_SECTION const *parentcs,
 
 	next = cf_section_sub_find(cs, p);
 	if (next) return &(next->item);
-	
+
 	/*
 	 *	"foo" is "in the current section, OR in main".
 	 */
@@ -652,7 +652,7 @@ static char const *cf_expand_variables(char const *cf, int *lineno,
 {
 	char *p;
 	char const *end, *ptr;
-	const CONF_SECTION *parentcs;
+	CONF_SECTION const *parentcs;
 	char name[8192];
 
 	/*
@@ -705,12 +705,12 @@ static char const *cf_expand_variables(char const *cf, int *lineno,
 
 			memcpy(name, ptr, end - ptr);
 			name[end - ptr] = '\0';
-			
+
 			q = strchr(name, ':');
-			if (q) {		
+			if (q) {
 				*(q++) = '\0';
 			}
-			
+
 			ci = cf_reference_item(parentcs, outercs, name);
 			if (!ci) {
 				ERROR("%s[%d]: Reference \"%s\" not found", cf, *lineno, input);
@@ -728,23 +728,23 @@ static char const *cf_expand_variables(char const *cf, int *lineno,
 					ERROR("%s[%d]: Can only reference properties of sections", cf, *lineno);
 					return NULL;
 				}
-				
+
 				switch (fr_str2int(conf_property_name, q, CONF_PROPERTY_INVALID)) {
 				case CONF_PROPERTY_NAME:
 					strcpy(p, mycs->name1);
 					break;
-					
+
 				case CONF_PROPERTY_INSTANCE:
 					strcpy(p, mycs->name2 ? mycs->name2 : mycs->name1);
 					break;
-					
+
 				default:
 					ERROR("%s[%d]: Invalid property '%s'", cf, *lineno, q);
 					return NULL;
 				}
 				p += strlen(p);
 				ptr = end + 1;
-				
+
 			} else if (ci->type == CONF_ITEM_PAIR) {
 				/*
 				 *  Substitute the value of the variable.
@@ -863,7 +863,7 @@ static char const *parse_spaces = "                                             
  *	with a default value.
  *
  *	Returns -1 on error, -2 if deprecated, 0 for correctly parsed,
- *	and 1 if the default value was used.  Note that the default 
+ *	and 1 if the default value was used.  Note that the default
  *	value will be used ONLY if the CONF_PAIR is NULL.
  */
 int cf_item_parse(CONF_SECTION *cs, char const *name, int type, void *data, char const *dflt)
@@ -873,7 +873,7 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, int type, void *data, char
 	char **q;
 	char const *value;
 	fr_ipaddr_t ipaddr;
-	const CONF_PAIR *cp = NULL;
+	CONF_PAIR const *cp = NULL;
 	char ipbuf[128];
 
 	if (!cs) return -1;
@@ -888,7 +888,7 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, int type, void *data, char
 	if (attribute) {
 		required = 1;
 	}
-	
+
 	cp = cf_pair_find(cs, name);
 	if (cp) {
 		value = cp->value;
@@ -910,14 +910,14 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, int type, void *data, char
 		if (!cp) {
 			cf_log_err(&(cs->item), "Configuration item '%s' must not be empty", name);
 		} else {
-			cf_log_err(&(cp->item), "Configuration item'%s' must not be empty", name);
+			cf_log_err(&(cp->item), "Configuration item '%s' must not be empty", name);
 		}
 		return -1;
 	}
 
 	if (deprecated) {
 		cf_log_err(&(cs->item), "Configuration item \"%s\" is deprecated", name);
-		
+
 		return -2;
 	}
 
@@ -928,12 +928,12 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, int type, void *data, char
 		 */
 		if ((strcasecmp(value, "yes") == 0) ||
 		    (strcasecmp(value, "on") == 0)) {
-			*(int *)data = 1;
+			*(bool *)data = true;
 		} else if ((strcasecmp(value, "no") == 0) ||
 			   (strcasecmp(value, "off") == 0)) {
-			*(int *)data = 0;
+			*(bool *)data = false;
 		} else {
-			*(int *)data = 0;
+			*(bool *)data = false;
 			cf_log_err(&(cs->item), "Invalid value \"%s\" for boolean "
 			       "variable %s", value, name);
 			return -1;
@@ -1036,7 +1036,7 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, int type, void *data, char
 		cf_log_info(cs, "%.*s\t%s = \"%s\"",
 			    cs->depth, parse_spaces, name, value);
 		*q = value ? talloc_strdup(cs, value) : NULL;
-			
+
 		/*
 		 *	And now we "stat" the file.
 		 */
@@ -1045,7 +1045,7 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, int type, void *data, char
 
 			if (stat(*q, &buf) == 0) {
 				time_t *mtime = talloc(cs, time_t);
-				
+
 				*mtime = buf.st_mtime;
 				/* FIXME: error? */
 				cf_data_add_internal(cs, *q, mtime, NULL, type);
@@ -1074,7 +1074,7 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, int type, void *data, char
 			ERROR("Can't find IP address for host %s", value);
 			return -1;
 		}
-		
+
 		if (strspn(value, "0123456789.") == strlen(value)) {
 			cf_log_info(cs, "%.*s\t%s = %s",
 				    cs->depth, parse_spaces, name, value);
@@ -1246,11 +1246,12 @@ int cf_section_parse(CONF_SECTION *cs, void *base,
 			/*
 			 *	Be nice, and print the name of the new config item.
 			 */
-			if ((ret == -2) && (variables[i + 1].offset == variables[i].offset)) {
+			if ((ret == -2) && (variables[i + 1].offset == variables[i].offset) &&
+			    (variables[i + 1].data == variables[i].data)) {
 				cf_log_err(&(cs->item), "Replace \"%s\" with \"%s\"", variables[i].name,
 					   variables[i + 1].name);
 			}
-			
+
 			goto error;
 		}
 	} /* for all variables in the configuration section */
@@ -1380,7 +1381,7 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 		 */
 		if (cbuf == buf) {
 			if (at_eof) break;
-			
+
 			ptr = buf;
 			while (*ptr && isspace((int) *ptr)) ptr++;
 
@@ -1445,7 +1446,7 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 			case T_EOL:
 			case T_HASH:
 				goto do_bare_word;
-				
+
 			default:
 				ERROR("%s[%d]: Invalid expansion: %s",
 				       filename, *lineno, ptr);
@@ -1522,7 +1523,7 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 				 */
 				if (stat(value, &stat_buf) < 0) {
 					ERROR("%s[%d]: Failed reading directory %s: %s",
-					       filename, *lineno, 
+					       filename, *lineno,
 					       value, strerror(errno));
 					return -1;
 				}
@@ -1568,7 +1569,7 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 					    S_ISDIR(stat_buf.st_mode)) continue;
 					/*
 					 *	Read the file into the current
-					 *	configuration sectoin.
+					 *	configuration section.
 					 */
 					if (cf_file_include(this, buf2) < 0) {
 						closedir(dir);
@@ -1615,7 +1616,7 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 				       filename, *lineno, buf2);
 				return -1;
 		       }
-		       
+
 		       if (this->template) {
 				ERROR("%s[%d]: Section already has a template",
 				       filename, *lineno);
@@ -1683,8 +1684,8 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 				server = server->item.parent;
 				if (!server) goto invalid_location;
 			}
-			
-			slen = fr_condition_tokenize(this, ptr, &cond, &error);
+
+			slen = fr_condition_tokenize(this, cf_sectiontoitem(this), ptr, &cond, &error, FR_COND_TWO_PASS);
 			if (p) *p = '{';
 
 			if (slen < 0) {
@@ -1718,7 +1719,7 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 			buf2[slen] = '\0';
 			ptr += slen;
 			t2 = T_BARE_WORD;
-			
+
 			if (gettoken(&ptr, buf3, sizeof(buf3)) != T_LCBRACE) {
 				talloc_free(cond);
 				EDEBUG("%s[%d]: Expected '{'",
@@ -1780,18 +1781,23 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 			/*
 			 *	Handle variable substitution via ${foo}
 			 */
-			if ((t3 == T_BARE_WORD) ||
-			    (t3 == T_DOUBLE_QUOTED_STRING)) {
-				value = cf_expand_variables(filename, lineno, this,
-							    buf, sizeof(buf), buf3);
-				if (!value) return -1;
-			} else if ((t3 == T_EOL) ||
-				   (t3 == T_HASH)) {
-				value = NULL;
-			} else {
-				value = buf3;
+			switch (t3) {
+				case T_BARE_WORD:
+				case T_DOUBLE_QUOTED_STRING:
+				case T_BACK_QUOTED_STRING:
+					value = cf_expand_variables(filename, lineno, this, buf, sizeof(buf), buf3);
+					if (!value) return -1;
+					break;
+
+				case T_EOL:
+				case T_HASH:
+					value = NULL;
+					break;
+
+				default:
+					value = buf3;
 			}
-			
+
 			/*
 			 *	Add this CONF_PAIR to our CONF_SECTION
 			 */
@@ -1835,6 +1841,12 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 			css->item.lineno = *lineno;
 
 			if (cond) {
+				/*
+				 *	FIXME: talloc_steal cond to css
+				 *	set "ci" in all of "cond" to css
+				 *
+				 *	<sigh>
+				 */
 				cf_data_add_internal(css, "if", cond, NULL, false);
 				cond = NULL; /* eaten by the above line */
 			}
@@ -1846,8 +1858,8 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 			continue;
 
 		default:
-			ERROR("%s[%d]: Parse error after \"%s\": unknown token",
-			       filename, *lineno, buf1);
+			ERROR("%s[%d]: Parse error after \"%s\": unexpected token \"%s\"",
+			      filename, *lineno, buf1, fr_int2str(fr_tokens, t2, "<INVALID>"));
 			return -1;
 		}
 	}
@@ -2081,18 +2093,18 @@ VALUE_PAIR *cf_pairtovp(CONF_PAIR *pair)
 	    ((pair->value_type == T_DOUBLE_QUOTED_STRING) ||
 	     (pair->value_type == T_BACK_QUOTED_STRING))) {
 	     	VALUE_PAIR *vp;
-	     
+
 		vp = pairmake(pair, NULL, pair->attr, NULL, pair->op);
 		if (!vp) {
 			return NULL;
 		}
-		
+
 		if (pairmark_xlat(vp, pair->value) < 0) {
-			pairbasicfree(vp);
+			talloc_free(vp);
 
 			return NULL;
 		}
-		
+
 		return vp;
 	}
 
@@ -2134,7 +2146,7 @@ CONF_SECTION *cf_section_find_name2(CONF_SECTION const *cs,
 				    char const *name1, char const *name2)
 {
 	char const	*their2;
-	const CONF_ITEM	*ci;
+	CONF_ITEM const *ci;
 
 	if (!cs || !name1) return NULL;
 
@@ -2145,7 +2157,7 @@ CONF_SECTION *cf_section_find_name2(CONF_SECTION const *cs,
 		if (strcmp(cf_itemtosection(ci)->name1, name1) != 0) {
 			continue;
 		}
-		
+
 		their2 = cf_itemtosection(ci)->name2;
 
 		if ((!name2 && !their2) ||
@@ -2153,7 +2165,7 @@ CONF_SECTION *cf_section_find_name2(CONF_SECTION const *cs,
 			return cf_itemtosection(ci);
 		}
 	}
-	
+
 	return NULL;
 }
 
@@ -2232,7 +2244,7 @@ CONF_SECTION *cf_section_sub_find(CONF_SECTION const *cs, char const *name)
 
 
 /** Find a CONF_SECTION with both names.
- *	
+ *
  */
 CONF_SECTION *cf_section_sub_find_name2(CONF_SECTION const *cs,
 					char const *name1, char const *name2)
@@ -2934,7 +2946,7 @@ int cf_section2xml(FILE *fp, CONF_SECTION const *cs)
 
 		default:	/* should really be an error. */
 			break;
-		
+
 		}
 	}
 
@@ -2955,7 +2967,7 @@ int cf_pair2file(FILE *fp, CONF_PAIR const *cp)
 
 int cf_section2file(FILE *fp, CONF_SECTION const *cs)
 {
-	const CONF_ITEM *ci, *next;
+	CONF_ITEM const *ci, *next;
 
 	/*
 	 *	Section header
@@ -2984,7 +2996,7 @@ int cf_section2file(FILE *fp, CONF_SECTION const *cs)
 
 		default:	/* should really be an error. */
 			break;
-		
+
 		}
 	}
 

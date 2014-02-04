@@ -83,18 +83,8 @@ struct request_data_t {
 	void		*unique_ptr;
 	int		unique_int;
 	void		*opaque;
-	void		(*free_opaque)(void *);
+	bool		free_opaque;
 };
-
-static int request_data_free_opaque(void *ctx)
-{
-	request_data_t *this;
-
-	this = talloc_get_type_abort(ctx, request_data_t);
-	this->free_opaque(this->opaque);
-
-	return 0;
-}
 
 /*
  *	Add opaque data (with a "free" function) to a REQUEST.
@@ -105,7 +95,7 @@ static int request_data_free_opaque(void *ctx)
  */
 int request_data_add(REQUEST *request,
 		     void *unique_ptr, int unique_int,
-		     void *opaque, void (*free_opaque)(void *))
+		     void *opaque, bool free_opaque)
 {
 	request_data_t *this, **last, *next;
 
@@ -122,11 +112,14 @@ int request_data_add(REQUEST *request,
 
 			next = this->next;
 
-			if (this->opaque && /* free it, if necessary */
-			    this->free_opaque) {
-				this->free_opaque(this->opaque);
+			/*
+			 *	If caller requires custom behaviour on free
+			 *	they must set a destructor.
+			 */
+			if (this->opaque && this->free_opaque) {
+				talloc_free(this->opaque);
 			}
-			break;	/* replace the existing entry */
+			break;				/* replace the existing entry */
 		}
 	}
 
@@ -136,10 +129,8 @@ int request_data_add(REQUEST *request,
 	this->unique_ptr = unique_ptr;
 	this->unique_int = unique_int;
 	this->opaque = opaque;
-
 	if (free_opaque) {
 		this->free_opaque = free_opaque;
-		talloc_set_destructor((void *) this, request_data_free_opaque);
 	}
 
 	*last = this;
@@ -168,9 +159,8 @@ void *request_data_get(REQUEST *request,
 			 *	Remove the entry from the list, and free it.
 			 */
 			*last = this->next;
-			talloc_set_destructor((void *) this, NULL);
 			talloc_free(this);
-			return ptr; /* don't free it, the caller does that */
+			return ptr; 		/* don't free it, the caller does that */
 		}
 	}
 
@@ -198,7 +188,6 @@ void *request_data_reference(REQUEST *request,
 
 	return NULL;		/* wasn't found, too bad... */
 }
-
 
 /*
  *	Free a REQUEST struct.
@@ -239,6 +228,18 @@ void request_free(REQUEST **request_ptr)
 #endif
 	talloc_free(request);
 	*request_ptr = NULL;
+
+	VERIFY_ALL_TALLOC;
+}
+
+/*
+ *	Free a request.
+ */
+int request_opaque_free(REQUEST *request)
+{
+	request_free(&request);
+
+	return 0;
 }
 
 /*
@@ -266,7 +267,7 @@ int rad_file_exists(char const *filename)
 {
 	int des;
 	int ret = 1;
-	
+
 	if ((des = open(filename, O_RDONLY)) == -1) {
 		if (errno == ENOENT) {
 			ret = 0;
@@ -276,7 +277,7 @@ int rad_file_exists(char const *filename)
 	} else {
 		close(des);
 	}
-	
+
 	return ret;
 }
 
@@ -335,7 +336,7 @@ int rad_mkdir(char *directory, mode_t mode)
 	if (rcode < 0) {
 		return rcode;
 	}
-	
+
 	/*
 	 *	Set things like sticky bits that aren't supported by
 	 *	mkdir.
@@ -343,7 +344,7 @@ int rad_mkdir(char *directory, mode_t mode)
 	if (mode & ~0777) {
 		rcode = chmod(directory, mode);
 	}
-	
+
 	return rcode;
 }
 
@@ -359,7 +360,7 @@ void *rad_malloc(size_t size)
 
 	if (ptr == NULL) {
 		ERROR("no memory");
-		exit(1);
+		fr_exit(1);
 	}
 
 	return ptr;
@@ -489,6 +490,7 @@ REQUEST *request_alloc_fake(REQUEST *request)
 	fake->packet->id = fake->number & 0xff;
 	fake->packet->code = request->packet->code;
 	fake->timestamp = request->timestamp;
+	fake->packet->timestamp = request->packet->timestamp;
 
 	/*
 	 *	Required for new identity support
@@ -911,13 +913,13 @@ pair_lists_t radius_list_name(char const **name, pair_lists_t unknown)
 	char const *p = *name;
 	char const *q;
 	pair_lists_t output;
-	
+
 	/* This should never be a NULL pointer or zero length string */
 	rad_assert(name && *name);
 
 	/*
 	 *	We couldn't determine the list if:
-	 *	
+	 *
 	 * 	A colon delimiter was found, but the next char was a
 	 *	number, indicating a tag, not a list qualifier.
 	 *
@@ -930,7 +932,7 @@ pair_lists_t radius_list_name(char const **name, pair_lists_t unknown)
 	    (!q && isupper((int) *p))) {
 		return unknown;
 	}
-	
+
 	if (q) {
 		*name = (q + 1);	/* Consume the list and delimiter */
 		return fr_substr2int(pair_lists, p, PAIR_LIST_UNKNOWN, (q - p));
@@ -971,7 +973,7 @@ request_refs_t radius_request_name(char const **name, request_refs_t def)
 	if (!p) {
 		return def;
 	}
-	
+
 	/*
 	 *	We may get passed "127.0.0.1".
 	 */
@@ -1005,29 +1007,86 @@ request_refs_t radius_request_name(char const **name, request_refs_t def)
 int radius_request(REQUEST **context, request_refs_t name)
 {
 	REQUEST *request = *context;
-	
+
 	switch (name) {
 		case REQUEST_CURRENT:
 			return 0;
-		
+
 		case REQUEST_PARENT:	/* for future use in request chaining */
 		case REQUEST_OUTER:
 			if (!request->parent) {
-				RWDEBUG("Specified request \"%s\" is not available in this context",
-				       fr_int2str(request_refs, name, "¿unknown?"));
 				return -1;
 			}
-			
 			*context = request->parent;
-			
 			break;
-	
+
 		case REQUEST_UNKNOWN:
 		default:
 			rad_assert(0);
 			return -1;
 	}
-	
+
 	return 0;
+}
+
+/** Adds subcapture values to request data
+ *
+ * Allows use of %{n} expansions.
+ *
+ * @param request Current request.
+ * @param compare Result returned by regexec.
+ * @param value The original value.
+ * @param rxmatch Pointers into value.
+ */
+void rad_regcapture(REQUEST *request, int compare, char const *value, regmatch_t rxmatch[])
+{
+	int i;
+	char *p;
+	size_t len;
+
+	if (compare == REG_NOMATCH) {
+		return;
+	}
+
+	/*
+	 *	Add new %{0}, %{1}, etc.
+	 */
+	for (i = 0; i <= REQUEST_MAX_REGEX; i++) {
+		/*
+		 *	Didn't match: delete old match, if it existed.
+		 */
+		if (rxmatch[i].rm_so == -1) {
+			p = request_data_get(request, request, REQUEST_DATA_REGEX | i);
+			if (p) {
+				RDEBUG4("%%{%i}: Clearing old value \"%s\"", i, p);
+				talloc_free(p);
+			} else {
+				RDEBUG4("%%{%i}: Was empty", i);
+			}
+
+			continue;
+		}
+
+		len = rxmatch[i].rm_eo - rxmatch[i].rm_so;
+		p = talloc_array(request, char, len + 1);
+		if (!p) {
+			ERROR("Out of memory");
+			return;
+		}
+
+		memcpy(p, value + rxmatch[i].rm_so, len);
+		p[len] = '\0';
+
+		RDEBUG4("%%{%i}: Inserting new value \"%s\"", i, p);
+		/*
+		 *	Copy substring, and add it to
+		 *	the request.
+		 *
+		 *	Note that we don't check
+		 *	for out of memory, which is
+		 *	the only error we can get...
+		 */
+		request_data_add(request, request, REQUEST_DATA_REGEX | i, p, true);
+	}
 }
 

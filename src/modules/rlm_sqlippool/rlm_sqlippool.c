@@ -49,6 +49,7 @@ typedef struct rlm_sqlippool_t {
 	   information in there
 	*/
 				/* Allocation sequence */
+	time_t last_clear;	/* so we only do it once a second */
 	char *allocate_begin;	/* SQL query to begin */
 	char *allocate_clear;	/* SQL query to clear an IP */
 	char *allocate_find;	/* SQL query to find an unused IP */
@@ -133,35 +134,35 @@ static CONF_PARSER module_config[] = {
 	  offsetof(rlm_sqlippool_t,allocate_begin), NULL, NULL},
 	{ "allocate_begin", PW_TYPE_STRING_PTR,
 	  offsetof(rlm_sqlippool_t,allocate_begin), NULL, "START TRANSACTION" },
-	 
+
 	{ "allocate-clear", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED,
-	  offsetof(rlm_sqlippool_t,allocate_clear), NULL, NULL}, 
+	  offsetof(rlm_sqlippool_t,allocate_clear), NULL, NULL},
 	{ "allocate_clear", PW_TYPE_STRING_PTR | PW_TYPE_REQUIRED,
 	  offsetof(rlm_sqlippool_t,allocate_clear), NULL, "" },
 
 	{ "allocate-find", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED,
-	  offsetof(rlm_sqlippool_t,allocate_find), NULL, NULL},  
+	  offsetof(rlm_sqlippool_t,allocate_find), NULL, NULL},
 	{ "allocate_find", PW_TYPE_STRING_PTR | PW_TYPE_REQUIRED,
 	  offsetof(rlm_sqlippool_t,allocate_find), NULL, "" },
-	  
+
 	{ "allocate-update", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED,
 	  offsetof(rlm_sqlippool_t,allocate_update), NULL, NULL },
 	{ "allocate_update", PW_TYPE_STRING_PTR | PW_TYPE_REQUIRED,
 	  offsetof(rlm_sqlippool_t,allocate_update), NULL, "" },
-	  
+
 	{ "allocate-commit", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED,
 	  offsetof(rlm_sqlippool_t,allocate_commit), NULL, NULL },
 	{ "allocate_commit", PW_TYPE_STRING_PTR,
 	  offsetof(rlm_sqlippool_t,allocate_commit), NULL, "COMMIT" },
 
-	
+
 	{ "pool-check", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED, offsetof(rlm_sqlippool_t,pool_check), NULL, NULL },
 	{ "pool_check", PW_TYPE_STRING_PTR, offsetof(rlm_sqlippool_t,pool_check), NULL, "" },
 
 
 	{ "start-begin", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED, offsetof(rlm_sqlippool_t,start_begin), NULL, NULL },
 	{ "start_begin", PW_TYPE_STRING_PTR, offsetof(rlm_sqlippool_t,start_begin), NULL, "START TRANSACTION" },
-	
+
 	{ "start-update", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED, offsetof(rlm_sqlippool_t,start_update), NULL, NULL },
 	{ "start_update", PW_TYPE_STRING_PTR | PW_TYPE_REQUIRED, offsetof(rlm_sqlippool_t,start_update), NULL, "" },
 
@@ -174,15 +175,15 @@ static CONF_PARSER module_config[] = {
 
 	{ "alive-update", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED, offsetof(rlm_sqlippool_t,alive_update), NULL, NULL },
 	{ "alive_update", PW_TYPE_STRING_PTR | PW_TYPE_REQUIRED, offsetof(rlm_sqlippool_t,alive_update), NULL, "" },
-	
+
 	{ "alive-commit", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED, offsetof(rlm_sqlippool_t,alive_commit), NULL, NULL },
 	{ "alive_commit", PW_TYPE_STRING_PTR, offsetof(rlm_sqlippool_t,alive_commit), NULL, "COMMIT" },
 
 
 	{ "stop-begin", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED, offsetof(rlm_sqlippool_t,stop_begin), NULL, NULL },
 	{ "stop_begin", PW_TYPE_STRING_PTR, offsetof(rlm_sqlippool_t,stop_begin), NULL, "START TRANSACTION" },
-	
-	{ "stop-clear", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED, offsetof(rlm_sqlippool_t,stop_clear), NULL, NULL },	
+
+	{ "stop-clear", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED, offsetof(rlm_sqlippool_t,stop_clear), NULL, NULL },
 	{ "stop_clear", PW_TYPE_STRING_PTR | PW_TYPE_REQUIRED, offsetof(rlm_sqlippool_t,stop_clear), NULL, "" },
 
 	{ "stop-commit", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED, offsetof(rlm_sqlippool_t,stop_commit), NULL, NULL },
@@ -191,20 +192,20 @@ static CONF_PARSER module_config[] = {
 
 	{ "on-begin", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED, offsetof(rlm_sqlippool_t,on_begin), NULL, NULL },
 	{ "on_begin", PW_TYPE_STRING_PTR, offsetof(rlm_sqlippool_t,on_begin), NULL, "START TRANSACTION" },
-	
+
 	{ "on-clear", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED, offsetof(rlm_sqlippool_t,on_clear), NULL, NULL },
 	{ "on_clear", PW_TYPE_STRING_PTR | PW_TYPE_REQUIRED, offsetof(rlm_sqlippool_t,on_clear), NULL, "" },
-	
+
 	{ "on-commit", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED, offsetof(rlm_sqlippool_t,on_commit), NULL, NULL },
 	{ "on_commit", PW_TYPE_STRING_PTR, offsetof(rlm_sqlippool_t,on_commit), NULL, "COMMIT" },
 
 
 	{ "off-begin", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED, offsetof(rlm_sqlippool_t,off_begin), NULL, NULL },
 	{ "off_begin", PW_TYPE_STRING_PTR, offsetof(rlm_sqlippool_t,off_begin), NULL, "START TRANSACTION" },
-	
+
 	{ "off-clear", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED, offsetof(rlm_sqlippool_t,off_clear), NULL, NULL },
 	{ "off_clear", PW_TYPE_STRING_PTR | PW_TYPE_REQUIRED, offsetof(rlm_sqlippool_t,off_clear), NULL, "" },
-	
+
 	{ "off-commit",PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED, offsetof(rlm_sqlippool_t,off_commit), NULL, NULL },
 	{ "off_commit", PW_TYPE_STRING_PTR, offsetof(rlm_sqlippool_t,off_commit), NULL, "COMMIT" },
 
@@ -306,15 +307,25 @@ static int sqlippool_expand(char * out, int outlen, char const * fmt,
 	return strlen(out);
 }
 
-/*
- * Query the database executing a command with no result rows
+/** Perform a single sqlippool query
+ *
+ * Mostly wrapper around sql_query which does some special sqlippool sequence substitutions and expands
+ * the format string.
+ *
+ * @param fmt sql query to expand.
+ * @param handle sql connection handle.
+ * @param data Instance of rlm_sqlippool.
+ * @param request Current request.
+ * @param param ip address string.
+ * @param param_len ip address string len.
+ * @return 0 on success or < 0 on error.
  */
-static int sqlippool_command(char const * fmt, rlm_sql_handle_t * handle, rlm_sqlippool_t *data, REQUEST * request,
-			     char * param, int param_len)
+static int sqlippool_command(char const * fmt, rlm_sql_handle_t * handle, rlm_sqlippool_t *data, REQUEST *request,
+			     char *param, int param_len)
 {
 	char query[MAX_QUERY_LEN];
 	char *expanded = NULL;
-	
+
 	int ret;
 
 	/*
@@ -328,15 +339,13 @@ static int sqlippool_command(char const * fmt, rlm_sql_handle_t * handle, rlm_sq
 	sqlippool_expand(query, sizeof(query), fmt, data, param, param_len);
 
 	if (radius_axlat(&expanded, request, query, data->sql_inst->sql_escape_func, data->sql_inst) < 0) {
-		return 0;
+		return -1;
 	}
 
 	ret = data->sql_inst->sql_query(&handle, data->sql_inst, expanded);
-	if (!ret){
-		REDEBUG("database query error in: '%s'", expanded);
+	if (ret < 0){
 		talloc_free(expanded);
-		
-		return 0;
+		return -1;
 	}
 	talloc_free(expanded);
 
@@ -359,7 +368,7 @@ static int sqlippool_query1(char *out, int outlen, char const *fmt,
 {
 	char query[MAX_QUERY_LEN];
 	char *expanded = NULL;
-	
+
 	int rlen, retval;
 
 	/*
@@ -370,7 +379,7 @@ static int sqlippool_query1(char *out, int outlen, char const *fmt,
 	rad_assert(request != NULL);
 
 	*out = '\0';
-	
+
 	/*
 	 *	Do an xlat on the provided string
 	 */
@@ -379,32 +388,36 @@ static int sqlippool_query1(char *out, int outlen, char const *fmt,
 	}
 	retval = data->sql_inst->sql_select_query(&handle, data->sql_inst, expanded);
 	talloc_free(expanded);
-	
+
 	if (retval != 0){
 		REDEBUG("database query error on '%s'", query);
-		
 		return 0;
 	}
 
-	if (!data->sql_inst->sql_fetch_row(&handle, data->sql_inst)) {
-		if (handle->row) {
-			if (handle->row[0]) {
-				if ((rlen = strlen(handle->row[0])) < outlen) {
-					strcpy(out, handle->row[0]);
-					retval = rlen;
-				} else {
-					RDEBUG("insufficient string space");
-				}
-			} else {
-				RDEBUG("row[0] returned NULL");
-			}
-		} else {
-			RDEBUG("SQL query did not return any results");
-		}
-	} else {
-		RDEBUG("SQL query did not succeed");
+	if (data->sql_inst->sql_fetch_row(&handle, data->sql_inst) < 0) {
+		REDEBUG("Failed fetching query result");
+		goto finish;
 	}
 
+	if (!handle->row) {
+		REDEBUG("SQL query did not return any results");
+		goto finish;
+	}
+
+	if (!handle->row[0]) {
+		REDEBUG("The first column of the result was NULL");
+		goto finish;
+	}
+
+	rlen = strlen(handle->row[0]);
+	if (rlen >= outlen) {
+		RDEBUG("insufficient string space");
+		goto finish;
+	}
+
+	strcpy(out, handle->row[0]);
+	retval = rlen;
+finish:
 	(data->sql_inst->module->sql_finish_select_query)(handle, data->sql_inst->config);
 
 	return retval;
@@ -453,13 +466,13 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 
 
 /*
- *	If we have something to log, then we log it. 
+ *	If we have something to log, then we log it.
  *	Otherwise we return the retcode as soon as possible
  */
 static int do_logging(REQUEST *request, char *str, int rcode)
 {
 	char *expanded = NULL;
-	
+
 	if (!str || !*str) return rcode;
 
 	if (radius_axlat(&expanded, request, str, NULL, NULL) < 0) {
@@ -467,7 +480,7 @@ static int do_logging(REQUEST *request, char *str, int rcode)
 	}
 
 	pairmake_config("Module-Success-Message", expanded, T_OP_SET);
-	
+
 	talloc_free(expanded);
 
 	return rcode;
@@ -486,6 +499,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 	VALUE_PAIR *vp;
 	rlm_sql_handle_t *handle;
 	fr_ipaddr_t ipaddr;
+	time_t now;
 
 	/*
 	 *	If there is a Framed-IP-Address attribute in the reply do nothing
@@ -512,8 +526,23 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 		return RLM_MODULE_FAIL;
 	}
 
+	/*
+	 *	Limit the number of clears we do.  There are minor
+	 *	race conditions for the check, but so what.  The
+	 *	actual work is protected by a transaction.  The idea
+	 *	here is that if we're allocating 100 IPs a second,
+	 *	we're only do 1 CLEAR per second.
+	 */
+	now = time(NULL);
+	if (inst->last_clear < now) {
+		inst->last_clear = now;
+
+		DO(allocate_begin);
+		DO(allocate_clear);
+		DO(allocate_commit);
+	}
+
 	DO(allocate_begin);
-	DO(allocate_clear);
 
 	allocation_len = sqlippool_query1(allocation, sizeof(allocation),
 					  inst->allocate_find, handle,
@@ -595,6 +624,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 	vp = radius_paircreate(request, &request->reply->vps,
 			       PW_FRAMED_IP_ADDRESS, 0);
 	vp->vp_ipaddr = ip_allocation;
+	vp->length = 4;
 
 	DO(allocate_commit);
 

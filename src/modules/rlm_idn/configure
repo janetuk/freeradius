@@ -2744,8 +2744,6 @@ ac_link='$CC -o conftest$ac_exeext $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $
 ac_compiler_gnu=$ac_cv_c_compiler_gnu
 
 
-	mod_ldflags="${mod_ldflags} -lidn"
-
 
 
 
@@ -2878,7 +2876,7 @@ eval "smart_lib_dir=\"\$smart_lib_dir $DIRS\""
   for try in $smart_lib_dir /usr/local/lib /opt/lib; do
     { $as_echo "$as_me:${as_lineno-$LINENO}: checking for idna_to_ascii_8z in -lidn in $try" >&5
 $as_echo_n "checking for idna_to_ascii_8z in -lidn in $try... " >&6; }
-    LIBS="-L$try -rpath$try -lidn $old_LIBS -Wl,-rpath,$try"
+    LIBS="-L$try -lidn $old_LIBS -Wl,-rpath,$try"
     cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 extern char idna_to_ascii_8z();
@@ -3081,6 +3079,9 @@ $as_echo "$as_me: WARNING: FAILURE: rlm_idn requires: $fail." >&2;};
 		targetname=""
 	fi
 fi
+
+mod_ldflags="${SMART_LIBS}"
+mod_cflags="${SMART_CFLAGS}"
 
 
 

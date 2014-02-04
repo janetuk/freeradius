@@ -22,26 +22,65 @@
 
 RCSID("$Id$")
 
-#include	<freeradius-devel/libradius.h>
+#include <freeradius-devel/libradius.h>
 
-#include	<ctype.h>
-#include	<inttypes.h>
+#include <ctype.h>
 
 #ifdef HAVE_PCREPOSIX_H
-#define WITH_REGEX
-#  include	<pcreposix.h>
-#else
-#ifdef HAVE_REGEX_H
-#define WITH_REGEX
-#  include	<regex.h>
-#endif
+#  define WITH_REGEX
+#  include <pcreposix.h>
+#elif defined(HAVE_REGEX_H)
+#  include <regex.h>
+#  define WITH_REGEX
+
+/*
+ *  For POSIX Regular expressions.
+ *  (0) Means no extended regular expressions.
+ *  REG_EXTENDED means use extended regular expressions.
+ */
+#  ifndef REG_EXTENDED
+#    define REG_EXTENDED (0)
+#  endif
+
+#  ifndef REG_NOSUB
+#    define REG_NOSUB (0)
+#  endif
 #endif
 
-static char const *months[] = {
-	"jan", "feb", "mar", "apr", "may", "jun",
-	"jul", "aug", "sep", "oct", "nov", "dec" };
-	
 #define attribute_eq(_x, _y) ((_x && _y) && (_x->da == _y->da) && (_x->tag == _y->tag))
+
+/** Free a VALUE_PAIR
+ *
+ * @note Do not call directly, use talloc_free instead.
+ *
+ * @param vp to free.
+ * @return 0
+ */
+static int _pairfree(VALUE_PAIR *vp) {
+	/*
+	 *	The lack of DA means something has gone wrong
+	 */
+	if (!vp->da) {
+		fr_strerror_printf("VALUE_PAIR has NULL DICT_ATTR pointer (probably already freed)");
+	/*
+	 *	Only free the DICT_ATTR if it was dynamically allocated
+	 *	and was marked for free when the VALUE_PAIR is freed.
+	 *
+	 *	@fixme This is an awful hack and needs to be removed once DICT_ATTRs are allocated by talloc.
+	 */
+	} else if (vp->da->flags.vp_free) {
+		dict_attr_free(&(vp->da));
+	}
+
+#ifndef NDEBUG
+	vp->vp_integer = FREE_MAGIC;
+#endif
+
+#ifdef TALLOC_DEBUG
+	talloc_report_depth_cb(NULL, 0, -1, fr_talloc_verify_cb, NULL);
+#endif
+	return 0;
+}
 
 /** Dynamically allocate a new attribute
  *
@@ -56,8 +95,7 @@ VALUE_PAIR *pairalloc(TALLOC_CTX *ctx, DICT_ATTR const *da)
 	VALUE_PAIR *vp;
 
 	/*
-	 *	Caller must specify a da else we don't know what the attribute
-	 *	type is.
+	 *	Caller must specify a da else we don't know what the attribute type is.
 	 */
 	if (!da) return NULL;
 
@@ -66,10 +104,12 @@ VALUE_PAIR *pairalloc(TALLOC_CTX *ctx, DICT_ATTR const *da)
 		fr_strerror_printf("Out of memory");
 		return NULL;
 	}
-	
+
 	vp->da = da;
 	vp->op = T_OP_EQ;
 	vp->type = VT_NONE;
+
+	talloc_set_destructor(vp, _pairfree);
 
 	return vp;
 }
@@ -92,7 +132,7 @@ VALUE_PAIR *pairalloc(TALLOC_CTX *ctx, DICT_ATTR const *da)
  */
 VALUE_PAIR *paircreate(TALLOC_CTX *ctx, unsigned int attr, unsigned int vendor)
 {
-	const DICT_ATTR *da;
+	DICT_ATTR const *da;
 
 	da = dict_attrbyvalue(attr, vendor);
 	if (!da) {
@@ -103,36 +143,6 @@ VALUE_PAIR *paircreate(TALLOC_CTX *ctx, unsigned int attr, unsigned int vendor)
 	}
 
 	return pairalloc(ctx, da);
-}
-
-/** Free memory used by a single valuepair.
- *
- * @todo TLV: needs to die in fire.
- */
-void pairbasicfree(VALUE_PAIR *vp)
-{
-	if (!vp) return;
-
-	VERIFY_VP(vp);
-	
-	/*
-	 *	The lack of DA means something has gone wrong
-	 */
-	if (!vp->da) {
-		fr_strerror_printf("VALUE_PAIR has NULL DICT_ATTR pointer (probably already freed)");
-	/*
-	 *	Only free the DICT_ATTR if it was dynamically allocated
-	 *	and was marked for free when the VALUE_PAIR is freed.
-	 */
-	} else if (vp->da->flags.vp_free) {
-		dict_attr_free(&(vp->da));
-	}
-
-	/* clear the memory here */
-#ifndef NDEBUG
-	memset(vp, 0, sizeof(*vp));
-#endif
-	talloc_free(vp);
 }
 
 /** Free memory used by a valuepair list.
@@ -147,12 +157,12 @@ void pairfree(VALUE_PAIR **vps)
 	if (!vps) {
 		return;
 	}
-	
+
 	for (vp = paircursor(&cursor, vps);
 	     vp;
 	     vp = pairnext(&cursor)) {
 		VERIFY_VP(vp);
-		pairbasicfree(vp);
+		talloc_free(vp);
 	}
 
 	*vps = NULL;
@@ -165,20 +175,20 @@ void pairfree(VALUE_PAIR **vps)
  */
 int pair2unknown(VALUE_PAIR *vp)
 {
-	const DICT_ATTR *da;
-	
+	DICT_ATTR const *da;
+
 	VERIFY_VP(vp);
 	if (vp->da->flags.is_unknown) {
 		return 0;
 	}
-	
+
 	da = dict_attrunknown(vp->da->attr, vp->da->vendor, true);
 	if (!da) {
 		return -1;
 	}
-	
+
 	vp->da = da;
-	
+
 	return 0;
 }
 
@@ -214,26 +224,26 @@ VALUE_PAIR *pairfind(VALUE_PAIR *vp, unsigned int attr, unsigned int vendor,
 VALUE_PAIR *paircursorc(vp_cursor_t *cursor, VALUE_PAIR const * const *node)
 {
 	memset(cursor, 0, sizeof(*cursor));
-	
+
 	if (!node || !cursor) {
 		return NULL;
 	}
-	
+
 	memcpy(&cursor->first, &node, sizeof(cursor->first));
 	cursor->current = *cursor->first;
-	
+
 	if (cursor->current) {
 		VERIFY_VP(cursor->current);
 		cursor->next = cursor->current->next;
 	}
-	
+
 	return cursor->current;
 }
 
-VALUE_PAIR *pairfirst(vp_cursor_t *cursor) 
+VALUE_PAIR *pairfirst(vp_cursor_t *cursor)
 {
 	cursor->current = *cursor->first;
-	
+
 	if (cursor->current) {
 		VERIFY_VP(cursor->current);
 		cursor->next = cursor->current->next;
@@ -256,14 +266,14 @@ VALUE_PAIR *pairfindnext(vp_cursor_t *cursor, unsigned int attr, unsigned int ve
 	if (!i) {
 		cursor->next = NULL;
 		cursor->current = NULL;
-		
+
 		return NULL;
-	} 
-	
+	}
+
 	cursor->next = i->next;
 	cursor->current = i;
 	cursor->found = i;
-	
+
 	return i;
 }
 
@@ -277,19 +287,19 @@ VALUE_PAIR *pairnext(vp_cursor_t *cursor)
 	if (cursor->current) {
 		VERIFY_VP(cursor->current);
 
-		/* 
+		/*
 		 *	Set this now in case 'current' gets freed before
 		 *	pairnext is called again.
 		 */
 		cursor->next = cursor->current->next;
-		
+
 		/*
 		 *	Next call to pairfindnext will start from the current
 		 *	position in the list, not the last found instance.
 		 */
 		cursor->found = NULL;
 	}
-	
+
 	return cursor->current;
 }
 
@@ -298,11 +308,11 @@ VALUE_PAIR *paircurrent(vp_cursor_t *cursor)
 	if (cursor->current) {
 		VERIFY_VP(cursor->current);
 	}
-	
+
 	return cursor->current;
 }
 
-/** Insert a VP 
+/** Insert a VP
  *
  * @todo don't use with pairdelete
  */
@@ -313,7 +323,7 @@ void pairinsert(vp_cursor_t *cursor, VALUE_PAIR *add)
 	if (!add) {
 		return;
 	}
-	
+
 	VERIFY_VP(add);
 
 	/*
@@ -323,10 +333,10 @@ void pairinsert(vp_cursor_t *cursor, VALUE_PAIR *add)
 		*cursor->first = add;
 		cursor->current = add;
 		cursor->next = cursor->current->next;
-		
+
 		return;
 	}
-	 
+
 	/*
 	 *	We don't yet know where the last VALUE_PAIR is
 	 *
@@ -335,9 +345,9 @@ void pairinsert(vp_cursor_t *cursor, VALUE_PAIR *add)
 	if (!cursor->last) {
 		cursor->last = cursor->current ? cursor->current : *cursor->first;
 	}
-	
+
 	VERIFY_VP(cursor->last);
-	
+
 	/*
 	 *	Something outside of the cursor added another VALUE_PAIR
 	 */
@@ -347,15 +357,15 @@ void pairinsert(vp_cursor_t *cursor, VALUE_PAIR *add)
 			cursor->last = i;
 		}
 	}
-	
+
 	/*
-	 *	Either current was never set, or something iterated to the end of the 
+	 *	Either current was never set, or something iterated to the end of the
 	 *	attribute list.
 	 */
 	if (!cursor->current) {
 		cursor->current = add;
 	}
-	
+
 	cursor->last->next = add;
 }
 
@@ -368,23 +378,23 @@ void pairinsert(vp_cursor_t *cursor, VALUE_PAIR *add)
  */
 VALUE_PAIR *pairremove(vp_cursor_t *cursor)
 {
-	VALUE_PAIR *vp, *last;
-	
+	VALUE_PAIR *vp, **last;
+
 	vp = paircurrent(cursor);
 	if (!vp) {
-		return NULL;
+	    return NULL;
 	}
-	
-	last = *cursor->first;
-	while (last && (last->next != vp)) {
-		last = last->next;
+
+	last = cursor->first;
+	while (*last != vp) {
+	    last = &(*last)->next;
 	}
-	
-	pairnext(cursor);	/* Advance the cursor past the one were about to delete */
-	
-	last->next = vp->next;	/* re-link the list */
+
+	pairnext(cursor);   /* Advance the cursor past the one were about to delete */
+
+	*last = vp->next;
 	vp->next = NULL;
-	
+
 	return vp;
 }
 
@@ -412,7 +422,7 @@ void pairdelete(VALUE_PAIR **first, unsigned int attr, unsigned int vendor,
 		    ((tag == TAG_ANY) ||
 		     (i->da->flags.has_tag && (i->tag == tag)))) {
 			*last = next;
-			pairbasicfree(i);
+			talloc_free(i);
 		} else {
 			last = &i->next;
 		}
@@ -487,7 +497,7 @@ void pairreplace(VALUE_PAIR **first, VALUE_PAIR *replace)
 			 *	Should really assert that replace->next == NULL
 			 */
 			replace->next = next;
-			pairbasicfree(i);
+			talloc_free(i);
 			return;
 		}
 
@@ -508,24 +518,24 @@ static void pairsort_split(VALUE_PAIR *source, VALUE_PAIR **front, VALUE_PAIR **
 {
 	VALUE_PAIR *fast;
 	VALUE_PAIR *slow;
-	
+
 	/*
 	 *	Stopping condition - no more elements left to split
 	 */
 	if (!source || !source->next) {
     		*front = source;
     		*back = NULL;
-  	
+
   		return;
   	}
-  	
+
 	/*
 	 *	Fast advances twice as fast as slow, so when it gets to the end,
 	 *	slow will point to the middle of the linked list.
 	 */
 	slow = source;
 	fast = source->next;
-	
+
 	while (fast) {
 		fast = fast->next;
 		if (fast) {
@@ -542,10 +552,10 @@ static void pairsort_split(VALUE_PAIR *source, VALUE_PAIR **front, VALUE_PAIR **
 static VALUE_PAIR *pairsort_merge(VALUE_PAIR *a, VALUE_PAIR *b, bool with_tag)
 {
 	VALUE_PAIR *result = NULL;
- 
+
 	if (!a) return b;
 	if (!b) return a;
- 	
+
  	/*
  	 *	Compare the DICT_ATTRs and tags
  	 */
@@ -556,7 +566,7 @@ static VALUE_PAIR *pairsort_merge(VALUE_PAIR *a, VALUE_PAIR *b, bool with_tag)
 		result = b;
 		result->next = pairsort_merge(a, b->next, with_tag);
 	}
-	
+
 	return result;
 }
 
@@ -570,18 +580,18 @@ void pairsort(VALUE_PAIR **vps, bool with_tag)
 	VALUE_PAIR *head = *vps;
 	VALUE_PAIR *a;
 	VALUE_PAIR *b;
- 
+
 	/*
 	 *	If there's 0-1 elements it must already be sorted.
 	 */
 	if (!head || !head->next) {
 		return;
 	}
- 
+
 	pairsort_split(head, &a, &b);	/* Split into sublists */
 	pairsort(&a, with_tag);		/* Traverse left */
 	pairsort(&b, with_tag);		/* Traverse right */
- 
+
   	/*
   	 *	merge the two sorted lists together
   	 */
@@ -597,8 +607,8 @@ bool pairvalidate(VALUE_PAIR *filter, VALUE_PAIR *list)
 {
 	vp_cursor_t filter_cursor;
 	vp_cursor_t list_cursor;
-	
-	VALUE_PAIR *check, *match, *last_check = NULL, *last_match;
+
+	VALUE_PAIR *check, *match;
 
 	if (!filter && !list) {
 		return true;
@@ -606,7 +616,7 @@ bool pairvalidate(VALUE_PAIR *filter, VALUE_PAIR *list)
 	if (!filter || !list) {
 		return false;
 	}
-	
+
 	/*
 	 *	This allows us to verify the sets of validate and reply are equal
 	 *	i.e. we have a validate rule which matches every reply attribute.
@@ -615,47 +625,45 @@ bool pairvalidate(VALUE_PAIR *filter, VALUE_PAIR *list)
 	 */
 	pairsort(&filter, true);
 	pairsort(&list, true);
-	
-	paircursor(&list_cursor, &list);
-	for (check = paircursor(&filter_cursor, &filter);
-	     check;
-	     check = pairnext(&filter_cursor)) {
-	     	/*
-	     	 *	Were processing check attributes of a new type.
-	     	 */
-	     	if (attribute_eq(last_check, check)) {
-	     		/*
-	     		 *	The lists have gone out of sync so we know the sets
-	     		 *	of list and filter are not equal.
-	     		 */
-	     		if (!attribute_eq(paircurrent(&list_cursor), paircurrent(&filter_cursor))) {
-	     			return false;
-	     		}
-	     		
-	     		last_match = paircurrent(&list_cursor);
-	     		paircursor(&list_cursor, &last_match);	/* not strictly needed */
-	     		last_check = check;
-	     	}
 
-		for (match = pairfirst(&list_cursor);
-	     	     attribute_eq(match, check);
-	             match = pairnext(&list_cursor)) {
-	             	/*
-	             	 *	This attribute passed the filter
-	             	 */
-	             	if (!paircmp(check, match)) {
-	             		return false;
-	             	}
-	        }
+	match = paircursor(&list_cursor, &list);
+	check = paircursor(&filter_cursor, &filter);
+
+	while (true) {
+		/*
+		 *	The lists are sorted, so if the first
+		 *	attributes aren't of the same type, then we're
+		 *	done.
+		 */
+		if (!attribute_eq(check, match)) {
+			return false;
+		}
+
+		/*
+		 *	They're of the same type, but don't have the
+		 *	same values.  This is a problem.
+		 *
+		 *	Note that the RFCs say that for attributes of
+		 *	the same type, order is important.
+		 */
+		if (!paircmp(check, match)) {
+			return false;
+		}
+
+		match = pairnext(&list_cursor);
+		check = pairnext(&filter_cursor);
+
+		if (!match && !check) break;
+
+		/*
+		 *	One list ended earlier than the others, they
+		 *	didn't match.
+		 */
+		if (!match || !check) {
+			return false;
+		}
 	}
 
-	/*
-	 *	There were additional VALUE_PAIRS left in the list
-	 */	
-	if (paircurrent(&list_cursor)) {
-		return false;
-	}
-	
 	return true;
 }
 
@@ -680,22 +688,22 @@ VALUE_PAIR *paircopyvp(TALLOC_CTX *ctx, VALUE_PAIR const *vp)
 		fr_strerror_printf("out of memory");
 		return NULL;
 	}
-	
+
 	memcpy(n, vp, sizeof(*n));
-	
+
 	/*
 	 *	Now copy the value
 	 */
 	if (vp->type == VT_XLAT) {
 		n->value.xlat = talloc_strdup(n, n->value.xlat);
 	}
-	
+
 	n->da = dict_attr_copy(vp->da, true);
 	if (!n->da) {
-		pairbasicfree(n);
+		talloc_free(n);
 		return NULL;
 	}
-	
+
 	n->next = NULL;
 
 	if ((n->da->type == PW_TYPE_TLV) ||
@@ -709,7 +717,7 @@ VALUE_PAIR *paircopyvp(TALLOC_CTX *ctx, VALUE_PAIR const *vp)
 			/*
 			 *	Equivalent to, and faster than strdup.
 			 */
-			n->vp_strvalue = talloc_memdup(n, vp->vp_octets, n->length + 1);
+			n->vp_strvalue = talloc_memdup(n, vp->vp_strvalue, n->length + 1);
 		}
 	}
 
@@ -795,10 +803,10 @@ VALUE_PAIR *paircopyvpdata(TALLOC_CTX *ctx, DICT_ATTR const *da, VALUE_PAIR cons
 		talloc_free(p);
 		return n;
 	}
-	
+
 	n = pairalloc(ctx, da);
 	if (!n) {
-		return NULL;	
+		return NULL;
 	}
 
 	memcpy(n, vp, sizeof(*n));
@@ -807,13 +815,22 @@ VALUE_PAIR *paircopyvpdata(TALLOC_CTX *ctx, DICT_ATTR const *da, VALUE_PAIR cons
 	if (n->type == VT_XLAT) {
 		n->value.xlat = talloc_strdup(n, n->value.xlat);
 	}
-	
-	if ((n->da->type == PW_TYPE_TLV) ||
-	    (n->da->type == PW_TYPE_OCTETS) ||
-	    (n->da->type == PW_TYPE_STRING)) {
-		if (n->vp_octets != NULL) {
-			n->vp_octets = talloc_memdup(n, vp->vp_octets, n->length);
-		}
+
+	switch (n->da->type) {
+		case PW_TYPE_TLV:
+		case PW_TYPE_OCTETS:
+			if (n->vp_octets != NULL) {
+				n->vp_octets = talloc_memdup(n, vp->vp_octets, n->length);
+			}
+			break;
+
+		case PW_TYPE_STRING:
+			if (n->vp_strvalue != NULL) {
+				n->vp_strvalue = talloc_memdup(n, vp->vp_strvalue, n->length + 1);	/* NULL byte */
+			}
+			break;
+		default:
+			return NULL;
 	}
 
 	n->next = NULL;
@@ -838,9 +855,9 @@ VALUE_PAIR *paircopy2(TALLOC_CTX *ctx, VALUE_PAIR *from,
 		      unsigned int attr, unsigned int vendor, int8_t tag)
 {
 	vp_cursor_t src, dst;
-	
+
 	VALUE_PAIR *out = NULL, *vp;
-	
+
 	paircursor(&dst, &out);
 	for (vp = paircursor(&src, &from);
 	     vp;
@@ -850,7 +867,7 @@ VALUE_PAIR *paircopy2(TALLOC_CTX *ctx, VALUE_PAIR *from,
 		if ((attr > 0) && ((vp->da->attr != attr) || (vp->da->vendor != vendor))) {
 			continue;
 		}
-			
+
 		if ((tag != TAG_ANY) && vp->da->flags.has_tag && (vp->tag != tag)) {
 			continue;
 		}
@@ -862,7 +879,7 @@ VALUE_PAIR *paircopy2(TALLOC_CTX *ctx, VALUE_PAIR *from,
 		}
 		pairinsert(&dst, vp);
 	}
-	
+
 	return out;
 }
 
@@ -878,9 +895,9 @@ VALUE_PAIR *paircopy2(TALLOC_CTX *ctx, VALUE_PAIR *from,
 VALUE_PAIR *paircopy(TALLOC_CTX *ctx, VALUE_PAIR *from)
 {
 	vp_cursor_t src, dst;
-	
+
 	VALUE_PAIR *out = NULL, *vp;
-	
+
 	paircursor(&dst, &out);
 	for (vp = paircursor(&src, &from);
 	     vp;
@@ -893,7 +910,7 @@ VALUE_PAIR *paircopy(TALLOC_CTX *ctx, VALUE_PAIR *from)
 	     	}
 		pairinsert(&dst, vp); /* paircopy sets next pointer to NULL */
 	}
-	
+
 	return out;
 }
 
@@ -990,7 +1007,7 @@ void pairmove(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from)
 
 			found = pairfind(*to, i->da->attr, i->da->vendor,
 					 TAG_ANY);
-					
+
 			switch (i->op) {
 
 			/*
@@ -1146,7 +1163,7 @@ void pairfilter(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from, unsigned in
 		} else {
 			*to = *from;
 		}
-		
+
 		for (i = *from; i; i = i->next) {
 			(void) talloc_steal(ctx, i);
 		}
@@ -1163,7 +1180,7 @@ void pairfilter(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from, unsigned in
 		    (i->tag != tag)) {
 			continue;
 		}
-		
+
 		/*
 		 *	vendor=0, attr = PW_VENDOR_SPECIFIC means
 		 *	"match any vendor attribute".
@@ -1216,197 +1233,9 @@ void pairfilter(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from, unsigned in
 	}
 }
 
-
-/*
- *	Sort of strtok/strsep function.
- */
-static char *mystrtok(char **ptr, char const *sep)
-{
-	char	*res;
-
-	if (**ptr == 0)
-		return NULL;
-	while (**ptr && strchr(sep, **ptr))
-		(*ptr)++;
-	if (**ptr == 0)
-		return NULL;
-	res = *ptr;
-	while (**ptr && strchr(sep, **ptr) == NULL)
-		(*ptr)++;
-	if (**ptr != 0)
-		*(*ptr)++ = 0;
-	return res;
-}
-
-/*
- *	Turn printable string into time_t
- *	Returns -1 on error, 0 on OK.
- */
-static int gettime(char const *valstr, time_t *date)
-{
-	int		i;
-	time_t		t;
-	struct tm	*tm, s_tm;
-	char		buf[64];
-	char		*p;
-	char		*f[4];
-	char		*tail = '\0';
-
-	/*
-	 * Test for unix timestamp date
-	 */
-	*date = strtoul(valstr, &tail, 10);
-	if (*tail == '\0') {
-		return 0;
-	}
-
-	tm = &s_tm;
-	memset(tm, 0, sizeof(*tm));
-	tm->tm_isdst = -1;	/* don't know, and don't care about DST */
-
-	strlcpy(buf, valstr, sizeof(buf));
-
-	p = buf;
-	f[0] = mystrtok(&p, " \t");
-	f[1] = mystrtok(&p, " \t");
-	f[2] = mystrtok(&p, " \t");
-	f[3] = mystrtok(&p, " \t"); /* may, or may not, be present */
-	if (!f[0] || !f[1] || !f[2]) return -1;
-
-	/*
-	 *	The time has a colon, where nothing else does.
-	 *	So if we find it, bubble it to the back of the list.
-	 */
-	if (f[3]) {
-		for (i = 0; i < 3; i++) {
-			if (strchr(f[i], ':')) {
-				p = f[3];
-				f[3] = f[i];
-				f[i] = p;
-				break;
-			}
-		}
-	}
-
-	/*
-	 *  The month is text, which allows us to find it easily.
-	 */
-	tm->tm_mon = 12;
-	for (i = 0; i < 3; i++) {
-		if (isalpha( (int) *f[i])) {
-			/*
-			 *  Bubble the month to the front of the list
-			 */
-			p = f[0];
-			f[0] = f[i];
-			f[i] = p;
-
-			for (i = 0; i < 12; i++) {
-				if (strncasecmp(months[i], f[0], 3) == 0) {
-					tm->tm_mon = i;
-					break;
-				}
-			}
-		}
-	}
-
-	/* month not found? */
-	if (tm->tm_mon == 12) return -1;
-
-	/*
-	 *  The year may be in f[1], or in f[2]
-	 */
-	tm->tm_year = atoi(f[1]);
-	tm->tm_mday = atoi(f[2]);
-
-	if (tm->tm_year >= 1900) {
-		tm->tm_year -= 1900;
-
-	} else {
-		/*
-		 *  We can't use 2-digit years any more, they make it
-		 *  impossible to tell what's the day, and what's the year.
-		 */
-		if (tm->tm_mday < 1900) return -1;
-
-		/*
-		 *  Swap the year and the day.
-		 */
-		i = tm->tm_year;
-		tm->tm_year = tm->tm_mday - 1900;
-		tm->tm_mday = i;
-	}
-
-	/*
-	 *  If the day is out of range, die.
-	 */
-	if ((tm->tm_mday < 1) || (tm->tm_mday > 31)) {
-		return -1;
-	}
-
-	/*
-	 *	There may be %H:%M:%S.  Parse it in a hacky way.
-	 */
-	if (f[3]) {
-		f[0] = f[3];	/* HH */
-		f[1] = strchr(f[0], ':'); /* find : separator */
-		if (!f[1]) return -1;
-
-		*(f[1]++) = '\0'; /* nuke it, and point to MM:SS */
-
-		f[2] = strchr(f[1], ':'); /* find : separator */
-		if (f[2]) {
-		  *(f[2]++) = '\0';	/* nuke it, and point to SS */
-		  tm->tm_sec = atoi(f[2]);
-		}			/* else leave it as zero */
-
-		tm->tm_hour = atoi(f[0]);
-		tm->tm_min = atoi(f[1]);
-	}
-
-	/*
-	 *  Returns -1 on error.
-	 */
-	t = mktime(tm);
-	if (t == (time_t) -1) return -1;
-
-	*date = t;
-
-	return 0;
-}
-
 static char const *hextab = "0123456789abcdef";
 
-/*
- *  Parse a string value into a given VALUE_PAIR
- *
- *  FIXME: we probably want to fix this function to accept
- *  octets as values for any type of attribute.  We should then
- *  double-check the parsed value, to be sure it's legal for that
- *  type (length, etc.)
- */
-static uint32_t getint(char const *value, char **end)
-{
-	if ((value[0] == '0') && (value[1] == 'x')) {
-		return strtoul(value, end, 16);
-	}
-
-	return strtoul(value, end, 10);
-}
-
-static int check_for_whitespace(char const *value)
-{
-	while (*value) {
-		if (!isspace((int) *value)) return 0;
-
-		value++;
-	}
-
-	return 1;
-}
-
-
-int pairparsevalue(VALUE_PAIR *vp, char const *value)
+bool pairparsevalue(VALUE_PAIR *vp, char const *value)
 {
 	char		*p;
 	char const	*cp, *cs;
@@ -1417,6 +1246,14 @@ int pairparsevalue(VALUE_PAIR *vp, char const *value)
 
 	if (!value) return false;
 	VERIFY_VP(vp);
+
+	/*
+	 *	It's a comparison, not a real VALUE_PAIR, copy the string over verbatim
+	 */
+	if ((vp->op == T_OP_REG_EQ) || (vp->op == T_OP_REG_NE)) {
+		pairstrcpy(vp, value);	/* Icky hacky ewww */
+		goto finish;
+	}
 
 	switch(vp->da->type) {
 	case PW_TYPE_STRING:
@@ -1486,14 +1323,6 @@ int pairparsevalue(VALUE_PAIR *vp, char const *value)
 
 	case PW_TYPE_IPADDR:
 		/*
-		 *	It's a comparison, not a real IP.
-		 */
-		if ((vp->op == T_OP_REG_EQ) ||
-		    (vp->op == T_OP_REG_NE)) {
-			break;
-		}
-
-		/*
 		 *	FIXME: complain if hostname
 		 *	cannot be resolved, or resolve later!
 		 */
@@ -1519,7 +1348,7 @@ int pairparsevalue(VALUE_PAIR *vp, char const *value)
 		/*
 		 *	Note that ALL integers are unsigned!
 		 */
-		vp->vp_integer = getint(value, &p);
+		vp->vp_integer = fr_strtoul(value, &p);
 		if (!*p) {
 			if (vp->vp_integer > 255) {
 				fr_strerror_printf("Byte value \"%s\" is larger than 255", value);
@@ -1527,14 +1356,14 @@ int pairparsevalue(VALUE_PAIR *vp, char const *value)
 			}
 			break;
 		}
-		if (check_for_whitespace(p)) break;
+		if (fr_whitespace_check(p)) break;
 		goto check_for_value;
 
 	case PW_TYPE_SHORT:
 		/*
 		 *	Note that ALL integers are unsigned!
 		 */
-		vp->vp_integer = getint(value, &p);
+		vp->vp_integer = fr_strtoul(value, &p);
 		vp->length = 2;
 		if (!*p) {
 			if (vp->vp_integer > 65535) {
@@ -1543,17 +1372,17 @@ int pairparsevalue(VALUE_PAIR *vp, char const *value)
 			}
 			break;
 		}
-		if (check_for_whitespace(p)) break;
+		if (fr_whitespace_check(p)) break;
 		goto check_for_value;
 
 	case PW_TYPE_INTEGER:
 		/*
 		 *	Note that ALL integers are unsigned!
 		 */
-		vp->vp_integer = getint(value, &p);
+		vp->vp_integer = fr_strtoul(value, &p);
 		vp->length = 4;
 		if (!*p) break;
-		if (check_for_whitespace(p)) break;
+		if (fr_whitespace_check(p)) break;
 
 	check_for_value:
 		/*
@@ -1561,8 +1390,7 @@ int pairparsevalue(VALUE_PAIR *vp, char const *value)
 		 *	attribute.
 		 */
 		if ((dval = dict_valbyname(vp->da->attr, vp->da->vendor, value)) == NULL) {
-			fr_strerror_printf("Unknown value %s for attribute %s",
-				   value, vp->da->name);
+			fr_strerror_printf("Unknown value '%s' for attribute '%s'", value, vp->da->name);
 			return false;
 		}
 		vp->vp_integer = dval->value;
@@ -1573,14 +1401,14 @@ int pairparsevalue(VALUE_PAIR *vp, char const *value)
 		 *	Note that ALL integers are unsigned!
 		 */
 		if (sscanf(value, "%" PRIu64, &y) != 1) {
-			fr_strerror_printf("Invalid value %s for attribute %s",
+			fr_strerror_printf("Invalid value '%s' for attribute '%s'",
 					   value, vp->da->name);
 			return false;
 		}
 		vp->vp_integer64 = y;
 		vp->length = 8;
 		length = strspn(value, "0123456789");
-		if (check_for_whitespace(value + length)) break;
+		if (fr_whitespace_check(value + length)) break;
 		break;
 
 	case PW_TYPE_DATE:
@@ -1593,7 +1421,7 @@ int pairparsevalue(VALUE_PAIR *vp, char const *value)
 			 */
 			time_t date;
 
-			if (gettime(value, &date) < 0) {
+			if (fr_get_time(value, &date) < 0) {
 				fr_strerror_printf("failed to parse time string "
 					   "\"%s\"", value);
 				return false;
@@ -1613,7 +1441,7 @@ int pairparsevalue(VALUE_PAIR *vp, char const *value)
 		if (ascend_parse_filter(vp) < 0 ) {
 			char buffer[256];
 
-			snprintf(buffer, sizeof(buffer), "failed to parse Ascend binary attribute: %s", fr_strerror());
+			snprintf(buffer, sizeof(buffer), "failed to parse Ascend binary attribute '%s'", fr_strerror());
 			fr_strerror_printf("%s", buffer);
 			return false;
 		}
@@ -1653,8 +1481,7 @@ int pairparsevalue(VALUE_PAIR *vp, char const *value)
 				return false;
 			}
 
-			if (fr_hex2bin(cp, us,
-				       vp->length) != vp->length) {
+			if (fr_hex2bin(us, cp, vp->length) != vp->length) {
 				fr_strerror_printf("Invalid hex data");
 				return false;
 			}
@@ -1725,7 +1552,7 @@ int pairparsevalue(VALUE_PAIR *vp, char const *value)
 		p = strchr(value, '/');
 
 		/*
-		 *	192.168.1.2 is parsed as if it was /32
+		 *	192.0.2.2 is parsed as if it was /32
 		 */
 		if (!p) {
 			vp->vp_ipv4prefix[1] = 32;
@@ -1826,19 +1653,19 @@ int pairparsevalue(VALUE_PAIR *vp, char const *value)
 	 */
 	case PW_TYPE_COMBO_IP:
 		{
-			const DICT_ATTR *da;
-		
+			DICT_ATTR const *da;
+
 			if (inet_pton(AF_INET6, value, &vp->vp_ipv6addr) > 0) {
 				da = dict_attrbytype(vp->da->attr, vp->da->vendor,
 						     PW_TYPE_IPV6ADDR);
 				if (!da) {
 					return false;
 				}
-			
+
 				vp->length = 16; /* length of IPv6 address */
 			} else {
 				fr_ipaddr_t ipaddr;
-			
+
 				da = dict_attrbytype(vp->da->attr, vp->da->vendor,
 						     PW_TYPE_IPADDR);
 				if (!da) {
@@ -1853,7 +1680,7 @@ int pairparsevalue(VALUE_PAIR *vp, char const *value)
 				vp->vp_ipaddr = ipaddr.ipaddr.ip4addr.s_addr;
 				vp->length = 4;
 			}
-		
+
 			vp->da = da;
 		}
 		break;
@@ -1877,8 +1704,7 @@ int pairparsevalue(VALUE_PAIR *vp, char const *value)
 			fr_strerror_printf("No memory");
 			return false;
 		}
-		if (fr_hex2bin(value + 2, vp->vp_tlv,
-			       length) != length) {
+		if (fr_hex2bin(vp->vp_tlv, value + 2, length) != length) {
 			fr_strerror_printf("Invalid hex data in TLV");
 			return false;
 		}
@@ -1893,6 +1719,7 @@ int pairparsevalue(VALUE_PAIR *vp, char const *value)
 		return false;
 	}
 
+	finish:
 	vp->type = VT_DATA;
 	return true;
 }
@@ -1916,8 +1743,8 @@ static VALUE_PAIR *pairmake_any(TALLOC_CTX *ctx,
 				FR_TOKEN op)
 {
 	VALUE_PAIR	*vp;
-	const DICT_ATTR *da;
-	
+	DICT_ATTR const *da;
+
 	uint8_t 	*data;
 	size_t		size;
 
@@ -1930,7 +1757,7 @@ static VALUE_PAIR *pairmake_any(TALLOC_CTX *ctx,
 	if (value && (strncasecmp(value, "0x", 2) != 0)) {
 		fr_strerror_printf("Unknown attribute \"%s\" requires a hex "
 				   "string, not \"%s\"", attribute, value);
-		
+
 		dict_attr_free(&da);
 		return NULL;
 	}
@@ -1945,16 +1772,16 @@ static VALUE_PAIR *pairmake_any(TALLOC_CTX *ctx,
 		dict_attr_free(&da);
 		return NULL;
 	}
-	
+
 	vp->op = (op == 0) ? T_OP_EQ : op;
-	
+
 	if (!value) return vp;
 
 	size = strlen(value + 2);
 	vp->length = size >> 1;
 	data = talloc_array(vp, uint8_t, vp->length);
 
-	if (fr_hex2bin(value + 2, data, size) != vp->length) {
+	if (fr_hex2bin(data, value + 2, size) != vp->length) {
 		fr_strerror_printf("Invalid hex string");
 		talloc_free(vp);
 		return NULL;
@@ -1976,14 +1803,14 @@ static VALUE_PAIR *pairmake_any(TALLOC_CTX *ctx,
  * @param[in] ctx for talloc
  * @param[in] vps list where the attribute will be added (optional)
  * @param[in] attribute name.
- * @param[in] value attribute value.
+ * @param[in] value attribute value (may be NULL if value will be set later).
  * @param[in] op to assign to new VALUE_PAIR.
  * @return a new VALUE_PAIR.
  */
 VALUE_PAIR *pairmake(TALLOC_CTX *ctx, VALUE_PAIR **vps,
 		     char const *attribute, char const *value, FR_TOKEN op)
 {
-	const DICT_ATTR *da;
+	DICT_ATTR const *da;
 	VALUE_PAIR	*vp;
 	char		*tc, *ts;
 	int8_t		tag;
@@ -2034,7 +1861,7 @@ VALUE_PAIR *pairmake(TALLOC_CTX *ctx, VALUE_PAIR **vps,
 	da = dict_attrbyname(attrname);
 	if (!da) {
 		vp = pairmake_any(ctx, attrname, value, op);
-		if (vp) pairadd(vps, vp);
+		if (vp && vps) pairadd(vps, vp);
 		return vp;
 	}
 
@@ -2103,12 +1930,12 @@ VALUE_PAIR *pairmake(TALLOC_CTX *ctx, VALUE_PAIR **vps,
 		 */
 		if (!value) break;
 
-		pairbasicfree(vp);
-		
+		talloc_free(vp);
+
 		if (1) {
 			int compare;
 			regex_t reg;
-			
+
 			compare = regcomp(&reg, value, REG_EXTENDED);
 			if (compare != 0) {
 				regerror(compare, &reg, buffer, sizeof(buffer));
@@ -2120,9 +1947,9 @@ VALUE_PAIR *pairmake(TALLOC_CTX *ctx, VALUE_PAIR **vps,
 
 		vp = pairmake(ctx, NULL, attribute, NULL, op);
 		if (!vp) return NULL;
-		
+
 		if (pairmark_xlat(vp, value) < 0) {
-			pairbasicfree(vp);
+			talloc_free(vp);
 			return NULL;
 		}
 
@@ -2140,7 +1967,7 @@ VALUE_PAIR *pairmake(TALLOC_CTX *ctx, VALUE_PAIR **vps,
 	 *	octets as values for any attribute.
 	 */
 	if (value && !pairparsevalue(vp, value)) {
-		pairbasicfree(vp);
+		talloc_free(vp);
 		return NULL;
 	}
 
@@ -2160,24 +1987,24 @@ VALUE_PAIR *pairmake(TALLOC_CTX *ctx, VALUE_PAIR **vps,
 int pairmark_xlat(VALUE_PAIR *vp, char const *value)
 {
 	char *raw;
-	
+
 	/*
 	 *	valuepair should not already have a value.
 	 */
 	if (vp->type != VT_NONE) {
 		return -1;
 	}
-	
+
 	raw = talloc_strdup(vp, value);
 	if (!raw) {
 		return -1;
 	}
-	
+
 	vp->type = VT_XLAT;
 	vp->value.xlat = raw;
 	vp->length = 0;
 
-	return 0;	
+	return 0;
 }
 
 /** Read a single valuepair from a buffer, and advance the pointer
@@ -2214,7 +2041,7 @@ FR_TOKEN pairread(char const **ptr, VALUE_PAIR_RAW *raw)
 
 	if (*p == '#') {
 		fr_strerror_printf("Read a comment instead of a token");
-		
+
 		return T_HASH;
 	}
 
@@ -2224,7 +2051,7 @@ FR_TOKEN pairread(char const **ptr, VALUE_PAIR_RAW *raw)
 	q = raw->l_opand;
 	*q = '\0';
 	while (*p) {
-		const uint8_t *t = (uint8_t const *) p;
+		uint8_t const *t = (uint8_t const *) p;
 
 		if (q >= (raw->l_opand + sizeof(raw->l_opand))) {
 		too_long:
@@ -2283,7 +2110,7 @@ FR_TOKEN pairread(char const **ptr, VALUE_PAIR_RAW *raw)
 	raw->op = gettoken(ptr, buf, sizeof(buf));
 	if (raw->op  < T_EQSTART || raw->op  > T_EQEND) {
 		fr_strerror_printf("Expecting operator");
-		
+
 		return T_OP_INVALID;
 	}
 
@@ -2293,7 +2120,7 @@ FR_TOKEN pairread(char const **ptr, VALUE_PAIR_RAW *raw)
 	quote = gettoken(ptr, raw->r_opand, sizeof(raw->r_opand));
 	if (quote == T_EOL) {
 		fr_strerror_printf("Failed to get value");
-		
+
 		return T_OP_INVALID;
 	}
 
@@ -2301,20 +2128,20 @@ FR_TOKEN pairread(char const **ptr, VALUE_PAIR_RAW *raw)
 	 *	Peek at the next token. Must be T_EOL, T_COMMA, or T_HASH
 	 */
 	p = *ptr;
-	
+
 	next = gettoken(&p, buf, sizeof(buf));
 	switch (next) {
 	case T_EOL:
 	case T_HASH:
 		break;
-		
+
 	case T_COMMA:
 		*ptr = p;
 		break;
-		
+
 	default:
 		fr_strerror_printf("Expected end of line or comma");
-		return T_OP_INVALID;			
+		return T_OP_INVALID;
 	}
 	ret = next;
 
@@ -2333,11 +2160,11 @@ FR_TOKEN pairread(char const **ptr, VALUE_PAIR_RAW *raw)
 		} else {
 			raw->quote = T_SINGLE_QUOTED_STRING;
 		}
-		
+
 		break;
 	default:
 		raw->quote = quote;
-		
+
 		break;
 	}
 
@@ -2377,26 +2204,31 @@ FR_TOKEN userparse(TALLOC_CTX *ctx, char const *buffer, VALUE_PAIR **list)
 	do {
 		raw.l_opand[0] = '\0';
 		raw.r_opand[0] = '\0';
-		
+
 		previous_token = last_token;
-		
+
 		last_token = pairread(&p, &raw);
 		if (last_token == T_OP_INVALID) break;
-		
-		vp = pairmake(ctx, NULL, raw.l_opand, raw.r_opand, raw.op);
-		if (!vp) {
-			last_token = T_OP_INVALID;
-			break;
-		}
-		
+
 		if (raw.quote == T_DOUBLE_QUOTED_STRING) {
+			vp = pairmake(ctx, NULL, raw.l_opand, NULL, raw.op);
+			if (!vp) {
+				last_token = T_OP_INVALID;
+				break;
+			}
 			if (pairmark_xlat(vp, raw.r_opand) < 0) {
-				pairbasicfree(vp);
-				
+				talloc_free(vp);
+
+				break;
+			}
+		} else {
+			vp = pairmake(ctx, NULL, raw.l_opand, raw.r_opand, raw.op);
+			if (!vp) {
+				last_token = T_OP_INVALID;
 				break;
 			}
 		}
-		
+
 		*tail = vp;
 		tail = &((*tail)->next);
 	} while (*p && (last_token == T_COMMA));
@@ -2580,11 +2412,11 @@ static int paircmp_cidr(FR_TOKEN op, int bytes, uint8_t const *one, uint8_t cons
 	mask <<= (8 - common);
 	mask--;
 	mask = ~mask;
-	
+
 	if ((one[i] & mask) == ((two[i] & mask))) {
 		return true;
 	}
-	
+
 	return false;
 }
 
@@ -2824,6 +2656,41 @@ void pairmemcpy(VALUE_PAIR *vp, uint8_t const *src, size_t size)
 	vp->length = size;
 }
 
+/** Reparent an allocated octet buffer to a VALUE_PAIR
+ *
+ * @param[in,out] vp to update
+ * @param[in] src buffer to steal.
+ */
+void pairmemsteal(VALUE_PAIR *vp, uint8_t *src)
+{
+	uint8_t *q;
+	VERIFY_VP(vp);
+
+	memcpy(&q, &vp->vp_octets, sizeof(q));
+	talloc_free(q);
+
+	vp->vp_octets = talloc_steal(vp, src);
+	vp->type = VT_DATA;
+	vp->length = talloc_array_length(vp->vp_octets);
+}
+
+/** Reparent an allocated char buffer to a VALUE_PAIR
+ *
+ * @param[in,out] vp to update
+ * @param[in] src buffer to steal.
+ */
+void pairstrsteal(VALUE_PAIR *vp, char *src)
+{
+	uint8_t *q;
+	VERIFY_VP(vp);
+
+	memcpy(&q, &vp->vp_octets, sizeof(q));
+	talloc_free(q);
+
+	vp->vp_strvalue = talloc_steal(vp, src);
+	vp->type = VT_DATA;
+	vp->length = talloc_array_length(vp->vp_strvalue) - 1;
+}
 
 /** Copy data into an "string" data type.
  *
@@ -2844,7 +2711,7 @@ void pairstrcpy(VALUE_PAIR *vp, char const *src)
 
 	vp->vp_strvalue = p;
 	vp->type = VT_DATA;
-	vp->length = strlen(vp->vp_strvalue);
+	vp->length = talloc_array_length(vp->vp_strvalue) - 1;
 }
 
 
@@ -2872,8 +2739,6 @@ void pairsprintf(VALUE_PAIR *vp, char const *fmt, ...)
 	vp->vp_strvalue = p;
 	vp->type = VT_DATA;
 
-	/*
-	 *	vsnprintf returns random things on different platforms
-	 */
-	vp->length = strlen(vp->vp_strvalue);
+	vp->length = talloc_array_length(vp->vp_strvalue) - 1;
 }
+

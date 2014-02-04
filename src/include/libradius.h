@@ -40,6 +40,7 @@ RCSIDH(libradius_h, "$Id$")
 #include <stdarg.h>
 #include <stdbool.h>
 
+#include <freeradius-devel/threads.h>
 #include <freeradius-devel/radius.h>
 #include <freeradius-devel/token.h>
 #include <freeradius-devel/hash.h>
@@ -64,7 +65,7 @@ extern "C" {
 /*
  *	Requires typeof(), which is in most modern C compilers.
  */
- 
+
 /*
 #define VERIFY_VP(_x) do { (void) talloc_get_type_abort(_x, VALUE_PAIR); \
 			if (_x->da) { \
@@ -72,10 +73,13 @@ extern "C" {
 			} \
 		      } while (0)
 */
+#define FREE_MAGIC (0xF4EEF4EE)
 
 #define VERIFY_VP(_x) (void) talloc_get_type_abort(_x, VALUE_PAIR)
+#define VERIFY_PACKET(_x) (void) talloc_get_type_abort(_x, RADIUS_PACKET)
 #else
 #define VERIFY_VP(_x)
+#define VERIFY_PACKET(_x)
 #endif
 
 #define AUTH_VECTOR_LEN		16
@@ -100,6 +104,8 @@ extern "C" {
 #define TAG_ANY			-128	/* minimum signed char */
 #define TAG_UNUSED		0
 
+#define PAD(_x, _y)		(_y - ((_x) % _y))
+
 #if defined(__GNUC__)
 # define PRINTF_LIKE(n) __attribute__ ((format(printf, n, n+1)))
 # define NEVER_RETURNS __attribute__ ((noreturn))
@@ -113,10 +119,10 @@ extern "C" {
 #endif
 
 typedef struct attr_flags {
-	unsigned int 	is_unknown : 1;				//!< Attribute number or vendor is unknown.				
+	unsigned int 	is_unknown : 1;				//!< Attribute number or vendor is unknown.
 	unsigned int	is_tlv : 1;				//!< Is a sub attribute.
 	unsigned int	vp_free : 1;				//!< Should be freed when VALUE_PAIR is freed.
-						
+
 	unsigned int	has_tag : 1;				//!< Tagged attribute.
 	unsigned int	array : 1; 				//!< Pack multiples into 1 attr.
 	unsigned int	has_value : 1;				//!< Has a value.
@@ -146,7 +152,7 @@ typedef struct attr_flags {
 extern const FR_NAME_NUMBER dict_attr_types[];
 extern const size_t dict_attr_sizes[PW_TYPE_MAX][2];
 
-/** dictionary attribute 
+/** dictionary attribute
  *
  */
 typedef struct dict_attr {
@@ -180,7 +186,7 @@ typedef struct dict_vendor {
 
 /** Union containing all data types supported by the server
  *
- * This union contains all data types that can be represented with VALUE_PAIRs. It may also be used in other parts 
+ * This union contains all data types that can be represented with VALUE_PAIRs. It may also be used in other parts
  * of the server where values of different types need to be stored.
  *
  * PW_TYPE should be an enumeration of the values in this union.
@@ -220,13 +226,13 @@ typedef enum value_type {
 
 /** Stores an attribute, a value and various bits of other data
  *
- * VALUE_PAIRs are the main data structure used in the server, they specify an attribute, it's children and 
+ * VALUE_PAIRs are the main data structure used in the server, they specify an attribute, it's children and
  * it's siblings.
  *
  * They also specify what behaviour should be used when the attribute is merged into a new list/tree.
  */
 typedef struct value_pair {
-	const DICT_ATTR		*da;				//!< Dictionary attribute defines the attribute
+	DICT_ATTR const		*da;				//!< Dictionary attribute defines the attribute
 								//!< number, vendor and type of the attribute.
 
 	struct value_pair	*next;
@@ -241,19 +247,19 @@ typedef struct value_pair {
 	//	VALUE_LIST	*list;				//!< List of values for
 								//!< multivalued attribute.
 	//	value_data_t	*data;				//!< Value data for this attribute.
-	
+
 		char const 	*xlat;				//!< Source string for xlat expansion.
 	} value;
-	
+
 	value_type_t		type;				//!< Type of pointer in value union.
-						
+
 	size_t			length;				//!< of Data field.
 	value_data_t		data;
 } VALUE_PAIR;
 
 /** Abstraction to allow iterating over different configurations of VALUE_PAIRs
  *
- * This allows functions which do not care about the structure of collections of VALUE_PAIRs 
+ * This allows functions which do not care about the structure of collections of VALUE_PAIRs
  * to iterate over all members in a collection.
  *
  * Field within a vp_cursor should not be accessed directly, and vp_cursors should only be
@@ -272,11 +278,11 @@ typedef struct vp_cursor {
  * Used to represent pairs in the legacy 'users' file format.
  */
 typedef struct value_pair_raw {
-	char l_opand[64];					//!< Left hand side of the pair.
+	char l_opand[256];					//!< Left hand side of the pair.
 	char r_opand[1024];					//!< Right hand side of the pair.
-	
+
 	FR_TOKEN quote;						//!< Type of quoting around the r_opand.
-	
+
 	FR_TOKEN op;						//!< Operator.
 } VALUE_PAIR_RAW;
 
@@ -341,11 +347,9 @@ size_t		fr_print_string(char const *in, size_t inlen,
 size_t   	vp_prints_value(char *out, size_t outlen, VALUE_PAIR const *vp, int8_t quote);
 char		*vp_aprinttype(TALLOC_CTX *ctx, PW_TYPE type);
 char     	*vp_aprint(TALLOC_CTX *ctx, VALUE_PAIR const *vp);
-int     	vp_prints_value_json(char *out, size_t outlen,
-				     VALUE_PAIR const *vp);
-size_t		vp_print_name(char *buffer, size_t bufsize,
-			      unsigned int attr, unsigned int vendor);
-int     	vp_prints(char *out, size_t outlen, VALUE_PAIR const *vp);
+size_t    	vp_prints_value_json(char *out, size_t outlen, VALUE_PAIR const *vp);
+size_t		vp_print_name(char *out, size_t outlen, unsigned int attr, unsigned int vendor);
+size_t		vp_prints(char *out, size_t outlen, VALUE_PAIR const *vp);
 void		vp_print(FILE *, VALUE_PAIR const *);
 void		vp_printlist(FILE *, VALUE_PAIR const *);
 #define		fprint_attr_val vp_print
@@ -364,14 +368,14 @@ int		dict_init(char const *dir, char const *fn);
 void		dict_free(void);
 int		dict_read(char const *dir, char const *filename);
 void 		dict_attr_free(DICT_ATTR const **da);
-const DICT_ATTR	*dict_attr_copy(DICT_ATTR const *da, int vp_free);
-const DICT_ATTR	*dict_attrunknown(unsigned int attr, unsigned int vendor, int vp_free);
-const DICT_ATTR	*dict_attrunknownbyname(char const *attribute, int vp_free);
-const DICT_ATTR	*dict_attrbyvalue(unsigned int attr, unsigned int vendor);
-const DICT_ATTR	*dict_attrbyname(char const *attr);
-const DICT_ATTR	*dict_attrbytype(unsigned int attr, unsigned int vendor,
+DICT_ATTR const	*dict_attr_copy(DICT_ATTR const *da, int vp_free);
+DICT_ATTR const	*dict_attrunknown(unsigned int attr, unsigned int vendor, int vp_free);
+DICT_ATTR const	*dict_attrunknownbyname(char const *attribute, int vp_free);
+DICT_ATTR const	*dict_attrbyvalue(unsigned int attr, unsigned int vendor);
+DICT_ATTR const	*dict_attrbyname(char const *attr);
+DICT_ATTR const	*dict_attrbytype(unsigned int attr, unsigned int vendor,
 				 PW_TYPE type);
-const DICT_ATTR	*dict_attrbyparent(DICT_ATTR const *parent, unsigned int attr,
+DICT_ATTR const	*dict_attrbyparent(DICT_ATTR const *parent, unsigned int attr,
 					   unsigned int vendor);
 int		dict_attr_child(DICT_ATTR const *parent,
 				unsigned int *pattr, unsigned int *pvendor);
@@ -423,6 +427,8 @@ int		rad_pwencode(char *encpw, size_t *len, char const *secret,
 			     uint8_t const *vector);
 int		rad_pwdecode(char *encpw, size_t len, char const *secret,
 			     uint8_t const *vector);
+
+#define	FR_TUNNEL_PW_ENC_LENGTH(_x) (2 + 1 + _x + PAD(_x + 1, 16))
 int		rad_tunnel_pwencode(char *encpw, size_t *len, char const *secret,
 				    uint8_t const *vector);
 int		rad_tunnel_pwdecode(uint8_t *encpw, size_t *len,
@@ -472,7 +478,6 @@ VALUE_PAIR	*pairalloc(TALLOC_CTX *ctx, DICT_ATTR const *da);
 VALUE_PAIR	*paircreate(TALLOC_CTX *ctx, unsigned int attr, unsigned int vendor);
 int		pair2unknown(VALUE_PAIR *vp);
 void		pairfree(VALUE_PAIR **);
-void		pairbasicfree(VALUE_PAIR *pair);
 VALUE_PAIR	*pairfind(VALUE_PAIR *, unsigned int attr, unsigned int vendor, int8_t tag);
 
 #define		paircursor(_x, _y)	paircursorc(_x,(VALUE_PAIR const * const *) _y)
@@ -496,6 +501,8 @@ VALUE_PAIR	*paircopyvpdata(TALLOC_CTX *ctx, DICT_ATTR const *da, VALUE_PAIR cons
 VALUE_PAIR	*paircopy(TALLOC_CTX *ctx, VALUE_PAIR *from);
 VALUE_PAIR	*paircopy2(TALLOC_CTX *ctx, VALUE_PAIR *from, unsigned int attr, unsigned int vendor, int8_t tag);
 void		pairmemcpy(VALUE_PAIR *vp, uint8_t const * src, size_t len);
+void		pairmemsteal(VALUE_PAIR *vp, uint8_t *src);
+void		pairstrsteal(VALUE_PAIR *vp, char *src);
 void		pairstrcpy(VALUE_PAIR *vp, char const * src);
 void		pairsprintf(VALUE_PAIR *vp, char const * fmt, ...)
 #ifdef __GNUC__
@@ -504,8 +511,8 @@ void		pairsprintf(VALUE_PAIR *vp, char const * fmt, ...)
 ;
 void		pairmove(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from);
 void		pairfilter(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from,
-			  unsigned int attr, unsigned int vendor, int8_t tag);
-int		pairparsevalue(VALUE_PAIR *vp, char const *value);
+					   unsigned int attr, unsigned int vendor, int8_t tag);
+bool		pairparsevalue(VALUE_PAIR *vp, char const *value);
 VALUE_PAIR	*pairmake(TALLOC_CTX *ctx, VALUE_PAIR **vps, char const *attribute, char const *value, FR_TOKEN op);
 int 		pairmark_xlat(VALUE_PAIR *vp, char const *value);
 FR_TOKEN 	pairread(char const **ptr, VALUE_PAIR_RAW *raw);
@@ -527,8 +534,18 @@ void		fr_perror(char const *, ...)
 		__attribute__ ((format (printf, 1, 2)))
 #endif
 ;
+extern bool fr_assert_cond(char const *file, int line, char const *expr, bool cond);
+#define fr_assert(_x) fr_assert_cond(__FILE__,  __LINE__, #_x, (_x))
+
+extern void _fr_exit(char const *file, int line, int status);
+#define fr_exit(_x) _fr_exit(__FILE__,  __LINE__, (_x))
+
+extern void _fr_exit_now(char const *file, int line, int status);
+#define fr_exit_now(_x) _fr_exit_now(__FILE__,  __LINE__, (_x))
+
 extern char const *fr_strerror(void);
-extern int	fr_dns_lookups;	/* 0 = no dns lookups */
+extern bool	fr_dns_lookups;	/* do IP -> hostname lookups? */
+extern bool	fr_hostname_lookups; /* do hostname -> IP lookups? */
 extern int	fr_debug_flag;	/* 0 = no debugging information */
 extern int	fr_max_attributes; /* per incoming packet */
 #define	FR_MAX_PACKET_CODE (52)
@@ -544,23 +561,44 @@ void		fr_printf_log(char const *, ...)
 /*
  *	Several handy miscellaneous functions.
  */
+void		fr_debug_break(void);
 char const 	*ip_ntoa(char *, uint32_t);
 char		*ifid_ntoa(char *buffer, size_t size, uint8_t const *ifid);
 uint8_t		*ifid_aton(char const *ifid_str, uint8_t *ifid);
 int		rad_lockfd(int fd, int lock_len);
 int		rad_lockfd_nonblock(int fd, int lock_len);
 int		rad_unlockfd(int fd, int lock_len);
-size_t		fr_bin2hex(uint8_t const *bin, char *hex, size_t len);
-size_t		fr_hex2bin(char const *hex, uint8_t *bin, size_t len);
-int fr_ipaddr_cmp(fr_ipaddr_t const *a, fr_ipaddr_t const *b);
+size_t		fr_bin2hex(char *hex, uint8_t const *bin, size_t inlen);
+size_t		fr_hex2bin(uint8_t *bin, char const *hex, size_t outlen);
+uint32_t	fr_strtoul(char const *value, char **end);
+bool		fr_whitespace_check(char const *value);
 
+int		fr_ipaddr_cmp(fr_ipaddr_t const *a, fr_ipaddr_t const *b);
+
+int		ip_ptonx(char const *src, fr_ipaddr_t *dst);
 int		ip_hton(char const *src, int af, fr_ipaddr_t *dst);
 char const	*ip_ntoh(fr_ipaddr_t const *src, char *dst, size_t cnt);
 int fr_ipaddr2sockaddr(fr_ipaddr_t const *ipaddr, int port,
 		       struct sockaddr_storage *sa, socklen_t *salen);
 int fr_sockaddr2ipaddr(struct sockaddr_storage const *sa, socklen_t salen,
 		       fr_ipaddr_t *ipaddr, int * port);
+ssize_t		fr_utf8_to_ucs2(uint8_t *out, size_t outlen, char const *in, size_t inlen);
+int64_t		fr_pow(int32_t base, uint8_t exp);
+int		fr_get_time(char const *date_str, time_t *date);
 
+/*
+ *	Define TALLOC_DEBUG to check overflows with talloc.
+ *	we can't use valgrind, because the memory used by
+ *	talloc is valid memory... just not for us.
+ */
+#ifdef TALLOC_DEBUG
+void fr_talloc_verify_cb(const void *ptr, int depth,
+			 int max_depth, int is_ref,
+			 void *private_data);
+#define VERIFY_ALL_TALLOC talloc_report_depth_cb(NULL, 0, -1, fr_talloc_verify_cb, NULL)
+#else
+#define VERIFY_ALL_TALLOC
+#endif
 
 #ifdef WITH_ASCEND_BINARY
 /* filters.c */
@@ -599,10 +637,10 @@ rbtree_t       *rbtree_create(int (*Compare)(void const *, void const *),
 			      void (*freeNode)(void *),
 			      int flags);
 void		rbtree_free(rbtree_t *tree);
-int		rbtree_insert(rbtree_t *tree, void *Data);
+bool		rbtree_insert(rbtree_t *tree, void *Data);
 rbnode_t	*rbtree_insertnode(rbtree_t *tree, void *Data);
 void		rbtree_delete(rbtree_t *tree, rbnode_t *Z);
-int		rbtree_deletebydata(rbtree_t *tree, void const *data);
+bool		rbtree_deletebydata(rbtree_t *tree, void const *data);
 rbnode_t       *rbtree_find(rbtree_t *tree, void const *Data);
 void	       *rbtree_finddata(rbtree_t *tree, void const *Data);
 int		rbtree_num_elements(rbtree_t *tree);
@@ -610,7 +648,7 @@ void	       *rbtree_min(rbtree_t *tree);
 void	       *rbtree_node2data(rbtree_t *tree, rbnode_t *node);
 
 /* callback order for walking  */
-typedef enum { PreOrder, InOrder, PostOrder } RBTREE_ORDER;
+typedef enum { PreOrder, InOrder, PostOrder, DeleteOrder } RBTREE_ORDER;
 
 /*
  *	The callback should be declared as:
@@ -622,8 +660,33 @@ typedef enum { PreOrder, InOrder, PostOrder } RBTREE_ORDER;
  *
  *	It should return 0 if all is OK, and !0 for any error.
  *	The walking will stop on any error.
+ *
+ *	Except with DeleteOrder, where the callback should return <0 for
+ *	errors, and may return 1 to delete the current node and halt,
+ *	or 2 to delete the current node and continue.  This may be
+ *	used to batch-delete select nodes from a locked rbtree.
  */
 int rbtree_walk(rbtree_t *tree, RBTREE_ORDER order, int (*callback)(void *, void *), void *context);
+
+/*
+ *	Find a matching data item in an rbtree and, if one is found,
+ *	perform a callback on it.
+ *
+ *	The callback is similar to rbtree_walk above, except that a
+ *	positive return code from the callback will cause the found node
+ *	to be deleted from the tree.  If the tree was created with
+ *	RBTREE_FLAG_LOCK, then the entire find/callback/delete/rebalance
+ *	sequence happens while the lock is held.
+ *
+ *	Note that the callback MUST NOT alter any of the data which
+ *	is used as the rbtree key, nor attempt to alter the rest of
+ *	the rbtree in any way.
+ *
+ *	Returns a pointer to the user data in the found node, or NULL if the
+ *	item was not found, or NULL if the item was deleted and the tree was
+ *	created with a freeNode garbage collection routine.
+ */
+void *rbtree_callbydata(rbtree_t *tree, void const *Data, int (*callback)(void *, void *), void *context);
 
 /*
  *	FIFOs

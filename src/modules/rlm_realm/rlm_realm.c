@@ -34,8 +34,8 @@ typedef struct realm_config_t {
 	int	format;
 	char       *formatstring;
 	char       *delim;
-	int	ignore_default;
-	int	ignore_null;
+	bool	ignore_default;
+	bool	ignore_null;
   char	     *default_community;
   char       *rp_realm;
   char       *trust_router;
@@ -94,7 +94,7 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 	    || (request->proxy != NULL)
 #endif
 	    ) {
-	
+
 		RDEBUG2("Proxy reply, or no User-Name.  Ignoring.");
 		return RLM_MODULE_OK;
 	}
@@ -105,7 +105,7 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 	 */
 
 	if (pairfind(request->packet->vps, PW_REALM, 0, TAG_ANY) != NULL ) {
-		RDEBUG2("Request already proxied.  Ignoring.");
+		RDEBUG2("Request already has destination realm set.  Ignoring.");
 		return RLM_MODULE_OK;
 	}
 
@@ -410,12 +410,11 @@ static rlm_rcode_t mod_authorize(void *instance, REQUEST *request)
 static rlm_rcode_t mod_preacct(void *instance, REQUEST *request)
 {
 	int rcode;
-	char const *name = request->username->vp_strvalue;
 	REALM *realm;
 
-	if (!name)
-	  return RLM_MODULE_OK;
-
+	if (!request->username) {
+		return RLM_MODULE_NOOP;
+	}
 
 	/*
 	 *	Check if we've got to proxy the request.
@@ -447,13 +446,13 @@ static rlm_rcode_t realm_recv_coa(UNUSED void *instance, REQUEST *request)
 	REALM *realm;
 
 	if (pairfind(request->packet->vps, PW_REALM, 0, TAG_ANY) != NULL) {
-		RDEBUG2("Request already proxied.  Ignoring.");
+		RDEBUG2("Request already has destination realm set.  Ignoring.");
 		return RLM_MODULE_OK;
 	}
 
 	vp = pairfind(request->packet->vps, PW_OPERATOR_NAME, 0, TAG_ANY);
 	if (!vp) return RLM_MODULE_NOOP;
-	
+
 	/*
 	 *	Catch the case of broken dictionaries.
 	 */

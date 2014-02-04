@@ -25,7 +25,6 @@ RCSID("$Id$")
 
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/modules.h>
-#include <freeradius-devel/log.h>
 #include <freeradius-devel/rad_assert.h>
 
 #include <sys/stat.h>
@@ -84,27 +83,27 @@ static char const *uid_name = NULL;
 static char const *gid_name = NULL;
 #endif
 static char const *chroot_dir = NULL;
-static int allow_core_dumps = 0;
+static bool allow_core_dumps = false;
 static char const *radlog_dest = NULL;
 
 /*
  *	These are not used anywhere else..
  */
-static char const *localstatedir = NULL;
-static char const *prefix = NULL;
-static char const *my_name = NULL;
-static char const *sbindir = NULL;
-static char const *run_dir = NULL;
-static char *syslog_facility = NULL;
-static int do_colourise = false;
+static char const	*localstatedir = NULL;
+static char const	*prefix = NULL;
+static char		my_name;
+static char const	*sbindir = NULL;
+static char const	*run_dir = NULL;
+static char		*syslog_facility = NULL;
+static bool		do_colourise = false;
 
 
 /*
  *  Security configuration for the server.
  */
 static const CONF_PARSER security_config[] = {
-	{ "max_attributes",  PW_TYPE_INTEGER, 0, &fr_max_attributes, Stringify(0) },
-	{ "reject_delay",  PW_TYPE_INTEGER, 0, &mainconfig.reject_delay, Stringify(0) },
+	{ "max_attributes",  PW_TYPE_INTEGER, 0, &fr_max_attributes, STRINGIFY(0) },
+	{ "reject_delay",  PW_TYPE_INTEGER, 0, &mainconfig.reject_delay, STRINGIFY(0) },
 	{ "status_server", PW_TYPE_BOOLEAN, 0, &mainconfig.status_server, "no"},
 	{ NULL, -1, 0, NULL, NULL }
 };
@@ -115,7 +114,7 @@ static const CONF_PARSER security_config[] = {
  */
 static const CONF_PARSER logdest_config[] = {
 	{ "destination",  PW_TYPE_STRING_PTR, 0, &radlog_dest, "files" },
-	{ "syslog_facility",  PW_TYPE_STRING_PTR, 0, &syslog_facility, Stringify(0) },
+	{ "syslog_facility",  PW_TYPE_STRING_PTR, 0, &syslog_facility, STRINGIFY(0) },
 
 	{ "file", PW_TYPE_STRING_PTR, 0, &mainconfig.log_file, "${logdir}/radius.log" },
 	{ "requests", PW_TYPE_STRING_PTR, 0, &default_log.file, NULL },
@@ -166,11 +165,11 @@ static const CONF_PARSER server_config[] = {
 	{ "libdir",	     PW_TYPE_STRING_PTR, 0, &radlib_dir,	"${prefix}/lib"},
 	{ "radacctdir",	 PW_TYPE_STRING_PTR, 0, &radacct_dir,       "${logdir}/radacct" },
 	{ "hostname_lookups",   PW_TYPE_BOOLEAN,    0, &fr_dns_lookups,      "no" },
-	{ "max_request_time", PW_TYPE_INTEGER, 0, &mainconfig.max_request_time, Stringify(MAX_REQUEST_TIME) },
-	{ "cleanup_delay", PW_TYPE_INTEGER, 0, &mainconfig.cleanup_delay, Stringify(CLEANUP_DELAY) },
-	{ "max_requests", PW_TYPE_INTEGER, 0, &mainconfig.max_requests, Stringify(MAX_REQUESTS) },
+	{ "max_request_time", PW_TYPE_INTEGER, 0, &mainconfig.max_request_time, STRINGIFY(MAX_REQUEST_TIME) },
+	{ "cleanup_delay", PW_TYPE_INTEGER, 0, &mainconfig.cleanup_delay, STRINGIFY(CLEANUP_DELAY) },
+	{ "max_requests", PW_TYPE_INTEGER, 0, &mainconfig.max_requests, STRINGIFY(MAX_REQUESTS) },
 #ifdef DELETE_BLOCKED_REQUESTS
-	{ "delete_blocked_requests", PW_TYPE_INTEGER, 0, &mainconfig.kill_unresponsive_children, Stringify(false) },
+	{ "delete_blocked_requests", PW_TYPE_INTEGER, 0, &mainconfig.kill_unresponsive_children, STRINGIFY(false) },
 #endif
 	{ "pidfile", PW_TYPE_STRING_PTR, 0, &mainconfig.pid_file, "${run_dir}/radiusd.pid"},
 	{ "checkrad", PW_TYPE_STRING_PTR, 0, &mainconfig.checkrad, "${sbindir}/checkrad" },
@@ -293,7 +292,7 @@ static ssize_t xlat_config(UNUSED void *instance, REQUEST *request, char const *
 	CONF_PAIR *cp;
 	CONF_ITEM *ci;
 	char buffer[1024];
-	
+
 	/*
 	 *	Expand it safely.
 	 */
@@ -358,12 +357,65 @@ static ssize_t xlat_client(UNUSED void *instance, REQUEST *request, char const *
 		*out = '\0';
 		return 0;
 	}
-	
+
 	strlcpy(out, value, outlen);
 
 	return strlen(out);
 }
 
+/*
+ *	Xlat for %{getclient:<ipaddr>.foo}
+ */
+static ssize_t xlat_getclient(UNUSED void *instance, REQUEST *request, char const *fmt, char *out, size_t outlen)
+{
+	char const *value = NULL;
+	char buffer[INET6_ADDRSTRLEN], *q;
+	char const *p = fmt;
+	fr_ipaddr_t ip;
+	CONF_PAIR *cp;
+	RADCLIENT *client = NULL;
+
+	if (!fmt || !out || (outlen < 1)) return 0;
+
+	q = strrchr(p, '.');
+	if (!q || (q == p) || (((size_t)(q - p)) > sizeof(buffer))) {
+		REDEBUG("Invalid client string");
+		goto error;
+	}
+
+	strlcpy(buffer, p, (q + 1) - p);
+	if (ip_ptonx(buffer, &ip) <= 0) {
+		REDEBUG("\"%s\" is not a valid IPv4 or IPv6 address", buffer);
+		goto error;
+	}
+
+	fmt = q + 1;
+
+	client = client_find(NULL, &ip, IPPROTO_IP);
+	if (!client) {
+		RDEBUG("No client found with IP \"%s\"", buffer);
+		*out = '\0';
+		return 0;
+	}
+
+	cp = cf_pair_find(client->cs, fmt);
+	if (!cp || !(value = cf_pair_value(cp))) {
+		if (strcmp(fmt, "shortname") == 0) {
+			strlcpy(out, request->client->shortname, outlen);
+			return strlen(out);
+		}
+		RDEBUG("Client does not contain config item \"%s\"", fmt);
+		*out = '\0';
+		return 0;
+	}
+
+	strlcpy(out, value, outlen);
+	return strlen(out);
+
+	error:
+	*out = '\0';
+	return -1;
+}
 
 #ifdef HAVE_SYS_RESOURCE_H
 static struct rlimit core_limits;
@@ -381,7 +433,7 @@ static void fr_set_dumpable(void)
 
 		no_core.rlim_cur = 0;
 		no_core.rlim_max = 0;
-		
+
 		if (setrlimit(RLIMIT_CORE, &no_core) < 0) {
 			ERROR("Failed disabling core dumps: %s",
 			       strerror(errno));
@@ -420,20 +472,20 @@ static int doing_setuid = false;
 void fr_suid_up(void)
 {
 	uid_t ruid, euid, suid;
-	
+
 	if (getresuid(&ruid, &euid, &suid) < 0) {
 		ERROR("Failed getting saved UID's");
-		_exit(1);
+		fr_exit_now(1);
 	}
 
 	if (setresuid(-1, suid, -1) < 0) {
 		ERROR("Failed switching to privileged user");
-		_exit(1);
+		fr_exit_now(1);
 	}
 
 	if (geteuid() != suid) {
 		ERROR("Switched to unknown UID");
-		_exit(1);
+		fr_exit_now(1);
 	}
 }
 
@@ -444,13 +496,13 @@ void fr_suid_down(void)
 	if (setresuid(-1, server_uid, geteuid()) < 0) {
 		fprintf(stderr, "%s: Failed switching to uid %s: %s\n",
 			progname, uid_name, strerror(errno));
-		_exit(1);
+		fr_exit_now(1);
 	}
-		
+
 	if (geteuid() != server_uid) {
 		fprintf(stderr, "%s: Failed switching uid: UID is incorrect\n",
 			progname);
-		_exit(1);
+		fr_exit_now(1);
 	}
 
 	fr_set_dumpable();
@@ -463,12 +515,12 @@ void fr_suid_down_permanent(void)
 	if (setresuid(server_uid, server_uid, server_uid) < 0) {
 		ERROR("Failed in permanent switch to uid %s: %s",
 		       uid_name, strerror(errno));
-		_exit(1);
+		fr_exit_now(1);
 	}
 
 	if (geteuid() != server_uid) {
 		ERROR("Switched to unknown uid");
-		_exit(1);
+		fr_exit_now(1);
 	}
 
 	fr_set_dumpable();
@@ -487,7 +539,7 @@ void fr_suid_down(void)
 	if (setuid(server_uid) < 0) {
 		fprintf(stderr, "%s: Failed switching to uid %s: %s\n",
 			progname, uid_name, strerror(errno));
-		_exit(1);
+		fr_exit(1);
 	}
 
 	fr_set_dumpable();
@@ -565,7 +617,7 @@ static int switch_users(CONF_SECTION *cs)
 	/*  Set UID.  */
 	if (uid_name) {
 		struct passwd *pw;
-		
+
 		pw = getpwnam(uid_name);
 		if (pw == NULL) {
 			fprintf(stderr, "%s: Cannot get passwd entry for user %s: %s\n",
@@ -641,14 +693,14 @@ static int switch_users(CONF_SECTION *cs)
 				fprintf(stderr, "radiusd: Failed to open log file %s: %s\n", mainconfig.log_file, strerror(errno));
 				return 0;
 			}
-		
+
 			if (chown(mainconfig.log_file, server_uid, server_gid) < 0) {
 				fprintf(stderr, "%s: Cannot change ownership of log file %s: %s\n",
 					progname, mainconfig.log_file, strerror(errno));
 				return 0;
 			}
 		}
-	}		
+	}
 
 	if (uid_name) {
 		doing_setuid = true;
@@ -740,13 +792,13 @@ int read_mainconfig(int reload)
 			cf_file_free(cs);
 			return -1;
 		}
-		
+
 		if (!radlog_dest) {
 			fprintf(stderr, "radiusd: Error: No log destination specified.\n");
 			cf_file_free(cs);
 			return -1;
 		}
-		
+
 		default_log.dest = fr_str2int(log_str2dst, radlog_dest,
 					      L_DST_NUM_DEST);
 		if (default_log.dest == L_DST_NUM_DEST) {
@@ -755,7 +807,7 @@ int read_mainconfig(int reload)
 			cf_file_free(cs);
 			return -1;
 		}
-		
+
 		if (default_log.dest == L_DST_SYSLOG) {
 			/*
 			 *	Make sure syslog_facility isn't NULL
@@ -795,7 +847,7 @@ int read_mainconfig(int reload)
 	/*
 	 *	Switch users as early as possible.
 	 */
-	if (!switch_users(cs)) exit(1);
+	if (!switch_users(cs)) fr_exit(1);
 #endif
 
 	/*
@@ -826,17 +878,13 @@ int read_mainconfig(int reload)
 	 *	We ignore colourization of output until after the
 	 *	configuration files have been parsed.
 	 */
-	if (do_colourise) {
-		p = getenv("TERM");
-		if (!p || !isatty(default_log.fd) ||
-		    (strstr(p, "xterm") == 0)) {
-			mainconfig.colourise = false;
-		} else {
-			mainconfig.colourise = true;
-		}
-		p = NULL;
+	p = getenv("TERM");
+	if (do_colourise && p && isatty(default_log.fd) && strstr(p, "xterm")) {
+		default_log.colourise = true;
+	} else {
+		default_log.colourise = false;
 	}
-	
+
 	if (mainconfig.max_request_time == 0) mainconfig.max_request_time = 100;
 	if (mainconfig.reject_delay > 5) mainconfig.reject_delay = 5;
 	if (mainconfig.cleanup_delay > 5) mainconfig.cleanup_delay =5;
@@ -857,7 +905,7 @@ int read_mainconfig(int reload)
 	}
 
 	DEBUG2("%s: #### Loading Clients ####", mainconfig.name);
-	if (!clients_parse_section(cs)) {
+	if (!clients_parse_section(cs, false)) {
 		return -1;
 	}
 
@@ -866,6 +914,7 @@ int read_mainconfig(int reload)
 	 */
 	xlat_register("config", xlat_config, NULL, NULL);
 	xlat_register("client", xlat_client, NULL, NULL);
+	xlat_register("getclient", xlat_getclient, NULL, NULL);
 
 	/*
 	 *	Starting the server, WITHOUT "-x" on the
@@ -948,7 +997,7 @@ int free_mainconfig(void)
 void hup_logfile(void)
 {
 		int fd, old_fd;
-		
+
 		if (default_log.dest != L_DST_FILES) return;
 
  		fd = open(mainconfig.log_file,

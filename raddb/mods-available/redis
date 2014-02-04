@@ -14,7 +14,7 @@ redis {
 
 	#  The default port.
 	port = 6379
-	
+
 	#  The password used to authenticate to the server.
 	#  We recommend using a strong password.
 #	password = thisisreallysecretandhardtoguess
@@ -41,7 +41,7 @@ redis {
 		# start deleting them
 		cleanup_delay = 300
 
-		# connections last no more than "lifeime" seconds.
+		# connections last no more than "lifetime" seconds.
 		lifetime = 86400
 
 		# close idle connections are "idle_timeout" seconds

@@ -12,29 +12,16 @@
  *   You should have received a copy of the GNU Lesser General Public
  *   License along with this library; if not, write to the Free Software
  *   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
- *
- *  Helper functions to get/set addresses of UDP packets
- *  based on recvfromto by Miquel van Smoorenburg
- *
- * recvfromto	Like recvfrom, but also stores the destination
- *		IP address. Useful on multihomed hosts.
- *
- *		Should work on Linux and BSD.
- *
- *		Copyright (C) 2002 Miquel van Smoorenburg.
- *
- *		This program is free software; you can redistribute it and/or
- *		modify it under the terms of the GNU Lesser General Public
- *		License as published by the Free Software Foundation; either
- *		version 2 of the License, or (at your option) any later version.
- *	Copyright (C) 2007 Alan DeKok <aland@deployingradius.com>
- *
- * sendfromto	added 18/08/2003, Jan Berkel <jan@sitadelle.com>
- *		Works on Linux and FreeBSD (5.x)
- *
- * Version: $Id$
  */
 
+/**
+ * $Id$
+ * @file udpfromto.c
+ * @brief Like recvfrom, but also stores the destination IP address. Useful on multihomed hosts.
+ *
+ * @copyright 2007 Alan DeKok <aland@deployingradius.com>
+ * @copyright 2002 Miquel van Smoorenburg
+ */
 RCSID("$Id$")
 
 #include <freeradius-devel/udpfromto.h>
@@ -42,7 +29,7 @@ RCSID("$Id$")
 #ifdef WITH_UDPFROMTO
 
 #ifdef HAVE_SYS_UIO_H
-#include <sys/uio.h>
+#  include <sys/uio.h>
 #endif
 
 #include <fcntl.h>
@@ -52,7 +39,7 @@ RCSID("$Id$")
  *	Mac OSX Lion doesn't define SOL_IP.  But IPPROTO_IP works.
  */
 #ifndef SOL_IP
-#define SOL_IP IPPROTO_IP
+#  define SOL_IP IPPROTO_IP
 #endif
 
 /*
@@ -66,16 +53,19 @@ RCSID("$Id$")
  * old kernel interface.
  */
 #ifdef __linux__
-#  if defined IPV6_RECVPKTINFO
+#  ifdef IPV6_RECVPKTINFO
 #    include <linux/version.h>
 #    if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,14)
-#      if defined IPV6_2292PKTINFO
-#	undef IPV6_RECVPKTINFO
-#	undef IPV6_PKTINFO
-#	define IPV6_RECVPKTINFO IPV6_2292PKTINFO
-#	define IPV6_PKTINFO IPV6_2292PKTINFO
+#      ifdef IPV6_2292PKTINFO
+#        undef IPV6_RECVPKTINFO
+#        undef IPV6_PKTINFO
+#        define IPV6_RECVPKTINFO IPV6_2292PKTINFO
+#        define IPV6_PKTINFO IPV6_2292PKTINFO
 #      endif
 #    endif
+/* Fall back to the legacy socket option if IPV6_RECVPKTINFO isn't defined */
+#  elif defined(IPV6_2292PKTINFO)
+#      define IPV6_RECVPKTINFO IPV6_2292PKTINFO
 #  endif
 #endif
 
@@ -87,16 +77,21 @@ RCSID("$Id$")
  *	for all three calls.
  */
 #ifdef IPV6_PKTINFO
-#ifdef __linux__
-#define FR_IPV6_RECVPKTINFO IPV6_RECVPKTINFO
-#else
-#define FR_IPV6_RECVPKTINFO IPV6_PKTINFO
-#endif
+#  ifdef __linux__
+#    ifdef IPV6_RECVPKTINFO
+#      define FR_IPV6_RECVPKTINFO IPV6_RECVPKTINFO
+/* Fallback to to using recvfrom */
+#    else
+#      undef IPV6_RECVPKTINFO
+#    endif
+#  else
+#    define FR_IPV6_RECVPKTINFO IPV6_PKTINFO
+#  endif
 #endif
 
 int udpfromto_init(int s)
 {
-	int proto, flag, opt = 1;
+	int proto, flag = 0, opt = 1;
 	struct sockaddr_storage si;
 	socklen_t si_len = sizeof(si);
 
@@ -116,7 +111,7 @@ int udpfromto_init(int s)
 		proto = SOL_IP;
 		flag = IP_PKTINFO;
 #endif
-		
+
 #ifdef IP_RECVDSTADDR
 		/*
 		 *	Set the IP_RECVDSTADDR option (BSD).  Note:
@@ -128,7 +123,7 @@ int udpfromto_init(int s)
 
 #ifdef AF_INET6
 	} else if (si.ss_family == AF_INET6) {
-#ifdef IPV6_PKTINFO
+#  ifdef IPV6_PKTINFO
 		/*
 		 *	This should actually be standard IPv6
 		 */
@@ -138,7 +133,7 @@ int udpfromto_init(int s)
 		 *	Work around Linux-specific hackery.
 		 */
 		flag = FR_IPV6_RECVPKTINFO;
-#endif
+#  endif
 #endif
 	} else {
 		/*
@@ -146,11 +141,6 @@ int udpfromto_init(int s)
 		 */
 		return -1;
 	}
-		
-	/*
-	 *	Unsupported.  Don't worry about it.
-	 */
-	if (proto < 0) return 0;
 
 	return setsockopt(s, proto, flag, &opt, sizeof(opt));
 }
@@ -167,7 +157,7 @@ int recvfromto(int s, void *buf, size_t len, int flags,
 	struct sockaddr_storage si;
 	socklen_t si_len = sizeof(si);
 
-#if !defined(IP_PKTINFO) && !defined(IP_RECVDSTADDR) && !defined (IPV6_PKTINFO)
+#if !defined(IP_PKTINFO) && !defined(IP_RECVDSTADDR) && !defined(IPV6_PKTINFO)
 	/*
 	 *	If the recvmsg() flags aren't defined, fall back to
 	 *	using recvfrom().
@@ -198,7 +188,7 @@ int recvfromto(int s, void *buf, size_t len, int flags,
 #else
 		struct sockaddr_in *dst = (struct sockaddr_in *) to;
 		struct sockaddr_in *src = (struct sockaddr_in *) &si;
-		
+
 		if (*tolen < sizeof(*dst)) {
 			errno = EINVAL;
 			return -1;
@@ -215,7 +205,7 @@ int recvfromto(int s, void *buf, size_t len, int flags,
 #else
 		struct sockaddr_in6 *dst = (struct sockaddr_in6 *) to;
 		struct sockaddr_in6 *src = (struct sockaddr_in6 *) &si;
-		
+
 		if (*tolen < sizeof(*dst)) {
 			errno = EINVAL;
 			return -1;
@@ -227,7 +217,7 @@ int recvfromto(int s, void *buf, size_t len, int flags,
 #endif
 	/*
 	 *	Unknown address family.
-	 */		
+	 */
 	else {
 		errno = EINVAL;
 		return -1;
@@ -318,7 +308,8 @@ int sendfromto(int s, void *buf, size_t len, int flags,
 	}
 
 	/* Set up iov and msgh structures. */
-	memset(&msgh, 0, sizeof(struct msghdr));
+	memset(&msgh, 0, sizeof(msgh));
+	memset(&iov, 0, sizeof(iov));
 	iov.iov_base = buf;
 	iov.iov_len = len;
 	msgh.msg_iov = &iov;
@@ -332,7 +323,7 @@ int sendfromto(int s, void *buf, size_t len, int flags,
 #else
 		struct sockaddr_in *s4 = (struct sockaddr_in *) from;
 
-#ifdef IP_PKTINFO
+#  ifdef IP_PKTINFO
 		struct in_pktinfo *pkt;
 
 		msgh.msg_control = cbuf;
@@ -346,9 +337,9 @@ int sendfromto(int s, void *buf, size_t len, int flags,
 		pkt = (struct in_pktinfo *) CMSG_DATA(cmsg);
 		memset(pkt, 0, sizeof(*pkt));
 		pkt->ipi_spec_dst = s4->sin_addr;
-#endif
+#  endif
 
-#ifdef IP_SENDSRCADDR
+#  ifdef IP_SENDSRCADDR
 		struct in_addr *in;
 
 		msgh.msg_control = cbuf;
@@ -361,15 +352,15 @@ int sendfromto(int s, void *buf, size_t len, int flags,
 
 		in = (struct in_addr *) CMSG_DATA(cmsg);
 		*in = s4->sin_addr;
-#endif
+#  endif
 #endif	/* IP_PKTINFO or IP_SENDSRCADDR */
 	}
 
 #ifdef AF_INET6
 	else if (from->sa_family == AF_INET6) {
-#if !defined(IPV6_PKTINFO)
+#  if !defined(IPV6_PKTINFO)
 		return sendto(s, buf, len, flags, to, tolen);
-#else		
+#  else
 		struct sockaddr_in6 *s6 = (struct sockaddr_in6 *) from;
 
 		struct in6_pktinfo *pkt;
@@ -385,13 +376,13 @@ int sendfromto(int s, void *buf, size_t len, int flags,
 		pkt = (struct in6_pktinfo *) CMSG_DATA(cmsg);
 		memset(pkt, 0, sizeof(*pkt));
 		pkt->ipi6_addr = s6->sin6_addr;
-#endif	/* IPV6_PKTINFO */
+#  endif	/* IPV6_PKTINFO */
 	}
 #endif
 
 	/*
 	 *	Unknown address family.
-	 */		
+	 */
 	else {
 		errno = EINVAL;
 		return -1;
@@ -410,17 +401,12 @@ int sendfromto(int s, void *buf, size_t len, int flags,
  *	reply packet should originate from virtual IP and not
  *	from the default interface the alias is bound to
  */
+#  include <sys/wait.h>
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <arpa/inet.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-
-#define DEF_PORT 20000		/* default port to listen on */
-#define DESTIP "127.0.0.1"	/* send packet to localhost per default */
-#define TESTSTRING "foo"	/* what to send */
-#define TESTLEN 4			/* 4 bytes */
+#  define DEF_PORT 20000		/* default port to listen on */
+#  define DESTIP "127.0.0.1"	/* send packet to localhost per default */
+#  define TESTSTRING "foo"	/* what to send */
+#  define TESTLEN 4			/* 4 bytes */
 
 int main(int argc, char **argv)
 {
@@ -495,13 +481,13 @@ client:
 	client_socket = socket(PF_INET, SOCK_DGRAM, 0);
 	if (udpfromto_init(client_socket) != 0) {
 		perror("udpfromto_init");
-		_exit(0);
+		fr_exit_now(0);
 	}
 	/* bind client on different port */
 	in.sin_port = htons(port+1);
 	if (bind(client_socket, (struct sockaddr *)&in, sizeof(in)) < 0) {
 		perror("client: bind");
-		_exit(0);
+		fr_exit_now(0);
 	}
 
 	in.sin_port = htons(port);
@@ -511,7 +497,7 @@ client:
 	if (sendto(client_socket, TESTSTRING, TESTLEN, 0,
 			(struct sockaddr *)&in, sizeof(in)) < 0) {
 		perror("client: sendto");
-		_exit(0);
+		fr_exit_now(0);
 	}
 
 	printf("client: waiting for reply from server on INADDR_ANY:%d\n", port+1);
@@ -520,7 +506,7 @@ client:
 	    (struct sockaddr *)&from, &fl,
 	    (struct sockaddr *)&to, &tl)) < 0) {
 		perror("client: recvfromto");
-		_exit(0);
+		fr_exit_now(0);
 	}
 
 	printf("client: received a packet of %d bytes [%s] ", n, buf);
@@ -529,7 +515,7 @@ client:
 	printf(" dst ip:port %s:%d)\n",
 		inet_ntoa(to.sin_addr), ntohs(to.sin_port));
 
-	_exit(0);
+	fr_exit_now(0);
 }
 
 #endif /* TESTING */

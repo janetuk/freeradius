@@ -240,12 +240,16 @@ ATTRIBUTE	FreeRADIUS-Client-Src-IPv6-Address	1144	ipv6addr
 
 ATTRIBUTE	OTP-Challenge				1145	string
 ATTRIBUTE	EAP-Session-Id				1146	octets
+
 #	For EAP channel binding
 
 ATTRIBUTE	Chbind-Response-Code			1147	integer
 
 VALUE	Chbind-Response-Code		success			2
 VALUE	Chbind-Response-Code		failure			3
+
+ATTRIBUTE	Acct-Input-Octets64			1148	integer64
+ATTRIBUTE	Acct-Output-Octets64			1149	integer64
 
 #
 #	Range:	1200-1279
@@ -421,6 +425,16 @@ ATTRIBUTE	Tmp-Octets-7				1837	octets
 ATTRIBUTE	Tmp-Octets-8				1838	octets
 ATTRIBUTE	Tmp-Octets-9				1839	octets
 
+ATTRIBUTE	Tmp-Date-0				1840	date
+ATTRIBUTE	Tmp-Date-1				1841	date
+ATTRIBUTE	Tmp-Date-2				1842	date
+ATTRIBUTE	Tmp-Date-3				1843	date
+ATTRIBUTE	Tmp-Date-4				1844	date
+ATTRIBUTE	Tmp-Date-5				1845	date
+ATTRIBUTE	Tmp-Date-6				1846	date
+ATTRIBUTE	Tmp-Date-7				1847	date
+ATTRIBUTE	Tmp-Date-8				1848	date
+ATTRIBUTE	Tmp-Date-9				1849	date
 #
 #  These attributes shouldn't be used anywhere.  They are defined here
 #  only for casting of values in conditional expressions.
@@ -471,9 +485,9 @@ ATTRIBUTE	TLS-Client-Cert-Common-Name		1924	string
 ATTRIBUTE	TLS-Client-Cert-Filename		1925	string
 ATTRIBUTE	TLS-Client-Cert-Subject-Alt-Name-Email	1926	string
 ATTRIBUTE	TLS-Client-Cert-X509v3-Extended-Key-Usage 1927	string
-ATTRIBUTE	TLS-Client-Cert-X509v3-Subject-Key-Identifier 1928 string
-ATTRIBUTE	TLS-Client-Cert-X509v3-Authority-Key-Identifier 1929 string
-ATTRIBUTE	TLS-Client-Cert-X509v3-Basic-Constraints 1930 string
+ATTRIBUTE	TLS-Client-Cert-X509v3-Subject-Key-Identifier 1928	string
+ATTRIBUTE	TLS-Client-Cert-X509v3-Authority-Key-Identifier 1929	string
+ATTRIBUTE	TLS-Client-Cert-X509v3-Basic-Constraints 1930	string
 ATTRIBUTE	TLS-PSK-Identity			1931	string
 
 # 1932 - 1939: reserved for future cert attributes
@@ -488,7 +502,7 @@ ATTRIBUTE	TLS-PSK-Identity			1931	string
 #	vendor? Sigh...
 #
 ATTRIBUTE	SoH-MS-Machine-OS-vendor		2100	integer
-VALUE		SoH-MS-Machine-OS-vendor	Microsoft	311
+VALUE	SoH-MS-Machine-OS-vendor	Microsoft		311
 
 ATTRIBUTE	SoH-MS-Machine-OS-version		2101	integer
 ATTRIBUTE	SoH-MS-Machine-OS-release		2102	integer
@@ -497,21 +511,20 @@ ATTRIBUTE	SoH-MS-Machine-SP-version		2104	integer
 ATTRIBUTE	SoH-MS-Machine-SP-release		2105	integer
 
 ATTRIBUTE	SoH-MS-Machine-Processor		2106	integer
-VALUE		SoH-MS-Machine-Processor	x86	0
-VALUE		SoH-MS-Machine-Processor	i64	6
-VALUE		SoH-MS-Machine-Processor	x86_64	9
+VALUE	SoH-MS-Machine-Processor	x86			0
+VALUE	SoH-MS-Machine-Processor	i64			6
+VALUE	SoH-MS-Machine-Processor	x86_64			9
 
 ATTRIBUTE	SoH-MS-Machine-Name			2107	string
 ATTRIBUTE	SoH-MS-Correlation-Id			2108	octets
 ATTRIBUTE	SoH-MS-Machine-Role			2109	integer
-VALUE		SoH-MS-Machine-Role		client	1
-VALUE		SoH-MS-Machine-Role		dc	2
-VALUE		SoH-MS-Machine-Role		server	3
-
+VALUE	SoH-MS-Machine-Role		client			1
+VALUE	SoH-MS-Machine-Role		dc			2
+VALUE	SoH-MS-Machine-Role		server			3
 
 ATTRIBUTE	SoH-Supported				2119	integer
-VALUE		SoH-Supported			no	0
-VALUE		SoH-Supported			yes	1
+VALUE	SoH-Supported			no			0
+VALUE	SoH-Supported			yes			1
 
 ATTRIBUTE	SoH-MS-Windows-Health-Status		2120	string
 ATTRIBUTE	SoH-MS-Health-Other			2129	string

@@ -41,7 +41,8 @@ typedef struct rlm_exec_t {
 	pair_lists_t	output_list;
 	char		*packet_type;
 	unsigned int	packet_code;
-	int		shell_escape;
+	bool		shell_escape;
+	int		timeout;
 } rlm_exec_t;
 
 /*
@@ -60,7 +61,8 @@ static const CONF_PARSER module_config[] = {
 	{ "output_pairs",  PW_TYPE_STRING_PTR, offsetof(rlm_exec_t,output), NULL, NULL },
 	{ "packet_type", PW_TYPE_STRING_PTR, offsetof(rlm_exec_t,packet_type), NULL, NULL },
 	{ "shell_escape", PW_TYPE_BOOLEAN,  offsetof(rlm_exec_t,shell_escape), NULL, "yes" },
-	
+	{ "timeout", PW_TYPE_INTEGER,  offsetof(rlm_exec_t,timeout), NULL, NULL },
+
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
 
@@ -105,17 +107,17 @@ static rlm_rcode_t rlm_exec_status2rcode(REQUEST *request, char *answer, size_t 
 	if (status < 0) {
 		return RLM_MODULE_FAIL;
 	}
-	
+
 	/*
-	 *	Exec'd programs are meant to return exit statuses that correspond 
-	 *	to the standard RLM_MODULE_* + 1. 
+	 *	Exec'd programs are meant to return exit statuses that correspond
+	 *	to the standard RLM_MODULE_* + 1.
 	 *
 	 *	This frees up 0, for success where it'd normally be reject.
-	 */		
+	 */
 	if (status == 0) {
 		RDEBUG("Program executed successfully");
 
-		return RLM_MODULE_OK;	
+		return RLM_MODULE_OK;
 	}
 
 	if (status > RLM_MODULE_NUMCODES) {
@@ -130,24 +132,24 @@ static rlm_rcode_t rlm_exec_status2rcode(REQUEST *request, char *answer, size_t 
 
 	if (status == RLM_MODULE_FAIL) {
 		fail:
-	
+
 		if (len > 0) {
 			char *p = &answer[len - 1];
-		
+
 			/*
 			 *	Trim off trailing returns
 			 */
 			while((p > answer) && ((*p == '\r') || (*p == '\n'))) {
 				*p-- = '\0';
 			}
-	
-			module_failure_msg(request, answer);
+
+			module_failure_msg(request, "%s", answer);
 		}
 
 		return RLM_MODULE_FAIL;
 	}
 
-	return status;		
+	return status;
 }
 
 /*
@@ -174,17 +176,18 @@ static ssize_t exec_xlat(void *instance, REQUEST *request, char const *fmt, char
 			return -1;
 		}
 	}
-	
+
 	/*
 	 *	FIXME: Do xlat of program name?
 	 */
 	result = radius_exec_program(request, fmt, inst->wait, inst->shell_escape,
-				     out, outlen, input_pairs ? *input_pairs : NULL, NULL);
+				     out, outlen, inst->timeout,
+				     input_pairs ? *input_pairs : NULL, NULL);
 	if (result != 0) {
 		out[0] = '\0';
 		return -1;
 	}
-	
+
 	for (p = out; *p != '\0'; p++) {
 		if (*p < ' ') *p = ' ';
 	}
@@ -214,11 +217,11 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	}
 
 	xlat_register(inst->xlat_name, exec_xlat, rlm_exec_shell_escape, inst);
-	
+
 	/*
 	 *	Check whether program actually exists
 	 */
-	
+
 	if (inst->input) {
 		p = inst->input;
 		inst->input_list = radius_list_name(&p, PAIR_LIST_UNKNOWN);
@@ -264,6 +267,24 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		inst->packet_code = dval->value;
 	}
 
+	/*
+	 *	Get the time to wait before killing the child
+	 */
+	if (!inst->timeout) {
+		inst->timeout = EXEC_TIMEOUT;
+	}
+	if (inst->timeout < 1) {
+		cf_log_err_cs(conf, "Timeout '%d' is too small (minimum: 1)", inst->timeout);
+		return -1;
+	}
+	/*
+	 *	Blocking a request longer than 30 seconds isn't going to help anyone.
+	 */
+	if (inst->timeout > 30) {
+		cf_log_err_cs(conf, "Timeout '%d' is too large (maximum: 30)", inst->timeout);
+		return -1;
+	}
+
 	return 0;
 }
 
@@ -300,7 +321,7 @@ static rlm_rcode_t exec_dispatch(void *instance, REQUEST *request)
 #endif
 		    )) {
 		RDEBUG2("Packet type is not %s. Not executing.", inst->packet_type);
-		
+
 		return RLM_MODULE_NOOP;
 	}
 
@@ -313,7 +334,7 @@ static rlm_rcode_t exec_dispatch(void *instance, REQUEST *request)
 			return RLM_MODULE_INVALID;
 		}
 	}
-	
+
 	if (inst->output) {
 		output_pairs = radius_list(request, inst->output_list);
 		if (!output_pairs) {
@@ -333,7 +354,7 @@ static rlm_rcode_t exec_dispatch(void *instance, REQUEST *request)
 	 *	into something else.
 	 */
 	status = radius_exec_program(request, inst->program, inst->wait, inst->shell_escape,
-				     out, sizeof(out),
+				     out, sizeof(out), inst->timeout,
 				     input_pairs ? *input_pairs : NULL, &answer);
 	rcode = rlm_exec_status2rcode(request, out, strlen(out), status);
 
@@ -346,7 +367,7 @@ static rlm_rcode_t exec_dispatch(void *instance, REQUEST *request)
 		pairmove(request, output_pairs, &answer);
 	}
 	pairfree(&answer);
-	
+
 	return rcode;
 }
 
@@ -376,14 +397,14 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 		if (!inst->program) {
 			return RLM_MODULE_NOOP;
 		}
-		
+
 		rcode = exec_dispatch(instance, request);
 		goto finish;
 	}
 
 	tmp = NULL;
 	status = radius_exec_program(request, vp->vp_strvalue, we_wait, inst->shell_escape,
-				     out, sizeof(out),
+				     out, sizeof(out), inst->timeout,
 				     request->packet->vps, &tmp);
 	rcode = rlm_exec_status2rcode(request, out, strlen(out), status);
 
@@ -392,7 +413,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 	 */
 	pairmove(request->reply, &request->reply->vps, &tmp);
 	pairfree(&tmp);
-	
+
 	finish:
 	switch (rcode) {
 		case RLM_MODULE_FAIL:
@@ -416,7 +437,7 @@ static  rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 {
 	rlm_exec_t	*inst = (rlm_exec_t *) instance;
 	int		status;
-	
+
 	char		out[1024];
 	bool 		we_wait = false;
 	VALUE_PAIR	*vp;
@@ -428,7 +449,7 @@ static  rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 	if (!inst->bare) {
 		return exec_dispatch(instance, request);
 	}
-	
+
 	vp = pairfind(request->reply->vps, PW_EXEC_PROGRAM, 0, TAG_ANY);
 	if (vp) {
 		we_wait = true;
@@ -438,9 +459,9 @@ static  rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 	if (!vp) {
 		return RLM_MODULE_NOOP;
 	}
-	
+
 	status = radius_exec_program(request, vp->vp_strvalue, we_wait, inst->shell_escape,
-				     out, sizeof(out),
+				     out, sizeof(out), inst->timeout,
 				     request->packet->vps, NULL);
 	return rlm_exec_status2rcode(request, out, strlen(out), status);
 }

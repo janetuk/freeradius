@@ -8,7 +8,7 @@
 #	directory to these files.  This is done in a normal installation.
 #
 #	If you are using 802.1X (EAP) authentication, please see also
-#	the "inner-tunnel" virtual server.  You wll likely have to edit
+#	the "inner-tunnel" virtual server.  You will likely have to edit
 #	that, too, for authentication to work.
 #
 #	$Id$
@@ -47,7 +47,7 @@
 server default {
 #
 #  If you want the server to listen on additional addresses, or on
-#  additionnal ports, you can use multiple "listen" sections.
+#  additional ports, you can use multiple "listen" sections.
 #
 #  Each section make the server listen for only one type of packet,
 #  therefore authentication and accounting have to be configured in
@@ -215,12 +215,12 @@ listen {
 #  The order of the realm modules will determine the order that
 #  we try to find a matching realm.
 #
-#  Make *sure* that 'preprocess' comes before any realm if you 
+#  Make *sure* that 'preprocess' comes before any realm if you
 #  need to setup hints for the remote radius server
 authorize {
 	#
 	#  Take a User-Name, and perform some checks on it, for spaces and other
-	#  invalid characters.  If the User-Name appears invalid, reject the 
+	#  invalid characters.  If the User-Name appears invalid, reject the
 	#  request.
 	#
 	#  See policy.d/filter for the definition of the filter_username policy.
@@ -244,8 +244,8 @@ authorize {
 
 	#
 	#  If you want to generate CUI for some clients that do not
-	#  send proper CUI requiests, then uncomment the
-	#  cui below and set "add-cui = yes" for these clients in clients.conf
+	#  send proper CUI requests, then uncomment the
+	#  cui below and set "add_cui = yes" for these clients in clients.conf
 #       cui
 
 	#
@@ -387,7 +387,7 @@ authorize {
 #  Note that it does NOT mean 'try each module in order'.  It means
 #  that a module from the 'authorize' section adds a configuration
 #  attribute 'Auth-Type := FOO'.  That authentication type is then
-#  used to pick the apropriate module from the list below.
+#  used to pick the appropriate module from the list below.
 #
 
 #  In general, you SHOULD NOT set the Auth-Type attribute.  The server
@@ -467,7 +467,7 @@ authenticate {
 	#
 #	Auth-Type eap {
 #		eap {
-#			handled = 1  
+#			handled = 1
 #		}
 #		if (handled && (Response-Packet-Type == Access-Challenge)) {
 #			attr_filter.access_challenge.post-auth
@@ -482,6 +482,12 @@ authenticate {
 #
 preacct {
 	preprocess
+
+	#
+	#  Merge Acct-[Input|Output]-Gigawords and Acct-[Input-Output]-Octets
+	#  into a single 64bit counter Acct-[Input|Output]-Octets64.
+	#
+#	acct_counters64
 
 	#
 	#  Session start times are *implied* in RADIUS.
@@ -599,7 +605,7 @@ accounting {
 }
 
 
-#  Session database, used for checking Simultaneous-Use. Either the radutmp 
+#  Session database, used for checking Simultaneous-Use. Either the radutmp
 #  or rlm_sql module can handle this.
 #  The rlm_sql module is *much* faster
 session {
@@ -731,7 +737,7 @@ post-auth {
 	#  Access-Reject packets are sent through the REJECT sub-section of the
 	#  post-auth section.
 	#
-	#  Add the ldap module name (or instance) if you have set 
+	#  Add the ldap module name (or instance) if you have set
 	#  'edir_account_policy_check = yes' in the ldap module configuration
 	#
 	Post-Auth-Type REJECT {

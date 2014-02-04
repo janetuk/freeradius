@@ -89,6 +89,11 @@ endif
 		--without-rlm_sql_oracle \
 		--without-rlm_sql_unixodbc
 
+	rm config.guess
+	mv config.guess.dist config.guess
+	rm config.sub
+	mv config.sub.dist config.sub
+
 #Architecture 
 build: patch build-arch build-indep
 
@@ -130,7 +135,7 @@ install: install-arch
 install-arch: build-arch-stamp
 	dh_testdir
 	dh_testroot
-	dh_installdirs -i
+	dh_installdirs
 	test -d $(freeradius_dir)/usr/lib/freeradius || mkdir -p $(freeradius_dir)/usr/lib/freeradius
 	ln -fs rlm_sql.so $(freeradius_dir)/usr/lib/freeradius/librlm_sql.so
 	$(MAKE) install R=$(freeradius_dir)
@@ -142,6 +147,7 @@ install-arch: build-arch-stamp
 	dh_install -i --sourcedir=$(freeradius_dir)
 	dh_install --sourcedir=$(freeradius_dir) -p libfreeradius3
 	dh_install --sourcedir=$(freeradius_dir) -p libfreeradius-dev
+	dh_install --sourcedir=$(freeradius_dir) -p freeradius-config
 
 	for mod in ${modulelist}; do \
 	  pkg=$${mod##sql_} ; \
@@ -155,7 +161,7 @@ install-arch: build-arch-stamp
 	dh_strip -a --dbg-package=freeradius-dbg
 
 	dh_makeshlibs -a -n
-	dh_shlibdeps
+	dh_shlibdeps -l$(freeradius_dir)/usr/lib/freeradius
 
 binary-common:
 	dh_testdir

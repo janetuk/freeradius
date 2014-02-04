@@ -18,6 +18,13 @@
  * @file rlm_ruby.c
  * @brief Translates requests between the server an a ruby interpreter.
  *
+ * @note Maintainers note
+ * @note Please don't use this module, Matz ruby was never designed for embedding.
+ * @note This module leaks memory, and the ruby code installs signal handlers
+ * @note which interfere with normal operation of the server. It's all bad...
+ * @note mruby shows some promise, feel free to rewrite the module to use that.
+ * @note https://github.com/mruby/mruby
+ *
  * @copyright 2008 Andriy Dmytrenko aka Antti, BuzhNET
  */
 
@@ -131,8 +138,8 @@ static void add_vp_tuple(TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR **vpp, VA
 			long tuplesize;
 
 			if ((tuplesize = RARRAY_LEN(pTupleElement)) != 2) {
-				REDEBUG("%s: tuple element %d is a tuple "
-					" of size %d. must be 2\n", function_name,
+				REDEBUG("%s: tuple element %i is a tuple "
+					" of size %li. must be 2\n", function_name,
 					i, tuplesize);
 			} else {
 				VALUE pString1, pString2;
@@ -213,7 +220,7 @@ static rlm_rcode_t do_ruby(REQUEST *request, unsigned long func,
 		for (vp = paircursor(&cursor, &request->packet->vps);
 		     vp;
 		     vp = pairnext(&cursor)) {
-		 	 n_tuple++;    
+		 	 n_tuple++;
 		}
 	}
 
@@ -270,7 +277,7 @@ static rlm_rcode_t do_ruby(REQUEST *request, unsigned long func,
 		if (request) {
 			rb_reply_items = rb_ary_entry(rb_result, 1);
 			rb_config_items = rb_ary_entry(rb_result, 2);
-	
+
 			add_vp_tuple(request->reply, request, &request->reply->vps,
 				     rb_reply_items, function_name);
 			add_vp_tuple(request, request, &request->config_items,
@@ -339,7 +346,7 @@ static int mod_instantiate(UNUSED CONF_SECTION *conf, void *instance)
 {
 	rlm_ruby_t *inst = instance;
 	VALUE module;
-	
+
 	int idx;
 	int status;
 
@@ -359,17 +366,17 @@ static int mod_instantiate(UNUSED CONF_SECTION *conf, void *instance)
 	module = inst->module = rb_define_module(inst->module_name);
 	if (!module) {
 		EDEBUG("Ruby rb_define_module failed");
-		
+
 		return -1;
 	}
-	
+
 	/*
 	 *	Load constants into module
 	 */
 	for (idx = 0; constants[idx].name; idx++) {
 		rb_define_const(module, constants[idx].name, INT2NUM(constants[idx].value));
 	}
-	
+
 	/*
 	 *	Expose some FreeRADIUS API functions as ruby functions
 	 */
@@ -379,7 +386,7 @@ static int mod_instantiate(UNUSED CONF_SECTION *conf, void *instance)
 	rb_load_protect(rb_str_new2(inst->filename), 0, &status);
 	if (status) {
 		EDEBUG("Error loading file %s status: %d", inst->filename, status);
-		
+
 		return -1;
 	}
 	DEBUG("Loaded file %s", inst->filename);

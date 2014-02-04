@@ -27,9 +27,51 @@ RCSID("$Id$")
 #include	<ctype.h>
 #include	<sys/file.h>
 #include	<fcntl.h>
+#include	<signal.h>
 
-int		fr_dns_lookups = 0;
-int		fr_debug_flag = 0;
+#define FR_PUT_LE16(a, val)\
+	do {\
+		a[1] = ((uint16_t) (val)) >> 8;\
+		a[0] = ((uint16_t) (val)) & 0xff;\
+	} while (0)
+
+static int	fr_debugger_present = -1;
+
+bool	fr_dns_lookups = false;	    /* IP -> hostname lookups? */
+bool    fr_hostname_lookups = true; /* hostname -> IP lookups? */
+int	fr_debug_flag = 0;
+
+static char const *months[] = {
+	"jan", "feb", "mar", "apr", "may", "jun",
+	"jul", "aug", "sep", "oct", "nov", "dec" };
+
+/** Allocates a new talloc context from the root autofree context
+ *
+ * @param signum signal raised.
+ */
+static void _sigtrap_handler(UNUSED int signum)
+{
+    fr_debugger_present = 0;
+    signal(SIGTRAP, SIG_DFL);
+}
+
+/** Break in GDB (if were running under GDB)
+ *
+ * If the server is running under GDB this will raise a SIGTRAP which
+ * will pause the running process.
+ *
+ * If the server is not running under GDB then this will do nothing.
+ */
+void fr_debug_break(void)
+{
+    if (fr_debugger_present == -1) {
+    	fr_debugger_present = 0;
+        signal(SIGTRAP, _sigtrap_handler);
+        raise(SIGTRAP);
+    } else if (fr_debugger_present == 1) {
+    	raise(SIGTRAP);
+    }
+}
 
 /*
  *	Return an IP address in standard dot notation
@@ -57,17 +99,17 @@ int rad_lockfd(int fd, int lock_len)
 {
 #ifdef F_WRLCK
 	struct flock fl;
-	
+
 	fl.l_start = 0;
 	fl.l_len = lock_len;
 	fl.l_pid = getpid();
 	fl.l_type = F_WRLCK;
 	fl.l_whence = SEEK_CUR;
-	
+
 	return fcntl(fd, F_SETLKW, (void *)&fl);
 #else
 #error "missing definition for F_WRLCK, all file locks will fail"
-	
+
 	return -1;
 #endif
 }
@@ -82,13 +124,13 @@ int rad_lockfd_nonblock(int fd, int lock_len)
 {
 #ifdef F_WRLCK
 	struct flock fl;
-	
+
 	fl.l_start = 0;
 	fl.l_len = lock_len;
 	fl.l_pid = getpid();
 	fl.l_type = F_WRLCK;
 	fl.l_whence = SEEK_CUR;
-	
+
 	return fcntl(fd, F_SETLK, (void *)&fl);
 #else
 #error "missing definition for F_WRLCK, all file locks will fail"
@@ -107,7 +149,7 @@ int rad_unlockfd(int fd, int lock_len)
 {
 #ifdef F_WRLCK
 	struct flock fl;
-	
+
 	fl.l_start = 0;
 	fl.l_len = lock_len;
 	fl.l_pid = getpid();
@@ -246,8 +288,7 @@ static int inet_pton4(char const *src, struct in_addr *dst)
  * author:
  *	Paul Vixie, 1996.
  */
-static int
-inet_pton6(char const *src, unsigned char *dst)
+static int inet_pton6(char const *src, unsigned char *dst)
 {
 	static char const xdigits_l[] = "0123456789abcdef",
 			  xdigits_u[] = "0123456789ABCDEF";
@@ -314,7 +355,7 @@ inet_pton6(char const *src, unsigned char *dst)
 		 * Since some memmove()'s erroneously fail to handle
 		 * overlapping regions, we'll do the shift by hand.
 		 */
-		const int n = tp - colonp;
+		int const n = tp - colonp;
 		int i;
 
 		for (i = 1; i <= n; i++) {
@@ -351,7 +392,6 @@ int inet_pton(int af, char const *src, void *dst)
 }
 #endif
 
-
 #ifndef HAVE_INET_NTOP
 /*
  *	Utility function, so that the rest of the server doesn't
@@ -360,7 +400,7 @@ int inet_pton(int af, char const *src, void *dst)
 char const *inet_ntop(int af, void const *src, char *dst, size_t cnt)
 {
 	if (af == AF_INET) {
-		const uint8_t *ipaddr = src;
+		uint8_t const *ipaddr = src;
 
 		if (cnt <= INET_ADDRSTRLEN) return NULL;
 
@@ -375,7 +415,7 @@ char const *inet_ntop(int af, void const *src, char *dst, size_t cnt)
 	 *	in missing.h
 	 */
 	if (af == AF_INET6) {
-		const struct in6_addr *ipaddr = src;
+		struct const in6_addr *ipaddr = src;
 
 		if (cnt <= INET6_ADDRSTRLEN) return NULL;
 
@@ -397,6 +437,26 @@ char const *inet_ntop(int af, void const *src, char *dst, size_t cnt)
 
 
 /*
+ *	Try to convert the address to v4 then v6
+ */
+int ip_ptonx(char const *src, fr_ipaddr_t *dst)
+{
+	if (inet_pton(AF_INET, src, &dst->ipaddr.ip4addr) == 1) {
+		dst->af = AF_INET;
+		return 1;
+	}
+
+#ifdef HAVE_STRUCT_SOCKADDR_IN6
+	if (inet_pton(AF_INET6, src, &dst->ipaddr.ip6addr) == 1) {
+		dst->af = AF_INET6;
+		return 1;
+	}
+#endif
+
+	return 0;
+}
+
+/*
  *	Wrappers for IPv4/IPv6 host to IP address lookup.
  *	This API returns only one IP address, of the specified
  *	address family, or the first address (of whatever family),
@@ -407,8 +467,49 @@ int ip_hton(char const *src, int af, fr_ipaddr_t *dst)
 	int rcode;
 	struct addrinfo hints, *ai = NULL, *res = NULL;
 
+	if (!fr_hostname_lookups) {
+#ifdef HAVE_STRUCT_SOCKADDR_IN6
+		if (af == AF_UNSPEC) {
+			char const *p;
+
+			for (p = src; *p != '\0'; p++) {
+				if ((*p == ':') ||
+				    (*p == '[') ||
+				    (*p == ']')) {
+					af = AF_INET6;
+					break;
+				}
+			}
+		}
+#endif
+
+		if (af == AF_UNSPEC) af = AF_INET;
+
+		if (!inet_pton(af, src, &(dst->ipaddr))) {
+			return -1;
+		}
+		
+		dst->af = af;
+		return 0;
+	}
+
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_family = af;
+
+#ifdef TALLOC_DEBUG
+	/*
+	 *	Avoid malloc for IP addresses.  This helps us debug
+	 *	memory errors when using talloc.
+	 */
+	if (af == AF_INET) {
+		/*
+		 *	If it's all numeric, avoid getaddrinfo()
+		 */
+		if (inet_pton(af, src, &dst->ipaddr.ip4addr) == 1) {
+			return 0;
+		}
+	}
+#endif
 
 	if ((rcode = getaddrinfo(src, NULL, &hints, &res)) != 0) {
 		fr_strerror_printf("ip_hton: %s", gai_strerror(rcode));
@@ -467,17 +568,17 @@ static char const *hextab = "0123456789abcdef";
 
 /** Convert hex strings to binary data
  *
- * @param hex input string.
  * @param bin Buffer to write output to.
- * @param len length of input string.
+ * @param hex input string.
+ * @param outlen length of output buffer (or length of input string / 2).
  * @return length of data written to buffer.
  */
-size_t fr_hex2bin(char const *hex, uint8_t *bin, size_t len)
+size_t fr_hex2bin(uint8_t *bin, char const *hex, size_t outlen)
 {
 	size_t i;
 	char *c1, *c2;
 
-	for (i = 0; i < len; i++) {
+	for (i = 0; i < outlen; i++) {
 		if(!(c1 = memchr(hextab, tolower((int) hex[i << 1]), 16)) ||
 		   !(c2 = memchr(hextab, tolower((int) hex[(i << 1) + 1]), 16)))
 			break;
@@ -494,26 +595,57 @@ size_t fr_hex2bin(char const *hex, uint8_t *bin, size_t len)
  *
  * @warning If the output buffer isn't long enough, we have a buffer overflow.
  *
- * @param[in] bin input.
  * @param[out] hex Buffer to write hex output.
- * @param[in] len of bin input.
+ * @param[in] bin input.
+ * @param[in] inlen of bin input.
  * @return length of data written to buffer.
  */
-size_t fr_bin2hex(uint8_t const *bin, char *hex, size_t len)
+size_t fr_bin2hex(char *hex, uint8_t const *bin, size_t inlen)
 {
 	size_t i;
 
-	for (i = 0; i < len; i++) {
+	for (i = 0; i < inlen; i++) {
 		hex[0] = hextab[((*bin) >> 4) & 0x0f];
 		hex[1] = hextab[*bin & 0x0f];
 		hex += 2;
 		bin++;
 	}
-	
+
 	*hex = '\0';
-	return len * 2;
+	return inlen * 2;
 }
 
+
+
+/** Consume the integer (or hex) portion of a value string
+ *
+ * @param value string to parse.
+ * @param end pointer to the first non numeric char.
+ * @return integer value.
+ */
+uint32_t fr_strtoul(char const *value, char **end)
+{
+	if ((value[0] == '0') && (value[1] == 'x')) {
+		return strtoul(value, end, 16);
+	}
+
+	return strtoul(value, end, 10);
+}
+
+/** Check whether the rest of the string is whitespace
+ *
+ * @return true if the entirety of the string is whitespace, else false.
+ */
+bool fr_whitespace_check(char const *value)
+{
+	while (*value) {
+		if (!isspace((int) *value)) return false;
+
+		value++;
+	}
+
+	return true;
+}
 
 /*
  *	So we don't have ifdef's in the rest of the code
@@ -623,21 +755,21 @@ int fr_sockaddr2ipaddr(struct sockaddr_storage const *sa, socklen_t salen,
 			fr_strerror_printf("IPv4 address is too small");
 			return 0;
 		}
-		
+
 		memcpy(&s4, sa, sizeof(s4));
 		ipaddr->af = AF_INET;
 		ipaddr->ipaddr.ip4addr = s4.sin_addr;
 		if (port) *port = ntohs(s4.sin_port);
-		
+
 #ifdef HAVE_STRUCT_SOCKADDR_IN6
 	} else if (sa->ss_family == AF_INET6) {
 		struct sockaddr_in6	s6;
-		
+
 		if (salen < sizeof(s6)) {
 			fr_strerror_printf("IPv6 address is too small");
 			return 0;
 		}
-		
+
 		memcpy(&s6, sa, sizeof(s6));
 		ipaddr->af = AF_INET6;
 		ipaddr->ipaddr.ip6addr = s6.sin6_addr;
@@ -653,3 +785,319 @@ int fr_sockaddr2ipaddr(struct sockaddr_storage const *sa, socklen_t salen,
 
 	return 1;
 }
+
+/** Convert UTF8 string to UCS2 encoding
+ *
+ * @note Borrowed from src/crypto/ms_funcs.c of wpa_supplicant project (http://hostap.epitest.fi/wpa_supplicant/)
+ *
+ * @param[out] out Where to write the ucs2 string.
+ * @param[in] outlen Size of output buffer.
+ * @param[in] in UTF8 string to convert.
+ * @param[in] inlen length of UTF8 string.
+ * @return the size of the UCS2 string written to the output buffer (in bytes).
+ */
+ssize_t fr_utf8_to_ucs2(uint8_t *out, size_t outlen, char const *in, size_t inlen)
+{
+	size_t i;
+	uint8_t *start = out;
+
+	for (i = 0; i < inlen; i++) {
+		uint8_t c, c2, c3;
+
+		c = in[i];
+		if ((size_t)(out - start) >= outlen) {
+			/* input too long */
+			return -1;
+		}
+
+		/* One-byte encoding */
+		if (c <= 0x7f) {
+			FR_PUT_LE16(out, c);
+			out += 2;
+			continue;
+		} else if ((i == (inlen - 1)) || ((size_t)(out - start) >= (outlen - 1))) {
+			/* Incomplete surrogate */
+			return -1;
+		}
+
+		c2 = in[++i];
+		/* Two-byte encoding */
+		if ((c & 0xe0) == 0xc0) {
+			FR_PUT_LE16(out, ((c & 0x1f) << 6) | (c2 & 0x3f));
+			out += 2;
+			continue;
+		}
+		if ((i == inlen) || ((size_t)(out - start) >= (outlen - 1))) {
+			/* Incomplete surrogate */
+			return -1;
+		}
+
+		/* Three-byte encoding */
+		c3 = in[++i];
+		FR_PUT_LE16(out, ((c & 0xf) << 12) | ((c2 & 0x3f) << 6) | (c3 & 0x3f));
+		out += 2;
+	}
+
+	return out - start;
+}
+
+/** Calculate powers
+ *
+ * @author Orson Peters
+ * @note Borrowed from the gist here: https://gist.github.com/nightcracker/3551590.
+ *
+ * @param base a 32bit signed integer.
+ * @param exp amount to raise base by.
+ * @return base ^ pow, or 0 on underflow/overflow.
+ */
+int64_t fr_pow(int32_t base, uint8_t exp) {
+	static const uint8_t highest_bit_set[] = {
+		0, 1, 2, 2, 3, 3, 3, 3,
+		4, 4, 4, 4, 4, 4, 4, 4,
+		5, 5, 5, 5, 5, 5, 5, 5,
+		5, 5, 5, 5, 5, 5, 5, 5,
+		6, 6, 6, 6, 6, 6, 6, 6,
+		6, 6, 6, 6, 6, 6, 6, 6,
+		6, 6, 6, 6, 6, 6, 6, 6,
+		6, 6, 6, 6, 6, 6, 6, 255, // anything past 63 is a guaranteed overflow with base > 1
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+	};
+
+	uint64_t result = 1;
+
+	switch (highest_bit_set[exp]) {
+	case 255: // we use 255 as an overflow marker and return 0 on overflow/underflow
+		if (base == 1) {
+			return 1;
+		}
+
+		if (base == -1) {
+			return 1 - 2 * (exp & 1);
+		}
+		return 0;
+	case 6:
+		if (exp & 1) result *= base;
+		exp >>= 1;
+		base *= base;
+	case 5:
+		if (exp & 1) result *= base;
+		exp >>= 1;
+		base *= base;
+	case 4:
+		if (exp & 1) result *= base;
+		exp >>= 1;
+		base *= base;
+	case 3:
+		if (exp & 1) result *= base;
+		exp >>= 1;
+		base *= base;
+	case 2:
+		if (exp & 1) result *= base;
+		exp >>= 1;
+		base *= base;
+	case 1:
+		if (exp & 1) result *= base;
+	default:
+		return result;
+	}
+}
+
+/*
+ *	Sort of strtok/strsep function.
+ */
+static char *mystrtok(char **ptr, char const *sep)
+{
+	char	*res;
+
+	if (**ptr == 0) {
+		return NULL;
+	}
+
+	while (**ptr && strchr(sep, **ptr)) {
+		(*ptr)++;
+	}
+	if (**ptr == 0) {
+		return NULL;
+	}
+
+	res = *ptr;
+	while (**ptr && strchr(sep, **ptr) == NULL) {
+		(*ptr)++;
+	}
+
+	if (**ptr != 0) {
+		*(*ptr)++ = 0;
+	}
+	return res;
+}
+
+/** Convert string in various formats to a time_t
+ *
+ * @param date_str input date string.
+ * @param date time_t to write result to.
+ * @return 0 on success or -1 on error.
+ */
+int fr_get_time(char const *date_str, time_t *date)
+{
+	int		i;
+	time_t		t;
+	struct tm	*tm, s_tm;
+	char		buf[64];
+	char		*p;
+	char		*f[4];
+	char		*tail = '\0';
+
+	/*
+	 * Test for unix timestamp date
+	 */
+	*date = strtoul(date_str, &tail, 10);
+	if (*tail == '\0') {
+		return 0;
+	}
+
+	tm = &s_tm;
+	memset(tm, 0, sizeof(*tm));
+	tm->tm_isdst = -1;	/* don't know, and don't care about DST */
+
+	strlcpy(buf, date_str, sizeof(buf));
+
+	p = buf;
+	f[0] = mystrtok(&p, " \t");
+	f[1] = mystrtok(&p, " \t");
+	f[2] = mystrtok(&p, " \t");
+	f[3] = mystrtok(&p, " \t"); /* may, or may not, be present */
+	if (!f[0] || !f[1] || !f[2]) return -1;
+
+	/*
+	 *	The time has a colon, where nothing else does.
+	 *	So if we find it, bubble it to the back of the list.
+	 */
+	if (f[3]) {
+		for (i = 0; i < 3; i++) {
+			if (strchr(f[i], ':')) {
+				p = f[3];
+				f[3] = f[i];
+				f[i] = p;
+				break;
+			}
+		}
+	}
+
+	/*
+	 *  The month is text, which allows us to find it easily.
+	 */
+	tm->tm_mon = 12;
+	for (i = 0; i < 3; i++) {
+		if (isalpha( (int) *f[i])) {
+			/*
+			 *  Bubble the month to the front of the list
+			 */
+			p = f[0];
+			f[0] = f[i];
+			f[i] = p;
+
+			for (i = 0; i < 12; i++) {
+				if (strncasecmp(months[i], f[0], 3) == 0) {
+					tm->tm_mon = i;
+					break;
+				}
+			}
+		}
+	}
+
+	/* month not found? */
+	if (tm->tm_mon == 12) return -1;
+
+	/*
+	 *  The year may be in f[1], or in f[2]
+	 */
+	tm->tm_year = atoi(f[1]);
+	tm->tm_mday = atoi(f[2]);
+
+	if (tm->tm_year >= 1900) {
+		tm->tm_year -= 1900;
+
+	} else {
+		/*
+		 *  We can't use 2-digit years any more, they make it
+		 *  impossible to tell what's the day, and what's the year.
+		 */
+		if (tm->tm_mday < 1900) return -1;
+
+		/*
+		 *  Swap the year and the day.
+		 */
+		i = tm->tm_year;
+		tm->tm_year = tm->tm_mday - 1900;
+		tm->tm_mday = i;
+	}
+
+	/*
+	 *  If the day is out of range, die.
+	 */
+	if ((tm->tm_mday < 1) || (tm->tm_mday > 31)) {
+		return -1;
+	}
+
+	/*
+	 *	There may be %H:%M:%S.  Parse it in a hacky way.
+	 */
+	if (f[3]) {
+		f[0] = f[3];	/* HH */
+		f[1] = strchr(f[0], ':'); /* find : separator */
+		if (!f[1]) return -1;
+
+		*(f[1]++) = '\0'; /* nuke it, and point to MM:SS */
+
+		f[2] = strchr(f[1], ':'); /* find : separator */
+		if (f[2]) {
+		  *(f[2]++) = '\0';	/* nuke it, and point to SS */
+		  tm->tm_sec = atoi(f[2]);
+		}			/* else leave it as zero */
+
+		tm->tm_hour = atoi(f[0]);
+		tm->tm_min = atoi(f[1]);
+	}
+
+	/*
+	 *  Returns -1 on error.
+	 */
+	t = mktime(tm);
+	if (t == (time_t) -1) return -1;
+
+	*date = t;
+
+	return 0;
+}
+
+#ifdef TALLOC_DEBUG
+void fr_talloc_verify_cb(UNUSED const void *ptr, UNUSED int depth,
+			 UNUSED int max_depth, UNUSED int is_ref,
+			 UNUSED void *private_data)
+{
+	/* do nothing */
+}
+#endif

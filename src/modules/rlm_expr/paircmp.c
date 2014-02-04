@@ -24,6 +24,7 @@
 RCSID("$Id$")
 
 #include <freeradius-devel/radiusd.h>
+#include <freeradius-devel/rad_assert.h>
 #include "rlm_expr.h"
 
 /*
@@ -67,7 +68,11 @@ static int presufcmp(UNUSED void *instance,
 	if (!request) {
 		return -1;
 	}
-	
+
+	VERIFY_VP(request);
+	VERIFY_VP(check);
+	rad_assert(request->da->type == PW_TYPE_STRING);
+
 	name = request->vp_strvalue;
 
 #if 0 /* DEBUG */
@@ -95,7 +100,7 @@ static int presufcmp(UNUSED void *instance,
 	if (ret != 0) {
 		return ret;
 	}
-	
+
 	/*
 	 *	If Strip-User-Name == No, then don't do any more.
 	 */
@@ -235,13 +240,14 @@ void pair_builtincompare_add(void *instance)
 {
 	int i;
 
-	paircompare_register(PW_PREFIX, PW_USER_NAME, presufcmp, instance);
-	paircompare_register(PW_SUFFIX, PW_USER_NAME, presufcmp, instance);
-	paircompare_register(PW_CONNECT_RATE, PW_CONNECT_INFO, connectcmp, instance);
-	paircompare_register(PW_PACKET_TYPE, 0, packetcmp, instance);
-	paircompare_register(PW_RESPONSE_PACKET_TYPE, 0, responsecmp, instance);
+	paircompare_register(dict_attrbyvalue(PW_PREFIX, 0), dict_attrbyvalue(PW_USER_NAME, 0), false, presufcmp, instance);
+	paircompare_register(dict_attrbyvalue(PW_SUFFIX, 0), dict_attrbyvalue(PW_USER_NAME, 0), false, presufcmp, instance);
+	paircompare_register(dict_attrbyvalue(PW_CONNECT_RATE, 0), dict_attrbyvalue(PW_CONNECT_INFO, 0),
+				false, connectcmp, instance);
+	paircompare_register(dict_attrbyvalue(PW_PACKET_TYPE, 0), NULL, true, packetcmp, instance);
+	paircompare_register(dict_attrbyvalue(PW_RESPONSE_PACKET_TYPE, 0), NULL, true, responsecmp, instance);
 
 	for (i = 0; generic_attrs[i] != 0; i++) {
-		paircompare_register(generic_attrs[i], -1, genericcmp, instance);
+		paircompare_register(dict_attrbyvalue(generic_attrs[i], 0), NULL, true, genericcmp, instance);
 	}
 }

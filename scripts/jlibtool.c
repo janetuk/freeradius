@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 
@@ -91,8 +92,8 @@
 #  define RPATH				"-rpath"
 #  define SHARED_OPTS			"-shared"
 #  define MODULE_OPTS			"-shared"
-#  define DYNAMIC_LINK_OPTS		"-export-dynamic"
 #  define LINKER_FLAG_PREFIX		"-Wl,"
+#  define DYNAMIC_LINK_OPTS		LINKER_FLAG_PREFIX "-export-dynamic"
 #  define ADD_MINUS_L
 #  define LD_RUN_PATH			"LD_RUN_PATH"
 #  define LD_LIBRARY_PATH		"LD_LIBRARY_PATH"
@@ -146,8 +147,9 @@
 #  define RPATH				"-Brpath"
 #  define SHARED_OPTS			"-G"
 #  define MODULE_OPTS			"-G"
-#  define DYNAMIC_LINK_OPTS		"-Wl,-Blargedynsym"
 #  define LINKER_FLAG_PREFIX		"-Wl,"
+#  define DYNAMIC_LINK_OPTS		LINKER_FLAG_PREFIX "-Blargedynsym"
+
 #  define NEED_SNPRINTF
 #  define LD_RUN_PATH			"LD_RUN_PATH"
 #  define LD_LIBRARY_PATH		"LD_LIBRARY_PATH"
@@ -255,13 +257,13 @@ enum lib_type {
 };
 
 typedef struct {
-	const char **vals;
+	char const **vals;
 	int num;
 } count_chars;
 
 typedef struct {
-	const char *normal;
-	const char *install;
+	char const *normal;
+	char const *install;
 } library_name;
 
 typedef struct {
@@ -286,13 +288,13 @@ typedef struct {
 	enum output_type output;
 	options_t options;
 
-	const char *output_name;
-	const char *fake_output_name;
-	const char *basename;
+	char const *output_name;
+	char const *fake_output_name;
+	char const *basename;
 
-	const char *install_path;
-	const char *compiler;
-	const char *program;
+	char const *install_path;
+	char const *compiler;
+	char const *program;
 	count_chars *program_opts;
 
 	count_chars *arglist;
@@ -308,12 +310,12 @@ typedef struct {
 	library_opts static_opts;
 	library_opts shared_opts;
 
-	const char *version_info;
-	const char *undefined_flag;
+	char const *version_info;
+	char const *undefined_flag;
 } command_t;
 
 #ifdef RPATH
-static void add_rpath(count_chars *cc, const char *path);
+static void add_rpath(count_chars *cc, char const *path);
 #endif
 
 static void usage(int code)
@@ -367,7 +369,7 @@ static void usage(int code)
  * This is portable to any POSIX-compliant system has /dev/null
  */
 static FILE *f = NULL;
-static int vsnprintf(char *str, size_t n, const char *fmt, va_list ap)
+static int vsnprintf(char *str, size_t n, char const *fmt, va_list ap)
 {
 	int res;
 
@@ -389,7 +391,7 @@ static int vsnprintf(char *str, size_t n, const char *fmt, va_list ap)
 	return res;
 }
 
-static int snprintf(char *str, size_t n, const char *fmt, ...)
+static int snprintf(char *str, size_t n, char const *fmt, ...)
 {
 	va_list ap;
 	int res;
@@ -404,31 +406,31 @@ static int snprintf(char *str, size_t n, const char *fmt, ...)
 static void *lt_malloc(size_t size)
 {
 	void *out;
-	
+
 	out = malloc(size);
 	if (!out) {
 		ERROR("Failed allocating %zu bytes, OOM", size);
 		exit(1);
 	}
-	
+
 	return out;
 }
 
 static void lt_const_free(const void *ptr)
 {
 	void *tmp;
-	
+
 	memcpy(&tmp, &ptr, sizeof(tmp));
 	free(tmp);
 }
 
 static void init_count_chars(count_chars *cc)
 {
-	cc->vals = (const char**) lt_malloc(PATH_MAX*sizeof(char*));
+	cc->vals = (char const**) lt_malloc(PATH_MAX*sizeof(char*));
 	cc->num = 0;
 }
 
-static count_chars *alloc_countchars()
+static count_chars *alloc_countchars(void)
 {
 	count_chars *out;
 	out = lt_malloc(sizeof(count_chars));
@@ -436,7 +438,7 @@ static count_chars *alloc_countchars()
 		exit(1);
 	}
 	init_count_chars(out);
-	
+
 	return out;
 }
 
@@ -450,17 +452,20 @@ static void clear_count_chars(count_chars *cc)
 	cc->num = 0;
 }
 
-static void push_count_chars(count_chars *cc, const char *newval)
+static void push_count_chars(count_chars *cc, char const *newval)
 {
 	cc->vals[cc->num++] = newval;
 }
 
-static void pop_count_chars(count_chars *cc)
+static char const *pop_count_chars(count_chars *cc)
 {
-	cc->num--;
+	if (!cc->num) {
+		return NULL;
+	}
+	return cc->vals[--cc->num];
 }
 
-static void insert_count_chars(count_chars *cc, const char *newval, int position)
+static void insert_count_chars(count_chars *cc, char const *newval, int position)
 {
 	int i;
 
@@ -482,7 +487,7 @@ static void append_count_chars(count_chars *cc, count_chars *cctoadd)
 	}
 }
 
-static const char *flatten_count_chars(count_chars *cc, int space)
+static char const *flatten_count_chars(count_chars *cc, char delim)
 {
 	int i, size;
 	char *newval;
@@ -491,20 +496,22 @@ static const char *flatten_count_chars(count_chars *cc, int space)
 	for (i = 0; i < cc->num; i++) {
 		if (cc->vals[i]) {
 			size += strlen(cc->vals[i]) + 1;
-			if (space) {
-			  size++;
+			if (delim) {
+				size++;
 			}
 		}
 	}
 
 	newval = (char*)lt_malloc(size + 1);
-	newval[0] = 0;
+	newval[0] = '\0';
 
 	for (i = 0; i < cc->num; i++) {
 		if (cc->vals[i]) {
 			strcat(newval, cc->vals[i]);
-			if (space) {
-				strcat(newval, " ");
+			if (delim) {
+				size_t len = strlen(newval);
+				newval[len] = delim;
+				newval[len + 1] = '\0';
 			}
 		}
 	}
@@ -512,12 +519,12 @@ static const char *flatten_count_chars(count_chars *cc, int space)
 	return newval;
 }
 
-static char *shell_esc(const char *str)
+static char *shell_esc(char const *str)
 {
 	int in_quote = 0;
 	char *cmd;
-	unsigned char *d;
-	const unsigned char *s;
+	uint8_t *d;
+	uint8_t const *s;
 
 	cmd = (char *)lt_malloc(2 * strlen(str) + 3);
 	d = (unsigned char *)cmd;
@@ -546,12 +553,12 @@ static char *shell_esc(const char *str)
 	return cmd;
 }
 
-static int external_spawn(command_t *cmd, const char *file, const char **argv)
+static int external_spawn(command_t *cmd, char const *file, char const **argv)
 {
 	file = file;		/* -Wunused */
 
 	if (!cmd->options.silent) {
-		const char **argument = argv;
+		char const **argument = argv;
 		NOTICE("Executing: ");
 		while (*argument) {
 			NOTICE("%s ", *argument);
@@ -589,8 +596,8 @@ static int run_command(command_t *cmd, count_chars *cc)
 	int ret;
 	char *command;
 	char *tmp;
-	const char *raw;
-	const char *spawn_args[4];
+	char const *raw;
+	char const *spawn_args[4];
 	count_chars tmpcc;
 
 	init_count_chars(&tmpcc);
@@ -603,9 +610,9 @@ static int run_command(command_t *cmd, count_chars *cc)
 
 	append_count_chars(&tmpcc, cc);
 
-	raw = flatten_count_chars(&tmpcc, 1);
+	raw = flatten_count_chars(&tmpcc, ' ');
 	command = shell_esc(raw);
-	
+
 	memcpy(&tmp, &raw, sizeof(tmp));
 	free(tmp);
 
@@ -614,9 +621,9 @@ static int run_command(command_t *cmd, count_chars *cc)
 	spawn_args[2] = command;
 	spawn_args[3] = NULL;
 	ret = external_spawn(cmd, spawn_args[0], spawn_args);
-	
+
 	free(command);
-	
+
 	return ret;
 }
 
@@ -626,7 +633,7 @@ static int run_command(command_t *cmd, count_chars *cc)
  */
 #define printc(_x,_y) if (!value || !strcmp(value, _x)) printf(_x "=\"%s\"\n", _y)
 
-static void print_config(const char *value)
+static void print_config(char const *value)
 {
 #ifdef LD_RUN_PATH
 	printc("runpath_var", LD_RUN_PATH);
@@ -675,7 +682,7 @@ static void print_config(const char *value)
 /*
  * Add a directory to the runtime library search path.
  */
-static void add_runtime_dir_lib(const char *arg, command_t *cmd)
+static void add_runtime_dir_lib(char const *arg, command_t *cmd)
 {
 #ifdef RPATH
 	add_rpath(cmd->shared_opts.dependencies, arg);
@@ -685,7 +692,7 @@ static void add_runtime_dir_lib(const char *arg, command_t *cmd)
 #endif
 }
 
-static int parse_long_opt(const char *arg, command_t *cmd)
+static int parse_long_opt(char const *arg, command_t *cmd)
 {
 	char *equal_pos = strchr(arg, '=');
 	char var[50];
@@ -694,13 +701,15 @@ static int parse_long_opt(const char *arg, command_t *cmd)
 	if (equal_pos) {
 		strncpy(var, arg, equal_pos - arg);
 		var[equal_pos - arg] = 0;
-	if (strlen(equal_pos + 1) >= sizeof(var)) return 0;
+		if (strlen(equal_pos + 1) >= sizeof(var)) {
+			return 0;
+		}
 		strcpy(value, equal_pos + 1);
 	} else {
 		strncpy(var, arg, sizeof(var) - 1);
 		var[sizeof(var) - 1] = '\0';
-		
-	value[0] = '\0';
+
+		value[0] = '\0';
 	}
 
 	if (strcmp(var, "silent") == 0) {
@@ -733,29 +742,29 @@ static int parse_long_opt(const char *arg, command_t *cmd)
 			ERROR("Unknown mode \"%s\"\n", value);
 			exit(1);
 		}
-		
+
 	} else if (strcmp(var, "shared") == 0) {
 		if ((cmd->mode == MODE_LINK) && (cmd->output == OUT_GENERAL)) {
 			cmd->output = OUT_DYNAMIC_LIB_ONLY;
 		}
 		cmd->options.shared = SHARE_SHARED;
-		
+
 	} else if (strcmp(var, "export-all") == 0) {
 		cmd->options.export_all = 1;
-		
+
 	} else if (strcmp(var, "dry-run") == 0) {
 		NOTICE("Dry-run mode on!\n");
 		cmd->options.dry_run = 1;
-		
+
 	} else if (strcmp(var, "version") == 0) {
 		NOTICE("Version " VERSION "\n");
-		
+
 	} else if (strcmp(var, "help") == 0) {
 		usage(0);
-		
+
 	} else if (strcmp(var, "config") == 0) {
 		print_config(value);
-		
+
 		exit(0);
 	} else {
 		return 0;
@@ -765,7 +774,7 @@ static int parse_long_opt(const char *arg, command_t *cmd)
 }
 
 /* Return 1 if we eat it. */
-static int parse_short_opt(const char *arg, command_t *cmd)
+static int parse_short_opt(char const *arg, command_t *cmd)
 {
 	if (strcmp(arg, "export-dynamic") == 0) {
 		cmd->options.export_dynamic = 1;
@@ -842,7 +851,7 @@ static char *truncate_dll_name(char *path)
 	if (ext == NULL) {
 		return tmppath;
 	}
-	
+
 	len = ext - newname;
 
 	if (strncmp(newname, "mod_", 4) == 0) {
@@ -858,7 +867,7 @@ static char *truncate_dll_name(char *path)
 }
 #endif
 
-static long safe_strtol(const char *nptr, const char **endptr, int base)
+static long safe_strtol(char const *nptr, char const **endptr, int base)
 {
 	long rv;
 
@@ -873,7 +882,7 @@ static long safe_strtol(const char *nptr, const char **endptr, int base)
 	return rv;
 }
 
-static void safe_mkdir(command_t *cmd, const char *path)
+static void safe_mkdir(command_t *cmd, char const *path)
 {
 	int status;
 	mode_t old_umask;
@@ -896,10 +905,10 @@ static void safe_mkdir(command_t *cmd, const char *path)
  * @param path to break apart.
  * @return pointer in path.
  */
-static const char *file_name(const char *path)
+static char const *file_name(char const *path)
 {
-	const char *name;
-	
+	char const *name;
+
 	name = strrchr(path, '/');
 	if (!name) {
 		name = strrchr(path, '\\'); 	/* eww windows? */
@@ -920,21 +929,21 @@ static const char *file_name(const char *path)
  * @param path to check
  * @return pointer in path.
  */
-static const char *file_name_stripped(const char *path)
+static char const *file_name_stripped(char const *path)
 {
-	const char *name;
-	const char *ext;
+	char const *name;
+	char const *ext;
 
 	name = file_name(path);
 	ext = strrchr(name, '.');
 
 	if (ext) {
 		char *trimmed;
-		
+
 		trimmed = lt_malloc(ext - name + 1);
 		strncpy(trimmed, name, ext - name);
 		trimmed[ext-name] = 0;
-		
+
 		return trimmed;
 	}
 
@@ -943,7 +952,7 @@ static const char *file_name_stripped(const char *path)
 #endif
 
 /* version_info is in the form of MAJOR:MINOR:PATCH */
-static const char *darwin_dynamic_link_function(const char *version_info)
+static char const *darwin_dynamic_link_function(char const *version_info)
 {
 	char *newarg;
 	long major, minor, patch;
@@ -1007,7 +1016,7 @@ static void add_dotlibs(char *buffer)
 	memcpy(name, ".libs/", 6);
 }
 
-static char *gen_library_name(const char *name, enum lib_type genlib)
+static char *gen_library_name(char const *name, enum lib_type genlib)
 {
 	char *newarg, *newext;
 
@@ -1028,7 +1037,7 @@ static char *gen_library_name(const char *name, enum lib_type genlib)
 	if (!newext) {
 		ERROR("Library path does not have an extension");
 	free(newarg);
-	
+
 	return NULL;
 	}
 	newext++;
@@ -1053,7 +1062,7 @@ static char *gen_library_name(const char *name, enum lib_type genlib)
 	return newarg;
 }
 
-static char *gen_install_name(const char *name, enum lib_type genlib)
+static char *gen_install_name(char const *name, enum lib_type genlib)
 {
 	char *newname;
 	int rv;
@@ -1073,7 +1082,7 @@ static char *gen_install_name(const char *name, enum lib_type genlib)
 	return newname;
 }
 
-static const char *check_object_exists(command_t *cmd, const char *arg, int arglen)
+static char const *check_object_exists(command_t *cmd, char const *arg, int arglen)
 {
 	char *newarg, *ext;
 	struct stat sb;
@@ -1084,12 +1093,12 @@ static const char *check_object_exists(command_t *cmd, const char *arg, int argl
 	ext = newarg + arglen;
 
 	strcpy(ext, OBJECT_EXT);
-	
+
 	DEBUG("Checking (obj): %s\n", newarg);
 	if (stat(newarg, &sb) == 0) {
 		return newarg;
 	}
-	
+
 	free(newarg);
 
 	return NULL;
@@ -1099,8 +1108,8 @@ static const char *check_object_exists(command_t *cmd, const char *arg, int argl
  * 0 - no .libs suffix
  * 1 - .libs suffix
  */
-static char *check_library_exists(command_t *cmd, const char *arg, int pathlen,
-				  int libdircheck, enum lib_type*libtype)
+static char *check_library_exists(command_t *cmd, char const *arg, int pathlen,
+				  int libdircheck, enum lib_type *libtype)
 {
 	char *newarg, *ext;
 	int pass, rv, newpathlen;
@@ -1120,7 +1129,7 @@ static char *check_library_exists(command_t *cmd, const char *arg, int pathlen,
 	if (!ext) {
 		ERROR("Error: Library path does not have an extension");
 		free(newarg);
-	
+
 		return NULL;
 	}
 	ext++;
@@ -1165,13 +1174,13 @@ static char *check_library_exists(command_t *cmd, const char *arg, int pathlen,
 	if (rv == 0) {
 		return newarg;
 	}
-	
+
 	free(newarg);
 
 	return NULL;
 }
 
-static char * load_install_path(const char *arg)
+static char * load_install_path(char const *arg)
 {
 	FILE *f;
 	char *path;
@@ -1180,28 +1189,28 @@ static char * load_install_path(const char *arg)
 	if (f == NULL) {
 		return NULL;
 	}
-	
+
 	path = lt_malloc(PATH_MAX);
 
 	fgets(path, PATH_MAX, f);
 	fclose(f);
-	
+
 	if (path[strlen(path)-1] == '\n') {
 		path[strlen(path)-1] = '\0';
 	}
-	
+
 	/* Check that we have an absolute path.
 	 * Otherwise the file could be a GNU libtool file.
 	 */
 	if (path[0] != '/') {
 		free(path);
-		
+
 		return NULL;
 	}
 	return path;
 }
 
-static char * load_noinstall_path(const char *arg, int pathlen)
+static char *load_noinstall_path(char const *arg, int pathlen)
 {
 	char *newarg, *expanded_path;
 	int newpathlen;
@@ -1235,7 +1244,7 @@ static void add_dynamic_link_opts(command_t *cmd, count_chars *args)
 #ifdef DYNAMIC_LINK_OPTS
 	if (cmd->options.pic_mode != PIC_AVOID) {
 		DEBUG("Adding linker opt: %s\n", DYNAMIC_LINK_OPTS);
-		
+
 		push_count_chars(args, DYNAMIC_LINK_OPTS);
 		if (cmd->undefined_flag) {
 			push_count_chars(args, "-undefined");
@@ -1253,7 +1262,7 @@ static void add_dynamic_link_opts(command_t *cmd, count_chars *args)
 		else {
 #ifdef DYNAMIC_LINK_UNDEFINED
 			DEBUG("Adding linker opt: %s\n", DYNAMIC_LINK_UNDEFINED);
-			
+
 			push_count_chars(args, DYNAMIC_LINK_UNDEFINED);
 #endif
 		}
@@ -1263,7 +1272,7 @@ static void add_dynamic_link_opts(command_t *cmd, count_chars *args)
 
 /* Read the final install location and add it to runtime library search path. */
 #ifdef RPATH
-static void add_rpath(count_chars *cc, const char *path)
+static void add_rpath(count_chars *cc, char const *path)
 {
 	int size = 0;
 	char *tmp;
@@ -1288,9 +1297,9 @@ static void add_rpath(count_chars *cc, const char *path)
 	push_count_chars(cc, tmp);
 }
 
-static void add_rpath_file(count_chars *cc, const char *arg)
+static void add_rpath_file(count_chars *cc, char const *arg)
 {
-	const char *path;
+	char const *path;
 
 	path = load_install_path(arg);
 	if (path) {
@@ -1299,9 +1308,9 @@ static void add_rpath_file(count_chars *cc, const char *arg)
 	}
 }
 
-static void add_rpath_noinstall(count_chars *cc, const char *arg, int pathlen)
+static void add_rpath_noinstall(count_chars *cc, char const *arg, int pathlen)
 {
-	const char *path;
+	char const *path;
 
 	path = load_noinstall_path(arg, pathlen);
 	if (path) {
@@ -1312,10 +1321,10 @@ static void add_rpath_noinstall(count_chars *cc, const char *arg, int pathlen)
 #endif
 
 #ifdef DYNAMIC_LINK_NO_INSTALL
-static void add_dylink_noinstall(count_chars *cc, const char *arg, int pathlen,
+static void add_dylink_noinstall(count_chars *cc, char const *arg, int pathlen,
 						  int extlen)
 {
-	const char *install_path, *current_path, *name;
+	char const *install_path, *current_path, *name;
 	char *exp_argument;
 	int i_p_len, c_p_len, name_len, dyext_len, cur_len;
 
@@ -1362,7 +1371,7 @@ static void add_dylink_noinstall(count_chars *cc, const char *arg, int pathlen,
 
 #ifdef ADD_MINUS_L
 /* use -L -llibname to allow to use installed libraries */
-static void add_minus_l(count_chars *cc, const char *arg)
+static void add_minus_l(count_chars *cc, char const *arg)
 {
 	char *newarg;
 	char *name = strrchr(arg, '/');
@@ -1388,7 +1397,7 @@ static void add_minus_l(count_chars *cc, const char *arg)
 #endif
 
 #if 0
-static void add_linker_flag_prefix(count_chars *cc, const char *arg)
+static void add_linker_flag_prefix(count_chars *cc, char const *arg)
 {
 #ifndef LINKER_FLAG_PREFIX
 	push_count_chars(cc, arg);
@@ -1402,15 +1411,15 @@ static void add_linker_flag_prefix(count_chars *cc, const char *arg)
 }
 #endif
 
-static int explode_static_lib(command_t *cmd, const char *lib)
+static int explode_static_lib(command_t *cmd, char const *lib)
 {
 	count_chars tmpdir_cc, libname_cc;
-	const char *tmpdir, *libname;
+	char const *tmpdir, *libname;
 	char savewd[PATH_MAX];
-	const char *name;
+	char const *name;
 	DIR *dir;
 	struct dirent *entry;
-	const char *lib_args[4];
+	char const *lib_args[4];
 
 	/* Bah! */
 	if (cmd->options.dry_run) {
@@ -1426,7 +1435,7 @@ static int explode_static_lib(command_t *cmd, const char *lib)
 	tmpdir = flatten_count_chars(&tmpdir_cc, 0);
 
 	NOTICE("Making: %s\n", tmpdir);
-	
+
 	safe_mkdir(cmd, tmpdir);
 
 	push_count_chars(cmd->tmp_dirs, tmpdir);
@@ -1435,7 +1444,7 @@ static int explode_static_lib(command_t *cmd, const char *lib)
 
 	if (chdir(tmpdir) != 0) {
 		NOTICE("Warning: could not explode %s\n", lib);
-		
+
 		return 1;
 	}
 
@@ -1483,13 +1492,13 @@ static int explode_static_lib(command_t *cmd, const char *lib)
 	return 0;
 }
 
-static int parse_input_file_name(const char *arg, command_t *cmd)
+static int parse_input_file_name(char const *arg, command_t *cmd)
 {
-	const char *ext = strrchr(arg, '.');
-	const char *name;
+	char const *ext = strrchr(arg, '.');
+	char const *name;
 	int pathlen;
 	enum lib_type libtype;
-	const char *newarg;
+	char const *newarg;
 
 	/* Can't guess the extension */
 	if (!ext) {
@@ -1504,19 +1513,19 @@ static int parse_input_file_name(const char *arg, command_t *cmd)
 	 *	Were linking and have an archived object or object file
 	 *	push it onto the list of object files which'll get used
 	 *	to create the input files list for the linker.
-	 *	
+	 *
 	 *	We assume that these are outside of the project were building,
 	 *	as there's no reason to create .a files as part of the build
 	 *	process.
 	 */
 	if (!strcmp(ext, STATIC_LIB_EXT) && (cmd->mode == MODE_LINK)) {
 		struct stat sb;
-		
+
 		if (!stat(arg, &sb)) {
 			DEBUG("Adding object: %s\n", arg);
-			
+
 			push_count_chars(cmd->obj_files, arg);
-			
+
 			return 1;
 		}
 	}
@@ -1531,15 +1540,15 @@ static int parse_input_file_name(const char *arg, command_t *cmd)
 			ERROR("Can not find suitable object file for %s\n", arg);
 			exit(1);
 		}
-		
+
 		if (cmd->mode == MODE_LINK) {
 			DEBUG("Adding object: %s\n", newarg);
-			
+
 			push_count_chars(cmd->obj_files, newarg);
 		} else {
 			push_count_chars(cmd->arglist, newarg);
 		}
-		
+
 		return 1;
 	}
 
@@ -1604,11 +1613,11 @@ static int parse_input_file_name(const char *arg, command_t *cmd)
 			 */
 			if (cmd->output == OUT_LIB) {
 				char *tmp;
-				
+
 				tmp = strdup(arg);
 				tmp[pathlen] = '\0';
 				push_count_chars(cmd->arglist, tmp);
-				
+
 			} else {
 				cmd->output = OUT_LIB;
 				cmd->output_name = arg;
@@ -1628,7 +1637,7 @@ static int parse_input_file_name(const char *arg, command_t *cmd)
 		default:
 			break;
 		}
-	
+
 		return 1;
 	}
 
@@ -1638,7 +1647,7 @@ static int parse_input_file_name(const char *arg, command_t *cmd)
 			char *tmp = lt_malloc(strlen(arg) + 4);
 			strcpy(tmp, arg);
 			strcpy(strrchr(tmp, '.') + 1, "lo");
-			
+
 			cmd->basename = tmp;
 
 			cmd->fake_output_name = strrchr(cmd->basename, '/');
@@ -1653,12 +1662,12 @@ static int parse_input_file_name(const char *arg, command_t *cmd)
 	return 0;
 }
 
-static int parse_output_file_name(const char *arg, command_t *cmd)
+static int parse_output_file_name(char const *arg, command_t *cmd)
 {
-	const char *name;
-	const char *ext;
+	char const *name;
+	char const *ext;
 	char *newarg = NULL;
-	int pathlen;
+	size_t pathlen;
 
 	cmd->fake_output_name = arg;
 
@@ -1804,21 +1813,21 @@ static int parse_output_file_name(const char *arg, command_t *cmd)
 	if (strcmp(ext, DYNAMIC_LIB_EXT) == 0) {
 		ERROR("Please build libraries with .la target, not ."
 		      DYNAMIC_LIB_EXT "\n");
-			
+
 		exit(1);
 	}
 
 	if (strcmp(ext, STATIC_LIB_EXT) == 0) {
 		ERROR("Please build libraries with .la target, not ."
 		      STATIC_LIB_EXT "\n");
-			
+
 		exit(1);
 	}
 
 	return 0;
 }
 
-static const char *automode(const char *arg, command_t *cmd)
+static char const *automode(char const *arg, command_t *cmd)
 {
 	if (cmd->mode != MODE_UNKNOWN) return arg;
 
@@ -1835,7 +1844,7 @@ static const char *automode(const char *arg, command_t *cmd)
 		arg = LINK_C;
 		cmd->mode = MODE_LINK;
 	}
-	
+
 	return arg;
 }
 
@@ -1884,7 +1893,7 @@ static void generate_def_file(command_t *cmd)
 			export_args[num_export_args++] = "-c";
 			export_args[num_export_args++] = cmd;
 			export_args[num_export_args++] = NULL;
-			external_spawn(cmd, export_args[0], (const char**)export_args);
+			external_spawn(cmd, export_args[0], (char const**)export_args);
 			cmd->arglist[cmd->num_args++] = strdup(def_file);
 
 			/* Now make an import library for the dll */
@@ -1899,14 +1908,14 @@ static void generate_def_file(command_t *cmd)
 			if (ext) {
 				*ext = '\0';
 			}
-			
+
 			strcat(implib_file, ".");
 			strcat(implib_file, STATIC_LIB_EXT);
 
 			export_args[num_export_args++] = implib_file;
 			export_args[num_export_args++] = def_file;
 			export_args[num_export_args++] = NULL;
-			external_spawn(cmd, export_args[0], (const char**)export_args);
+			external_spawn(cmd, export_args[0], (char const**)export_args);
 
 		}
 	}
@@ -1914,7 +1923,7 @@ static void generate_def_file(command_t *cmd)
 #endif
 
 #if 0
-static const char* expand_path(const char *relpath)
+static char const* expand_path(char const *relpath)
 {
 	char foo[PATH_MAX], *newpath;
 
@@ -1956,17 +1965,17 @@ static void link_fixup(command_t *cmd)
 				ERROR("Installation mode requires -rpath\n");
 				exit(1);
 			}
-			
+
 			{
 				char *tmp = lt_malloc(PATH_MAX);
 				strcpy(tmp, cmd->install_path);
-			
+
 				if (cmd->shared_name.install) {
 					strcat(tmp, strrchr(cmd->shared_name.install, '/'));
 				} else {
 					strcat(tmp, strrchr(cmd->shared_name.normal, '/'));
 				}
-			
+
 				push_count_chars(cmd->shared_opts.normal, tmp);
 			}
 #endif
@@ -2095,12 +2104,12 @@ static int run_mode(command_t *cmd)
 			 * This means that when we install the static archive, we need to
 			 * rerun ranlib afterwards.
 			 */
-			const char *lib_args[3], *static_lib_name;
-			
+			char const *lib_args[3], *static_lib_name;
+
 			{
 				char *tmp;
 				size_t len1, len2;
-				
+
 				len1 = strlen(cmd->arglist->vals[cmd->arglist->num - 1]);
 
 				static_lib_name = file_name(cmd->static_name.install);
@@ -2115,9 +2124,9 @@ static int run_mode(command_t *cmd)
 				lib_args[0] = RANLIB;
 				lib_args[1] = tmp;
 				lib_args[2] = NULL;
-				
+
 				external_spawn(cmd, RANLIB, lib_args);
-				
+
 				free(tmp);
 			}
 #endif
@@ -2144,7 +2153,7 @@ static int run_mode(command_t *cmd)
 		if (cmd->output == OUT_STATIC_LIB_ONLY ||
 			cmd->output == OUT_LIB) {
 #ifdef RANLIB
-			const char *lib_args[3];
+			char const *lib_args[3];
 #endif
 			/* Removes compiler! */
 			cmd->program = LIBRARIAN;
@@ -2195,11 +2204,11 @@ static int run_mode(command_t *cmd)
 	case MODE_EXECUTE:
 	{
 		char *l, libpath[PATH_MAX];
-		
+
 		if (strlen(cmd->arglist->vals[0]) >= PATH_MAX) {
 			ERROR("Libpath too long no buffer space");
 			rv = 1;
-			
+
 			goto finish;
 		}
 
@@ -2226,12 +2235,12 @@ static int run_mode(command_t *cmd)
 	}
 
 	finish:
-	
+
 	free(cctemp);
 	return rv;
 }
 
-static void cleanup_tmp_dir(const char *dirname)
+static void cleanup_tmp_dir(char const *dirname)
 {
 	DIR *dir;
 	struct dirent *entry;
@@ -2241,7 +2250,7 @@ static void cleanup_tmp_dir(const char *dirname)
 	if (!dir) {
 		return;
 	}
-	
+
 	if ((strlen(dirname) + 1 + sizeof(entry->d_name)) >= sizeof(fullname)) {
 		ERROR("Dirname too long, out of buffer space");
 
@@ -2259,7 +2268,7 @@ static void cleanup_tmp_dir(const char *dirname)
 	}
 
 	rmdir(dirname);
-	
+
 	(void) closedir(dir);
 }
 
@@ -2275,7 +2284,7 @@ static void cleanup_tmp_dirs(command_t *cmd)
 static int ensure_fake_uptodate(command_t *cmd)
 {
 	/* FIXME: could do the stat/touch here, but nah... */
-	const char *touch_args[3];
+	char const *touch_args[3];
 
 	if (cmd->mode == MODE_INSTALL) {
 		return 0;
@@ -2313,7 +2322,7 @@ static int add_for_runtime(command_t *cmd)
 static void parse_args(int argc, char *argv[], command_t *cmd)
 {
 	int a;
-	const char *arg, *base;
+	char const *arg, *base;
 	int arg_used;
 
 	/*
@@ -2330,7 +2339,7 @@ static void parse_args(int argc, char *argv[], command_t *cmd)
 	arg = automode(base, cmd);
 	if (arg != base) {
 		push_count_chars(cmd->arglist, arg);
-		
+
 		assert(cmd->mode != MODE_UNKNOWN);
 	}
 
@@ -2405,6 +2414,11 @@ static void parse_args(int argc, char *argv[], command_t *cmd)
 		arg = argv[a];
 		arg_used = 1;
 
+		if (cmd->mode == MODE_EXECUTE) {
+			push_count_chars(cmd->arglist, arg);
+			continue;
+		}
+
 		if (arg[0] == '-') {
 			/*
 			 *	Double dashed (long) single dash (short)
@@ -2414,7 +2428,12 @@ static void parse_args(int argc, char *argv[], command_t *cmd)
 				parse_short_opt(arg + 1, cmd);
 
 			if (arg_used) continue;
-			
+
+			/*
+			 *	Ignore all options after the '--execute'
+			 */
+			if (cmd->mode == MODE_EXECUTE) continue;
+
 			/*
 			 *	We haven't done anything with it yet, but
 			 *	there are still some arg/value pairs.
@@ -2437,7 +2456,7 @@ static void parse_args(int argc, char *argv[], command_t *cmd)
 
 					push_count_chars(cmd->arglist, arg);
 					arg = argv[++a];
-					
+
 					NOTICE(" %s\n", arg);
 
 					push_count_chars(cmd->arglist, arg);
@@ -2449,23 +2468,23 @@ static void parse_args(int argc, char *argv[], command_t *cmd)
 					/* Aha, we should try to link both! */
 					cmd->install_path = argv[++a];
 					arg_used = 1;
-				
+
 				} else if (!strcmp(arg + 1, "release")) {
 					/* Store for later deciphering */
 					cmd->version_info = argv[++a];
 					arg_used = 1;
-					
+
 				} else if (!strcmp(arg + 1, "version-info")) {
 					/* Store for later deciphering */
 					cmd->version_info = argv[++a];
 					arg_used = 1;
-					
+
 				} else if (!strcmp(arg + 1,
 						   "export-symbols-regex")) {
 					/* Skip the argument. */
 					++a;
 					arg_used = 1;
-					
+
 				} else if (!strcmp(arg + 1, "undefined")) {
 					cmd->undefined_flag = argv[++a];
 					arg_used = 1;
@@ -2473,7 +2492,7 @@ static void parse_args(int argc, char *argv[], command_t *cmd)
 				 *	Add dir to runtime library search path.
 				 */
 				} else if ((arg[1] == 'R') && !arg[2]) {
-					
+
 					add_runtime_dir_lib(argv[++a], cmd);
 					arg_used = 1;
 				}
@@ -2501,7 +2520,7 @@ static void parse_args(int argc, char *argv[], command_t *cmd)
 			}
 
 			DEBUG("Adding: %s\n", arg);
-			
+
 			push_count_chars(cmd->arglist, arg);
 		}
 	}
@@ -2551,6 +2570,6 @@ int main(int argc, char *argv[])
 	}
 
 	cleanup_tmp_dirs(&cmd);
-	
+
 	return rc;
 }

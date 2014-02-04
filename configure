@@ -658,6 +658,7 @@ GIT
 FR_MAKEFLAGS
 MAKE
 GMAKE
+clang_path
 RANLIB
 EGREP
 GREP
@@ -672,6 +673,9 @@ CPPFLAGS
 LDFLAGS
 CFLAGS
 CC
+DARWIN_CFLAGS
+XCODEBUILD
+SW_VERS
 target_os
 target_vendor
 target_cpu
@@ -740,15 +744,19 @@ with_tcp
 with_vmps
 with_dhcp
 with_static_modules
+with_shared_libs
 with_modules
 with_experimental_modules
+with_udpfromto
 with_openssl
 with_openssl_includes
 with_openssl_libraries
 with_rlm_FOO_lib_dir
 with_rlm_FOO_include_dir
-with_udpfromto
 with_talloc_include_dir
+with_talloc_lib_dir
+with_pcap_include_dir
+with_pcap_lib_dir
 with_rlm_pcre_lib_dir
 with_rlm_pcre_include_dir
 '
@@ -1391,23 +1399,26 @@ Optional Packages:
   --with-radacctdir=DIR   directory for detail files LOGDIR/radacct
   --with-raddbdir=DIR     directory for config files SYSCONFDIR/raddb
   --with-ascend-binary    include support for Ascend binary filter attributes (default=yes)
-  --with-threads          Use threads, if available.  (default=yes)
-  --with-tcp              Compile in TCP support. (default=yes)
-  --with-vmps             Compile in VMPS support. (default=yes)
-  --with-dhcp             Compile in DHCP support. (default=yes)
+  --with-threads          use threads, if available.  (default=yes)
+  --with-tcp              compile in TCP support. (default=yes)
+  --with-vmps             compile in VMPS support. (default=yes)
+  --with-dhcp             compile in DHCP support. (default=yes)
   --with-static-modules=QUOTED-MODULE-LIST
+  --with-shared-libs               build dynamic libraries and link against them. (default=yes)
   --with-modules=QUOTED-MODULE-LIST
-  --with-experimental-modules      Use experimental and unstable modules. (default=no, unless --enable-developer=yes)
-  --with-openssl                   Use OpenSSL. (default=yes)
-  --with-openssl-includes=DIR      Directory to look for OpenSSL include files
-  --with-openssl-libraries=DIR     Directory to look for OpenSSL library files
-  --with-rlm-FOO-lib-dir=DIR       Directory to look for library files used by module FOO
-  --with-rlm-FOO-include-dir=DIR   Directory to look for include files used by module FOO
-  --with-udpfromto        Compile in UDPFROMTO support. (default=no)
-  --with-talloc-include-dir=DIR
-                          Directory where the talloc includes may be found
-  --with-pcre-lib-dir=DIR       directory for PCRE library files
-  --with-pcre-include-dir=DIR   directory for PCRE include files
+  --with-experimental-modules      use experimental and unstable modules. (default=no, unless --enable-developer=yes)
+  --with-udpfromto                 compile in UDPFROMTO support. (default=yes)
+  --with-openssl                   use OpenSSL. (default=yes)
+  --with-openssl-includes=DIR      directory to look for OpenSSL include files in
+  --with-openssl-libraries=DIR     directory to look for OpenSSL library files in
+  --with-rlm-FOO-lib-dir=DIR       directory to look for library files used by module FOO in
+  --with-rlm-FOO-include-dir=DIR   directory to look for include files used by module FOO in
+  --with-talloc-include-dir=DIR    directory to look for talloc include files in
+  --with-talloc-lib-dir=DIR        directory to look for talloc library files in
+  --with-pcap-include-dir=DIR    directory to look for pcap include files in
+  --with-pcap-lib-dir=DIR        directory to look for pcap library files in
+  --with-pcre-lib-dir=DIR          directory to look for PCRE library files in
+  --with-pcre-include-dir=DIR      directory to look for PCRE include files in
 
 Some influential environment variables:
   CC          C compiler command
@@ -2548,6 +2559,110 @@ test -n "$target_alias" &&
     NONENONEs,x,x, &&
   program_prefix=${target_alias}-
 
+
+case "$host" in
+  *-darwin*)
+                    { $as_echo "$as_me:${as_lineno-$LINENO}: checking if cc is apple llvm" >&5
+$as_echo_n "checking if cc is apple llvm... " >&6; }
+    if ! $CC --version 2>&1 | grep -I 'Apple LLVM' > /dev/null; then
+      { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+      # Extract the first word of "sw_vers", so it can be a program name with args.
+set dummy sw_vers; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_prog_SW_VERS+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  if test -n "$SW_VERS"; then
+  ac_cv_prog_SW_VERS="$SW_VERS" # Let the user override the test.
+else
+as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_prog_SW_VERS="yes"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+  test -z "$ac_cv_prog_SW_VERS" && ac_cv_prog_SW_VERS="no"
+fi
+fi
+SW_VERS=$ac_cv_prog_SW_VERS
+if test -n "$SW_VERS"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $SW_VERS" >&5
+$as_echo "$SW_VERS" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+
+      # Extract the first word of "xcodebuild", so it can be a program name with args.
+set dummy xcodebuild; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_prog_XCODEBUILD+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  if test -n "$XCODEBUILD"; then
+  ac_cv_prog_XCODEBUILD="$XCODEBUILD" # Let the user override the test.
+else
+as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_prog_XCODEBUILD="yes"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+  test -z "$ac_cv_prog_XCODEBUILD" && ac_cv_prog_XCODEBUILD="no"
+fi
+fi
+XCODEBUILD=$ac_cv_prog_XCODEBUILD
+if test -n "$XCODEBUILD"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $XCODEBUILD" >&5
+$as_echo "$XCODEBUILD" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+
+
+      if test "x$SW_VERS" = "xyes" && test "x$XCODEBUILD" = "xyes"; then
+        { $as_echo "$as_me:${as_lineno-$LINENO}: determining OSX SDK path" >&5
+$as_echo "$as_me: determining OSX SDK path" >&6;}
+        osx_sdk_path=$(xcodebuild -version -sdk macosx$(sw_vers -productVersion | egrep -o '^[0-9]+\.[0-9]+') Path)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: $osx_sdk_path" >&5
+$as_echo "$osx_sdk_path" >&6; }
+
+                                        export CFLAGS="$CFLAGS --sysroot=$osx_sdk_path"
+        export CPPFLAGS="$CPPFLAGS --sysroot=$osx_sdk_path"
+        export LDFLAGS="$LDFLAGS -L$osx_sdk_path/usr/lib/"
+        DARWIN_CFLAGS="--sysroot=$osx_sdk_path"
+
+      fi
+    else
+      { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+    fi
+    ;;
+esac
 
 ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -4249,6 +4364,14 @@ fi
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ax_cv_cc_clang" >&5
 $as_echo "$ax_cv_cc_clang" >&6; }
 
+if test "x$ax_cv_cc_clang" = "xyes"; then
+  clang_path="$CC"
+
+else
+  clang_path=""
+
+fi
+
 
 if test "x$GCC" = "xyes"; then
   CFLAGS="$CFLAGS -Wall -D_GNU_SOURCE"
@@ -5115,7 +5238,7 @@ fi
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $raddbdir" >&5
 $as_echo "$raddbdir" >&6; }
 
-modconfdir="$raddbdir/mods-config"
+modconfdir='${raddbdir}/mods-config'
 
 
 WITH_ASCEND_BINARY=yes
@@ -5220,6 +5343,20 @@ if test "${with_static_modules+set}" = set; then :
 fi
 
 
+USE_SHARED_LIBS=yes
+
+# Check whether --with-shared-libs was given.
+if test "${with_shared_libs+set}" = set; then :
+  withval=$with_shared_libs;  case "$withval" in
+  no)
+    USE_SHARED_LIBS=no
+    ;;
+  *)
+  esac
+
+fi
+
+
 MODULES=
 
 # Check whether --with-modules was given.
@@ -5248,6 +5385,27 @@ if test "${with_experimental_modules+set}" = set; then :
 
 fi
 
+
+WITH_UDPFROMTO=yes
+
+# Check whether --with-udpfromto was given.
+if test "${with_udpfromto+set}" = set; then :
+  withval=$with_udpfromto;  case "$withval" in
+  yes)
+    WITH_UDPFROMTO=yes
+    ;;
+  *)
+    WITH_UDPFROMTO=no
+  esac
+
+fi
+
+
+if test "x$WITH_UDPFROMTO" = "xyes"; then
+
+$as_echo "#define WITH_UDPFROMTO /**/" >>confdefs.h
+
+fi
 
 WITH_OPENSSL=yes
 
@@ -5311,27 +5469,6 @@ if test "${with_rlm_FOO_include_dir+set}" = set; then :
 
 fi
 
-
-WITH_UDPFROMTO=no
-
-# Check whether --with-udpfromto was given.
-if test "${with_udpfromto+set}" = set; then :
-  withval=$with_udpfromto;  case "$withval" in
-  yes)
-    WITH_UDPFROMTO=yes
-    ;;
-  *)
-    WITH_UDPFROMTO=no
-  esac
-
-fi
-
-
-if test "x$WITH_UDPFROMTO" = "xyes"; then
-
-$as_echo "#define WITH_UDPFROMTO /**/" >>confdefs.h
-
-fi
 
 
 CHECKRAD=checkrad
@@ -6080,58 +6217,185 @@ _ACEOF
 fi
 
 
-PCAP_LIBS=
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for pcap_open_live in -lpcap" >&5
-$as_echo_n "checking for pcap_open_live in -lpcap... " >&6; }
-if ${ac_cv_lib_pcap_pcap_open_live+:} false; then :
-  $as_echo_n "(cached) " >&6
-else
-  ac_check_lib_save_LIBS=$LIBS
-LIBS="-lpcap  $LIBS"
-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
-/* end confdefs.h.  */
+smart_try_dir="$pcap_lib_dir"
 
-/* Override any GCC internal prototype to avoid an error.
-   Use char because int might match the return type of a GCC
-   builtin and then its argument prototype would still apply.  */
-#ifdef __cplusplus
-extern "C"
-#endif
-char pcap_open_live ();
+
+sm_lib_safe=`echo "pcap" | sed 'y%./+-%__p_%'`
+sm_func_safe=`echo "pcap_open_live" | sed 'y%./+-%__p_%'`
+
+old_LIBS="$LIBS"
+smart_lib=
+smart_lib_dir=
+
+if test "x$smart_try_dir" != "x"; then
+  for try in $smart_try_dir; do
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pcap_open_live in -lpcap in $try" >&5
+$as_echo_n "checking for pcap_open_live in -lpcap in $try... " >&6; }
+    LIBS="-L$try -lpcap $old_LIBS -Wl,-rpath,$try"
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+extern char pcap_open_live();
 int
 main ()
 {
-return pcap_open_live ();
+pcap_open_live()
   ;
   return 0;
 }
 _ACEOF
 if ac_fn_c_try_link "$LINENO"; then :
-  ac_cv_lib_pcap_pcap_open_live=yes
+
+		 smart_lib="-L$try -lpcap -Wl,-rpath,$try"
+		 { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+		 break
+
 else
-  ac_cv_lib_pcap_pcap_open_live=no
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
 fi
 rm -f core conftest.err conftest.$ac_objext \
     conftest$ac_exeext conftest.$ac_ext
-LIBS=$ac_check_lib_save_LIBS
+  done
+  LIBS="$old_LIBS"
 fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_pcap_pcap_open_live" >&5
-$as_echo "$ac_cv_lib_pcap_pcap_open_live" >&6; }
-if test "x$ac_cv_lib_pcap_pcap_open_live" = xyes; then :
 
-    PCAP_LIBS="-lpcap"
+if test "x$smart_lib" = "x"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pcap_open_live in -lpcap" >&5
+$as_echo_n "checking for pcap_open_live in -lpcap... " >&6; }
+  LIBS="-lpcap $old_LIBS"
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+extern char pcap_open_live();
+int
+main ()
+{
+pcap_open_live()
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+
+	        smart_lib="-lpcap"
+	        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+  LIBS="$old_LIBS"
+fi
+
+if test "x$smart_lib" = "x"; then
+
+
+if test "x$LOCATE" != "x"; then
+        DIRS=
+  file=libpcap${libltdl_cv_shlibext}
+
+  for x in `${LOCATE} $file 2>/dev/null`; do
+                                        base=`echo $x | sed "s%/${file}%%"`
+    if test "x$x" = "x$base"; then
+      continue;
+    fi
+
+    dir=`${DIRNAME} $x 2>/dev/null`
+                exclude=`echo ${dir} | ${GREP} /home`
+    if test "x$exclude" != "x"; then
+      continue
+    fi
+
+                    already=`echo \$smart_lib_dir ${DIRS} | ${GREP} ${dir}`
+    if test "x$already" = "x"; then
+      DIRS="$DIRS $dir"
+    fi
+  done
+fi
+
+eval "smart_lib_dir=\"\$smart_lib_dir $DIRS\""
+
+
+
+if test "x$LOCATE" != "x"; then
+        DIRS=
+  file=libpcap.a
+
+  for x in `${LOCATE} $file 2>/dev/null`; do
+                                        base=`echo $x | sed "s%/${file}%%"`
+    if test "x$x" = "x$base"; then
+      continue;
+    fi
+
+    dir=`${DIRNAME} $x 2>/dev/null`
+                exclude=`echo ${dir} | ${GREP} /home`
+    if test "x$exclude" != "x"; then
+      continue
+    fi
+
+                    already=`echo \$smart_lib_dir ${DIRS} | ${GREP} ${dir}`
+    if test "x$already" = "x"; then
+      DIRS="$DIRS $dir"
+    fi
+  done
+fi
+
+eval "smart_lib_dir=\"\$smart_lib_dir $DIRS\""
+
+
+  for try in $smart_lib_dir /usr/local/lib /opt/lib; do
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pcap_open_live in -lpcap in $try" >&5
+$as_echo_n "checking for pcap_open_live in -lpcap in $try... " >&6; }
+    LIBS="-L$try -lpcap $old_LIBS -Wl,-rpath,$try"
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+extern char pcap_open_live();
+int
+main ()
+{
+pcap_open_live()
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+
+		  smart_lib="-L$try -lpcap -Wl,-rpath,$try"
+		  { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+		  break
+
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+  done
+  LIBS="$old_LIBS"
+fi
+
+if test "x$smart_lib" != "x"; then
+  eval "ac_cv_lib_${sm_lib_safe}_${sm_func_safe}=yes"
+  LIBS="$smart_lib $old_LIBS"
+  SMART_LIBS="$smart_lib $SMART_LIBS"
+fi
+
+if test "x$ac_cv_lib_pcap_pcap_open_live" != "xyes"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: pcap library not found. Use --with-pcap-lib-dir=<path>." >&5
+$as_echo "$as_me: WARNING: pcap library not found. Use --with-pcap-lib-dir=<path>." >&2;}
+  { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: pcap library not found, silently disabling the RADIUS sniffer and ARP listener." >&5
+$as_echo "$as_me: WARNING: pcap library not found, silently disabling the RADIUS sniffer and ARP listener." >&2;}
+else
+  PCAP_LIBS="${smart_lib}"
+  LIBS=$old_LIBS
 
 $as_echo "#define HAVE_LIBPCAP 1" >>confdefs.h
 
-
-else
-
-    { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: pcap library not found, silently disabling the RADIUS sniffer." >&5
-$as_echo "$as_me: WARNING: pcap library not found, silently disabling the RADIUS sniffer." >&2;}
-
-
 fi
-
 
 
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking for a readline compatible library" >&5
@@ -6677,9 +6941,10 @@ done
 
 for ac_header in net/if.h
 do :
-  ac_fn_c_check_header_compile "$LINENO" "net/if.h" "ac_cv_header_net_if_h" "#ifdef HAVE_SYS_SOCKET_H
-#  include <sys/socket.h>
-#  endif
+  ac_fn_c_check_header_compile "$LINENO" "net/if.h" "ac_cv_header_net_if_h" "
+  #ifdef HAVE_SYS_SOCKET_H
+  #  include <sys/socket.h>
+  #endif
 
 "
 if test "x$ac_cv_header_net_if_h" = xyes; then :
@@ -6713,7 +6978,7 @@ if test "x$WITH_OPENSSL" = xyes; then
   OPENSSL_INCLUDE="-DNO_OPENSSL"
   OPENSSL_LIBS=
   if test "x$OPENSSL_LIB_DIR" != "x"; then
-    LDFLAGS="$LDFLAGS -L$OPENSSL_LIB_DIR"
+    LDFLAGS="-L$OPENSSL_LIB_DIR $LDFLAGS"
   fi
 
         { $as_echo "$as_me:${as_lineno-$LINENO}: checking for DH_new in -lcrypto" >&5
@@ -6819,8 +7084,10 @@ fi
 
 
         old_CPPFLAGS=$CPPFLAGS
+  old_CFLAGS=$CFLAGS
   if test "x$OPENSSL_INCLUDE_DIR" != "x"; then
-    CPPFLAGS="$CPPFLAGS -I$OPENSSL_INCLUDE_DIR"
+    CPPFLAGS="-isystem $OPENSSL_INCLUDE_DIR $CPPFLAGS"
+    CFLAGS="-isystem $OPENSSL_INCLUDE_DIR $CFLAGS"
   fi
 
         CPPFLAGS="$CPPFLAGS -DOPENSSL_NO_KRB5"
@@ -6886,7 +7153,7 @@ rm -f conftest*
 
 
   if test "x$OPENSSL_INCLUDE_DIR" != "x"; then
-    OPENSSL_INCLUDE="-I$OPENSSL_INCLUDE_DIR -DOPENSSL_NO_KRB5"
+    OPENSSL_INCLUDE="-isystem $OPENSSL_INCLUDE_DIR -DOPENSSL_NO_KRB5"
   else
     OPENSSL_INCLUDE="-DOPENSSL_NO_KRB5"
   fi
@@ -6943,9 +7210,14 @@ rm -f core *.core core.conftest.* gmon.out bb.out conftest$ac_exeext \
 fi
 
 
-  CPPFLAGS=$old_CPPFLAGS
-  LIBS=$old_LIBS
-  LDFLAGS="$old_LDFLAGS"
+  if test "x$OPENSSL_LIBS" = x; then
+    LIBS=$old_LIBS
+    LDFLAGS="$old_LDFLAGS"
+  fi
+  if test "x$OPENSSL_INCLUDE" = x; then
+    CPPFLAGS=$old_CPPFLAGS
+    CFLAGS=$old_CFLAGS
+  fi
 fi
 
 
@@ -6956,14 +7228,162 @@ if test "x$PCAP_LIBS" = x; then
   { $as_echo "$as_me:${as_lineno-$LINENO}: skipping test for pcap.h." >&5
 $as_echo "$as_me: skipping test for pcap.h." >&6;}
 else
-  ac_fn_c_check_header_mongrel "$LINENO" "pcap.h" "ac_cv_header_pcap_h" "$ac_includes_default"
-if test "x$ac_cv_header_pcap_h" = xyes; then :
+  smart_try_dir="$pcap_include_dir"
 
+
+ac_safe=`echo "pcap.h" | sed 'y%./+-%__pm%'`
+old_CFLAGS="$CFLAGS"
+smart_include=
+smart_include_dir=
+
+if test "x$smart_try_dir" != "x"; then
+  for try in $smart_try_dir; do
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pcap.h in $try" >&5
+$as_echo_n "checking for pcap.h in $try... " >&6; }
+    CFLAGS="$old_CFLAGS -isystem $try"
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+		    #include <pcap.h>
+int
+main ()
+{
+int a = 1;
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_compile "$LINENO"; then :
+
+		     smart_include="-isystem $try"
+		     { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+		     break
+
+else
+
+		     smart_include=
+		     { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+  done
+  CFLAGS="$old_CFLAGS"
+fi
+
+if test "x$smart_include" = "x"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pcap.h" >&5
+$as_echo_n "checking for pcap.h... " >&6; }
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+		  #include <pcap.h>
+int
+main ()
+{
+int a = 1;
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_compile "$LINENO"; then :
+
+		   smart_include=" "
+		   { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+		   break
+
+else
+
+		   smart_include=
+		   { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+fi
+
+if test "x$smart_include" = "x"; then
+
+
+if test "x$LOCATE" != "x"; then
+        DIRS=
+  file=pcap.h
+
+  for x in `${LOCATE} $file 2>/dev/null`; do
+                                        base=`echo $x | sed "s%/${file}%%"`
+    if test "x$x" = "x$base"; then
+      continue;
+    fi
+
+    dir=`${DIRNAME} $x 2>/dev/null`
+                exclude=`echo ${dir} | ${GREP} /home`
+    if test "x$exclude" != "x"; then
+      continue
+    fi
+
+                    already=`echo \$smart_include_dir ${DIRS} | ${GREP} ${dir}`
+    if test "x$already" = "x"; then
+      DIRS="$DIRS $dir"
+    fi
+  done
+fi
+
+eval "smart_include_dir=\"\$smart_include_dir $DIRS\""
+
+  for try in $smart_include_dir /usr/local/include /opt/include; do
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pcap.h in $try" >&5
+$as_echo_n "checking for pcap.h in $try... " >&6; }
+    CFLAGS="$old_CFLAGS -isystem $try"
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+		    #include <pcap.h>
+int
+main ()
+{
+int a = 1;
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_compile "$LINENO"; then :
+
+		     smart_include="-isystem $try"
+		     { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+		     break
+
+else
+
+		     smart_include=
+		     { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+  done
+  CFLAGS="$old_CFLAGS"
+fi
+
+if test "x$smart_include" != "x"; then
+  eval "ac_cv_header_$ac_safe=yes"
+  CFLAGS="$old_CFLAGS $smart_include"
+  SMART_CFLAGS="$SMART_CFLAGS $smart_include"
+fi
+
+  if test "x$ac_cv_header_pcap_h" != "xyes"; then
+    { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: pcap headers not found. Use --with-pcap-include-dir=<path>." >&5
+$as_echo "$as_me: WARNING: pcap headers not found. Use --with-pcap-include-dir=<path>." >&2;}
+    { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: pcap.h not found, silently disabling the RADIUS sniffer, and ARP listener." >&5
+$as_echo "$as_me: WARNING: pcap.h not found, silently disabling the RADIUS sniffer, and ARP listener." >&2;}
+  else
 
 $as_echo "#define HAVE_PCAP_H 1" >>confdefs.h
 
 
-      { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pcap_fopen_offline in -lpcap" >&5
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pcap_fopen_offline in -lpcap" >&5
 $as_echo_n "checking for pcap_fopen_offline in -lpcap... " >&6; }
 if ${ac_cv_lib_pcap_pcap_fopen_offline+:} false; then :
   $as_echo_n "(cached) " >&6
@@ -7009,7 +7429,7 @@ $as_echo "#define HAVE_PCAP_FOPEN_OFFLINE 1" >>confdefs.h
 fi
 
 
-      { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pcap_dump_fopen in -lpcap" >&5
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pcap_dump_fopen in -lpcap" >&5
 $as_echo_n "checking for pcap_dump_fopen in -lpcap... " >&6; }
 if ${ac_cv_lib_pcap_pcap_dump_fopen+:} false; then :
   $as_echo_n "(cached) " >&6
@@ -7054,17 +7474,7 @@ $as_echo "#define HAVE_PCAP_DUMP_FOPEN 1" >>confdefs.h
 
 fi
 
-
-else
-
-      PCAP_LIBS=
-      { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: pcap.h not found, silently disabling the RADIUS sniffer." >&5
-$as_echo "$as_me: WARNING: pcap.h not found, silently disabling the RADIUS sniffer." >&2;}
-
-
-fi
-
-
+  fi
 fi
 
 
@@ -7761,8 +8171,19 @@ else
   devflags=""
   CFLAGS="$CFLAGS -DNDEBUG"
   INSTALLSTRIP=""
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no." >&5
-$as_echo "no." >&6; }
+fi
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking if building with -DNDEBUG" >&5
+$as_echo_n "checking if building with -DNDEBUG... " >&6; }
+if echo "$CFLAGS" | grep '\-DNDEBUG' > /dev/null; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+
+$as_echo "#define WITH_NDEBUG 1" >>confdefs.h
+
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
 fi
 
 export EXPERIMENTAL
@@ -7777,14 +8198,21 @@ _ACEOF
 fi
 
 
-    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for TLS" >&5
-$as_echo_n "checking for TLS... " >&6; }
-    if test "$cross_compiling" = yes; then :
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for __thread support in compiler" >&5
+$as_echo_n "checking for __thread support in compiler... " >&6; }
+  if test "$cross_compiling" = yes; then :
   have_tls=no
 else
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
- static __thread int val; int main(int argc, char *argv[]) { return val = argc; }
+
+        static __thread int val;
+        int main(int argc, char **argv) {
+          val = 0;
+          return val;
+        }
+
+
 _ACEOF
 if ac_fn_c_try_run "$LINENO"; then :
   have_tls=yes
@@ -7795,13 +8223,13 @@ rm -f core *.core core.conftest.* gmon.out bb.out conftest$ac_exeext \
   conftest.$ac_objext conftest.beam conftest.$ac_ext
 fi
 
-    { $as_echo "$as_me:${as_lineno-$LINENO}: result: $have_tls" >&5
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $have_tls" >&5
 $as_echo "$have_tls" >&6; }
-    if test "$have_tls" = "yes"; then
+  if test "x$have_tls" = "xyes"; then
 
 $as_echo "#define HAVE_THREAD_TLS 1" >>confdefs.h
 
-    fi
+  fi
 
 
 
@@ -7817,6 +8245,57 @@ if test "${with_talloc_include_dir+set}" = set; then :
       ;;
     *)
       talloc_include_dir="$withval"
+      ;;
+  esac
+fi
+
+
+talloc_lib_dir=
+
+# Check whether --with-talloc-lib-dir was given.
+if test "${with_talloc_lib_dir+set}" = set; then :
+  withval=$with_talloc_lib_dir; case "$withval" in
+    no)
+      as_fn_error $? "Need talloc-lib-dir" "$LINENO" 5
+      ;;
+    yes)
+      ;;
+    *)
+      talloc_lib_dir="$withval"
+      ;;
+  esac
+fi
+
+
+pcap_include_dir=
+
+# Check whether --with-pcap-include-dir was given.
+if test "${with_pcap_include_dir+set}" = set; then :
+  withval=$with_pcap_include_dir; case "$withval" in
+    no)
+      as_fn_error $? "Need pcap-include-dir" "$LINENO" 5
+      ;;
+    yes)
+      ;;
+    *)
+      pcap_include_dir="$withval"
+      ;;
+  esac
+fi
+
+
+pcap_lib_dir=
+
+# Check whether --with-pcap-lib-dir was given.
+if test "${with_pcap_lib_dir+set}" = set; then :
+  withval=$with_pcap_lib_dir; case "$withval" in
+    no)
+      as_fn_error $? "Need pcap-lib-dir" "$LINENO" 5
+      ;;
+    yes)
+      ;;
+    *)
+      pcap_lib_dir="$withval"
       ;;
   esac
 fi
@@ -7883,7 +8362,7 @@ int a = 1;
 _ACEOF
 if ac_fn_c_try_compile "$LINENO"; then :
 
-		   smart_include=
+		   smart_include=" "
 		   { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 		   break
@@ -7971,9 +8450,179 @@ if test "x$ac_cv_header_talloc_h" != "xyes"; then
   { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: talloc headers not found. Use --with-talloc-include-dir=<path>." >&5
 $as_echo "$as_me: WARNING: talloc headers not found. Use --with-talloc-include-dir=<path>." >&2;}
   as_fn_error $? "FreeRADIUS requires libtalloc" "$LINENO" 5
+fi
+
+smart_try_dir="$talloc_lib_dir"
+
+
+sm_lib_safe=`echo "talloc" | sed 'y%./+-%__p_%'`
+sm_func_safe=`echo "_talloc" | sed 'y%./+-%__p_%'`
+
+old_LIBS="$LIBS"
+smart_lib=
+smart_lib_dir=
+
+if test "x$smart_try_dir" != "x"; then
+  for try in $smart_try_dir; do
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for _talloc in -ltalloc in $try" >&5
+$as_echo_n "checking for _talloc in -ltalloc in $try... " >&6; }
+    LIBS="-L$try -ltalloc $old_LIBS -Wl,-rpath,$try"
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+extern char _talloc();
+int
+main ()
+{
+_talloc()
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+
+		 smart_lib="-L$try -ltalloc -Wl,-rpath,$try"
+		 { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+		 break
+
 else
-  INCLUDE="${SMART_CFLAGS} ${INCLUDE}"
-  LIBS="-ltalloc ${LIBS}"
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+  done
+  LIBS="$old_LIBS"
+fi
+
+if test "x$smart_lib" = "x"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for _talloc in -ltalloc" >&5
+$as_echo_n "checking for _talloc in -ltalloc... " >&6; }
+  LIBS="-ltalloc $old_LIBS"
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+extern char _talloc();
+int
+main ()
+{
+_talloc()
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+
+	        smart_lib="-ltalloc"
+	        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+  LIBS="$old_LIBS"
+fi
+
+if test "x$smart_lib" = "x"; then
+
+
+if test "x$LOCATE" != "x"; then
+        DIRS=
+  file=libtalloc${libltdl_cv_shlibext}
+
+  for x in `${LOCATE} $file 2>/dev/null`; do
+                                        base=`echo $x | sed "s%/${file}%%"`
+    if test "x$x" = "x$base"; then
+      continue;
+    fi
+
+    dir=`${DIRNAME} $x 2>/dev/null`
+                exclude=`echo ${dir} | ${GREP} /home`
+    if test "x$exclude" != "x"; then
+      continue
+    fi
+
+                    already=`echo \$smart_lib_dir ${DIRS} | ${GREP} ${dir}`
+    if test "x$already" = "x"; then
+      DIRS="$DIRS $dir"
+    fi
+  done
+fi
+
+eval "smart_lib_dir=\"\$smart_lib_dir $DIRS\""
+
+
+
+if test "x$LOCATE" != "x"; then
+        DIRS=
+  file=libtalloc.a
+
+  for x in `${LOCATE} $file 2>/dev/null`; do
+                                        base=`echo $x | sed "s%/${file}%%"`
+    if test "x$x" = "x$base"; then
+      continue;
+    fi
+
+    dir=`${DIRNAME} $x 2>/dev/null`
+                exclude=`echo ${dir} | ${GREP} /home`
+    if test "x$exclude" != "x"; then
+      continue
+    fi
+
+                    already=`echo \$smart_lib_dir ${DIRS} | ${GREP} ${dir}`
+    if test "x$already" = "x"; then
+      DIRS="$DIRS $dir"
+    fi
+  done
+fi
+
+eval "smart_lib_dir=\"\$smart_lib_dir $DIRS\""
+
+
+  for try in $smart_lib_dir /usr/local/lib /opt/lib; do
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for _talloc in -ltalloc in $try" >&5
+$as_echo_n "checking for _talloc in -ltalloc in $try... " >&6; }
+    LIBS="-L$try -ltalloc $old_LIBS -Wl,-rpath,$try"
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+extern char _talloc();
+int
+main ()
+{
+_talloc()
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+
+		  smart_lib="-L$try -ltalloc -Wl,-rpath,$try"
+		  { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+		  break
+
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+  done
+  LIBS="$old_LIBS"
+fi
+
+if test "x$smart_lib" != "x"; then
+  eval "ac_cv_lib_${sm_lib_safe}_${sm_func_safe}=yes"
+  LIBS="$smart_lib $old_LIBS"
+  SMART_LIBS="$smart_lib $SMART_LIBS"
+fi
+
+if test "x$ac_cv_lib_talloc__talloc" != "xyes"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: talloc library not found. Use --with-talloc-lib-dir=<path>." >&5
+$as_echo "$as_me: WARNING: talloc library not found. Use --with-talloc-lib-dir=<path>." >&2;}
+  as_fn_error $? "FreeRADIUS requires libtalloc" "$LINENO" 5
 fi
 
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking for crypt in -lcrypt" >&5
@@ -8177,7 +8826,7 @@ int a = 1;
 _ACEOF
 if ac_fn_c_try_compile "$LINENO"; then :
 
-		   smart_include=
+		   smart_include=" "
 		   { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 		   break
@@ -8335,7 +8984,7 @@ int a = 1;
 _ACEOF
 if ac_fn_c_try_compile "$LINENO"; then :
 
-		   smart_include=
+		   smart_include=" "
 		   { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 		   break
@@ -8442,7 +9091,6 @@ $as_echo "#define HAVE_REG_EXTENDED 1" >>confdefs.h
 fi
 rm -f conftest*
 
-    LIBS="$LIBS -lregex"
   fi
 fi
 
@@ -8814,9 +9462,8 @@ ac_config_commands="$ac_config_commands scripts-chmod"
 
 
 
-USE_SHARED_LIBS=$enable_shared
 
-USE_STATIC_LIBS=$enable_static
+USE_STATIC_LIBS="yes"
 
 
 
@@ -8824,7 +9471,7 @@ USE_STATIC_LIBS=$enable_static
   unset ac_cv_env_LIBS_set
   unset ac_cv_env_LIBS_value
 
-  ac_config_files="$ac_config_files ./Make.inc ./src/include/build-radpaths-h ./src/main/radsniff.mk ./src/main/checkrad ./src/main/radlast ./src/main/radtest ./scripts/rc.radiusd ./scripts/radiusd.cron.daily ./scripts/radiusd.cron.monthly ./scripts/cryptpasswd ./raddb/dictionary ./raddb/radrelay.conf ./raddb/radiusd.conf"
+  ac_config_files="$ac_config_files ./Make.inc ./src/include/build-radpaths-h ./src/main/radsniff.mk ./src/main/checkrad ./src/main/radlast ./src/main/radtest ./scripts/rc.radiusd ./scripts/cron/radiusd.cron.daily ./scripts/cron/radiusd.cron.monthly ./scripts/cryptpasswd ./raddb/dictionary ./raddb/radrelay.conf ./raddb/radiusd.conf"
 
 cat >confcache <<\_ACEOF
 # This file is a shell script that caches the results of configure
@@ -9533,8 +10180,8 @@ do
     "./src/main/radlast") CONFIG_FILES="$CONFIG_FILES ./src/main/radlast" ;;
     "./src/main/radtest") CONFIG_FILES="$CONFIG_FILES ./src/main/radtest" ;;
     "./scripts/rc.radiusd") CONFIG_FILES="$CONFIG_FILES ./scripts/rc.radiusd" ;;
-    "./scripts/radiusd.cron.daily") CONFIG_FILES="$CONFIG_FILES ./scripts/radiusd.cron.daily" ;;
-    "./scripts/radiusd.cron.monthly") CONFIG_FILES="$CONFIG_FILES ./scripts/radiusd.cron.monthly" ;;
+    "./scripts/cron/radiusd.cron.daily") CONFIG_FILES="$CONFIG_FILES ./scripts/cron/radiusd.cron.daily" ;;
+    "./scripts/cron/radiusd.cron.monthly") CONFIG_FILES="$CONFIG_FILES ./scripts/cron/radiusd.cron.monthly" ;;
     "./scripts/cryptpasswd") CONFIG_FILES="$CONFIG_FILES ./scripts/cryptpasswd" ;;
     "./raddb/dictionary") CONFIG_FILES="$CONFIG_FILES ./raddb/dictionary" ;;
     "./raddb/radrelay.conf") CONFIG_FILES="$CONFIG_FILES ./raddb/radrelay.conf" ;;
@@ -10092,7 +10739,7 @@ $as_echo "$as_me: executing $ac_file commands" >&6;}
     "stamp-h":C) echo timestamp > src/include/stamp-h ;;
     "build-radpaths-h":C) (cd ./src/include && /bin/sh ./build-radpaths-h) ;;
     "main-chmod":C) (cd ./src/main && chmod +x checkrad radlast radtest) ;;
-    "scripts-chmod":C) (cd ./scripts && chmod +x rc.radiusd radiusd.cron.daily radiusd.cron.monthly cryptpasswd) ;;
+    "scripts-chmod":C) (cd ./scripts && chmod +x rc.radiusd cron/radiusd.cron.daily cron/radiusd.cron.monthly cryptpasswd) ;;
 
   esac
 done # for ac_tag

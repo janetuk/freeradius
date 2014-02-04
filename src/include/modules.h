@@ -151,19 +151,17 @@ typedef int (*detach_t)(void *instance);
  * within the module to different sections.
  */
 typedef struct module_t {
-	uint32_t 	magic;	//!< Used to validate module struct.
-	char const	*name;	//!< The name of the module (without rlm_
-				//!< prefix).
-	int		type;	//!< One or more of the RLM_TYPE_* constants.
-	size_t		inst_size;	//!< Size of the instance data
-	const CONF_PARSER *config;	//!< Configuration information
-	instantiate_t	instantiate;	//!< Function to use for instantiation.
-	detach_t	detach;	//!< Function to use to free module instance.
-	packetmethod	methods[RLM_COMPONENT_COUNT]; //!< Pointers to the
-				//!< various section functions, ordering
-				//!< determines which function is mapped to
-				//!< which section.
-						
+	uint32_t 		magic;				//!< Used to validate module struct.
+	char const		*name;				//!< The name of the module (without rlm_ prefix).
+	int			type;				//!< One or more of the RLM_TYPE_* constants.
+	size_t			inst_size;			//!< Size of the instance data
+	CONF_PARSER const	*config;			//!< Configuration information
+	instantiate_t		instantiate;			//!< Function to use for instantiation.
+	detach_t		detach;				//!< Function to use to free module instance.
+	packetmethod		methods[RLM_COMPONENT_COUNT];	//!< Pointers to the various section functions, ordering
+								//!< determines which function is mapped to
+								//!< which section.
+
 } module_t;
 
 int setup_modules(int, CONF_SECTION *);
@@ -185,7 +183,7 @@ rlm_rcode_t process_send_coa(int type, REQUEST *request);
 #define MODULE_NULL_COA_FUNCS
 #endif
 
-rlm_rcode_t indexed_modcall(int comp, int idx, REQUEST *request);
+rlm_rcode_t indexed_modcall(rlm_components_t comp, int idx, REQUEST *request);
 
 /*
  *	For now, these are strongly tied together.

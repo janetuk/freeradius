@@ -169,7 +169,6 @@ static int mschapv1_encode(RADIUS_PACKET *packet, VALUE_PAIR **request,
 
 	challenge = paircreate(packet, PW_MSCHAP_CHALLENGE, VENDORPEC_MICROSOFT);
 	if (!challenge) {
-		fprintf(stderr, "GOT IT %d!\n", __LINE__);
 		return 0;
 	}
 
@@ -182,7 +181,6 @@ static int mschapv1_encode(RADIUS_PACKET *packet, VALUE_PAIR **request,
 
 	response = paircreate(packet, PW_MSCHAP_RESPONSE, VENDORPEC_MICROSOFT);
 	if (!response) {
-		fprintf(stderr, "GOT IT %d!\n", __LINE__);
 		return 0;
 	}
 
@@ -193,10 +191,11 @@ static int mschapv1_encode(RADIUS_PACKET *packet, VALUE_PAIR **request,
 
 	p[1] = 0x01; /* NT hash */
 
-	mschap_ntpwdhash(nthash, password);
+	if (mschap_ntpwdhash(nthash, password) < 0) {
+		return 0;
+	}
 
-	smbdes_mschap(nthash, challenge->vp_octets,
-		      p + 26);
+	smbdes_mschap(nthash, challenge->vp_octets, p + 26);
 	return 1;
 }
 
@@ -305,7 +304,7 @@ static int radclient_init(char const *filename)
 				vp->value.xlat = NULL;
 				vp->type = VT_DATA;
 			}
-			
+
 			if (!vp->da->vendor) switch (vp->da->attr) {
 			default:
 				break;
@@ -358,7 +357,7 @@ static int radclient_init(char const *filename)
 			case PW_DIGEST_USER_NAME:
 				/* overlapping! */
 				{
-					const DICT_ATTR *da;
+					DICT_ATTR const *da;
 					uint8_t *p;
 
 					p = talloc_array(vp, uint8_t, vp->length + 2);
@@ -367,17 +366,17 @@ static int radclient_init(char const *filename)
 					p[0] = vp->da->attr - PW_DIGEST_REALM + 1;
 					vp->length += 2;
 					p[1] = vp->length;
-//					talloc_free(vp->vp_octets);
-					vp->vp_octets = p;
-					
+
+					pairmemsteal(vp, p);
+
 					da = dict_attrbyvalue(PW_DIGEST_ATTRIBUTES, 0);
 					if (!da) {
 						goto oom;
 					}
-					
+
 					vp->da = da;
 				}
-				
+
 				break;
 			}
 		} /* loop over the VP's we read in */
@@ -405,12 +404,12 @@ static int radclient_init(char const *filename)
 	 *	And we're done.
 	 */
 	return 1;
-	
+
 	oom:
 	fprintf(stderr, "radclient: Out of memory\n");
 	free(radclient);
 	if (fp != stdin) fclose(fp);
-	return 0;	
+	return 0;
 }
 
 
@@ -480,8 +479,7 @@ static void deallocate_id(radclient_t *radclient)
 	/*
 	 *	One more unused RADIUS ID.
 	 */
-	fr_packet_list_id_free(pl, radclient->request);
-	radclient->request->id = -1;
+	fr_packet_list_id_free(pl, radclient->request, true);
 
 	/*
 	 *	If we've already sent a packet, free up the old one,
@@ -515,7 +513,7 @@ static void print_hex(RADIUS_PACKET *packet)
 
 	if (packet->data_len > 20) {
 		int total;
-		const uint8_t *ptr;
+		uint8_t const *ptr;
 		printf("  Data:");
 
 		total = packet->data_len - 20;
@@ -578,7 +576,8 @@ static int send_one_packet(radclient_t *radclient)
 	 *	Haven't sent the packet yet.  Initialize it.
 	 */
 	if (radclient->request->id == -1) {
-		int i, rcode;
+		int i;
+		bool rcode;
 
 		assert(radclient->reply == NULL);
 
@@ -590,8 +589,8 @@ static int send_one_packet(radclient_t *radclient)
 	retry:
 		radclient->request->src_ipaddr.af = server_ipaddr.af;
 		rcode = fr_packet_list_id_alloc(pl, ipproto,
-						radclient->request, NULL);
-		if (rcode < 0) {
+						&radclient->request, NULL);
+		if (!rcode) {
 			int mysockfd;
 
 #ifdef WITH_TCP
@@ -602,8 +601,9 @@ static int send_one_packet(radclient_t *radclient)
 			} else
 #endif
 			mysockfd = fr_socket(&client_ipaddr, 0);
-			if (!mysockfd) {
-				fprintf(stderr, "radclient: Can't open new socket\n");
+			if (mysockfd < 0) {
+				fprintf(stderr, "radclient: Can't open new socket: %s\n",
+					strerror(errno));
 				exit(1);
 			}
 			if (!fr_packet_list_socket_add(pl, mysockfd, ipproto,
@@ -613,12 +613,6 @@ static int send_one_packet(radclient_t *radclient)
 				exit(1);
 			}
 			goto retry;
-		}
-
-		if (rcode == 0) {
-			done = 0;
-			sleep_time = 0;
-			return 0;
 		}
 
 		assert(radclient->request->id != -1);
@@ -689,13 +683,6 @@ static int send_one_packet(radclient_t *radclient)
 		radclient->timestamp = time(NULL);
 		radclient->tries = 1;
 		radclient->resend++;
-
-		/*
-		 *	Duplicate found.  Serious error!
-		 */
-		if (!fr_packet_list_insert(pl, &radclient->request)) {
-			assert(0 == 1);
-		}
 
 #ifdef WITH_TCP
 		/*
@@ -862,7 +849,6 @@ static int recv_one_packet(int wait_time)
 		goto packet_done; /* shared secret is incorrect */
 	}
 
-	fr_packet_list_yank(pl, radclient->request);
 	if (print_filename) printf("%s:%d %d\n",
 				   radclient->filename,
 				   radclient->packet_number,
@@ -897,7 +883,7 @@ static int recv_one_packet(int wait_time)
 	} else {
 		totaldeny++;
 	}
-	
+
 	if (radclient->resend == resend_count) {
 		radclient->done = 1;
 	}
@@ -936,7 +922,7 @@ int main(int argc, char **argv)
 	int force_af = AF_UNSPEC;
 
 	fr_debug_flag = 0;
-	
+
 	talloc_set_log_stderr();
 
 	filename_tree = rbtree_create(filename_cmp, NULL, 0);

@@ -33,7 +33,6 @@
 RCSID("$Id$")
 
 #include <freeradius-devel/libradius.h>
-#include <freeradius-devel/hash.h>
 
 /*
  *	A reasonable number of buckets to start off with.
@@ -45,7 +44,7 @@ typedef struct fr_hash_entry_t {
 	struct fr_hash_entry_t *next;
 	uint32_t	reversed;
 	uint32_t	key;
- 	const void	*data;
+ 	void const 	*data;
 } fr_hash_entry_t;
 
 
@@ -65,8 +64,6 @@ struct fr_hash_table_t {
 };
 
 #ifdef TESTING
-#include <stdio.h>
-
 static int grow = 0;
 #endif
 
@@ -467,7 +464,7 @@ int fr_hash_table_replace(fr_hash_table_t *ht, void const *data)
 	if (!node) {
 		return fr_hash_table_insert(ht, data);
 	}
-	
+
 	if (ht->free) {
 		memcpy(&tofree, &node->data, sizeof(tofree));
 		ht->free(tofree);
@@ -571,7 +568,7 @@ void fr_hash_table_free(fr_hash_table_t *ht)
 				memcpy(&tofree, &node->data, sizeof(tofree));
 				ht->free(tofree);
 			}
-			
+
 			free(node);
 		}
 	}
@@ -613,12 +610,12 @@ int fr_hash_table_walk(fr_hash_table_t *ht,
 
 		for (node = ht->buckets[i]; node != &ht->null; node = next) {
 			void *arg;
-			
+
 			next = node->next;
 
 			memcpy(&arg, node->data, sizeof(arg));
 			rcode = callback(context, arg);
-			
+
 			if (rcode != 0) return rcode;
 		}
 	}
@@ -715,8 +712,8 @@ int fr_hash_table_info(fr_hash_table_t *ht)
  */
 uint32_t fr_hash(void const *data, size_t size)
 {
-	const uint8_t *p = data;
-	const uint8_t *q = p + size;
+	uint8_t const *p = data;
+	uint8_t const *q = p + size;
 	uint32_t      hash = FNV_MAGIC_INIT;
 
 	/*
@@ -749,8 +746,8 @@ uint32_t fr_hash(void const *data, size_t size)
  */
 uint32_t fr_hash_update(void const *data, size_t size, uint32_t hash)
 {
-	const uint8_t *p = data;
-	const uint8_t *q = p + size;
+	uint8_t const *p = data;
+	uint8_t const *q = p + size;
 
 	while (p != q) {
 		hash *= FNV_MAGIC_PRIME;
@@ -810,10 +807,6 @@ uint32_t fr_hash_string(char const *p)
  *
  *  ./hash
  */
-
-#include <stdio.h>
-#include <stdlib.h>
-
 static uint32_t hash_int(void const *data)
 {
 	return fr_hash((int *) data, sizeof(int));
@@ -829,11 +822,11 @@ int main(int argc, char **argv)
 	ht = fr_hash_table_create(hash_int, NULL, NULL);
 	if (!ht) {
 		fprintf(stderr, "Hash create failed\n");
-		exit(1);
+		fr_exit(1);
 	}
 
 	array = malloc(sizeof(int) * MAX);
-	if (!array) exit(1);
+	if (!array) fr_exit(1);
 
 	for (i = 0; i < MAX; i++) {
 		p = array + i;
@@ -841,13 +834,13 @@ int main(int argc, char **argv)
 
 		if (!fr_hash_table_insert(ht, p)) {
 			fprintf(stderr, "Failed insert %08x\n", i);
-			exit(1);
+			fr_exit(1);
 		}
 #ifdef TEST_INSERT
 		q = fr_hash_table_finddata(ht, p);
 		if (q != p) {
 			fprintf(stderr, "Bad data %d\n", i);
-			exit(1);
+			fr_exit(1);
 		}
 #endif
 	}
@@ -863,18 +856,18 @@ int main(int argc, char **argv)
 			q = fr_hash_table_finddata(ht, &i);
 			if (!q || *q != i) {
 				fprintf(stderr, "Failed finding %d\n", i);
-				exit(1);
+				fr_exit(1);
 			}
 
 #if 0
 			if (!fr_hash_table_delete(ht, &i)) {
 				fprintf(stderr, "Failed deleting %d\n", i);
-				exit(1);
+				fr_exit(1);
 			}
 			q = fr_hash_table_finddata(ht, &i);
 			if (q) {
 				fprintf(stderr, "Failed to delete %08x\n", i);
-				exit(1);
+				fr_exit(1);
 			}
 #endif
 		}
@@ -885,6 +878,6 @@ int main(int argc, char **argv)
 	fr_hash_table_free(ht);
 	free(array);
 
-	exit(0);
+	fr_exit(0);
 }
 #endif

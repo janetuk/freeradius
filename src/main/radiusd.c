@@ -29,7 +29,6 @@ RCSID("$Id$")
 
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/modules.h>
-#include <freeradius-devel/log.h>
 #include <freeradius-devel/rad_assert.h>
 
 #include <sys/file.h>
@@ -61,10 +60,10 @@ char const *radius_dir = NULL;
 char const *radacct_dir = NULL;
 char const *radlog_dir = NULL;
 char const *radlib_dir = NULL;
-int log_stripped_names;
+bool log_stripped_names;
 log_debug_t debug_flag = 0;
-int check_config = false;
-int memory_report = false;
+bool check_config = false;
+bool memory_report = false;
 
 char const *radiusd_version = "FreeRADIUS Version " RADIUSD_VERSION_STRING
 #ifdef RADIUSD_VERSION_COMMIT
@@ -108,6 +107,7 @@ int main(int argc, char *argv[])
 	int dont_fork = false;
 	int write_pid = false;
 	int flag = 0;
+	int from_child[2] = {-1, -1};
 
 #ifdef HAVE_SIGACTION
 	struct sigaction act;
@@ -200,7 +200,7 @@ int main(int argc, char *argv[])
 					exit(EXIT_FAILURE);
 				}
 				fr_log_fp = fdopen(default_log.fd, "a");
-				break;		
+				break;
 
 			case 'i':
 				if (ip_hton(optarg, AF_UNSPEC, &mainconfig.myip) < 0) {
@@ -232,7 +232,7 @@ int main(int argc, char *argv[])
 				}
 				flag |= 2;
 				break;
-				
+
 			case 'P':
 				/* Force the PID to be written, even in -f mode */
 				write_pid = true;
@@ -253,7 +253,7 @@ int main(int argc, char *argv[])
 				fr_log_fp = stdout;
 				default_log.dest = L_DST_STDOUT;
 				default_log.fd = STDOUT_FILENO;
-				
+
 				version();
 				exit(EXIT_SUCCESS);
 			case 'X':
@@ -281,12 +281,11 @@ int main(int argc, char *argv[])
 
 	if (memory_report) {
 		talloc_enable_null_tracking();
-		talloc_set_log_fn(log_talloc);
 #ifdef WITH_VERIFY_PTR
 		talloc_set_abort_fn(die_horribly);
 #endif
-
 	}
+	talloc_set_log_fn(log_talloc);
 
 	/*
 	 *	Mismatch between build time OpenSSL and linked SSL,
@@ -296,6 +295,12 @@ int main(int argc, char *argv[])
 	if (ssl_check_version() < 0) {
 		exit(EXIT_FAILURE);
 	}
+
+	/*
+	 *	Initialising OpenSSL once, here, is safer than having individual
+	 *	modules do it.
+	 */
+	tls_global_init();
 #endif
 
 	if (flag && (flag != 0x03)) {
@@ -317,8 +322,14 @@ int main(int argc, char *argv[])
 	 *  Disconnect from session
 	 */
 	if (dont_fork == false) {
-		pid_t pid = fork();
+		pid_t pid;
 
+		if (pipe(from_child) != 0) {
+			ERROR("Couldn't open pipe for child status: %s", strerror(errno));
+			exit(EXIT_FAILURE);
+		}
+
+		pid = fork();
 		if (pid < 0) {
 			ERROR("Couldn't fork: %s", strerror(errno));
 			exit(EXIT_FAILURE);
@@ -326,10 +337,42 @@ int main(int argc, char *argv[])
 
 		/*
 		 *  The parent exits, so the child can run in the background.
+		 *
+		 *  As the child can still encounter an error during initialisation
+		 *  we do a blocking read on a pipe between it and the parent.
+		 *
+		 *  Just before entering the event loop the child will send a success
+		 *  or failure message to the parent, via the pipe.
 		 */
 		if (pid > 0) {
+			uint8_t ret = 0;
+			int stat_loc;
+
+			/* So the pipe is correctly widowed if the child exits */
+			close(from_child[1]);
+
+			/*
+			 *	The child writes a 0x01 byte on
+			 *	success, and closes the pipe on error.
+			 */
+			if ((read(from_child[0], &ret, 1) < 0)) {
+				ret = 0;
+			}
+
+			/* For cleanliness... */
+			close(from_child[0]);
+
+			/* Don't turn children into zombies */
+			if (!ret) {
+				waitpid(pid, &stat_loc, WNOHANG);
+				exit(EXIT_FAILURE);
+			}
+
 			exit(EXIT_SUCCESS);
 		}
+
+		/* so the pipe is correctly widowed if the parent exits?! */
+		close(from_child[0]);
 #ifdef HAVE_SETSID
 		setsid();
 #endif
@@ -373,7 +416,7 @@ int main(int argc, char *argv[])
 	} else {
 		setlinebuf(stdout); /* unbuffered output */
 	}
-	
+
 	/*
 	 *	Now we have logging check that the OpenSSL
 	 */
@@ -425,12 +468,12 @@ int main(int argc, char *argv[])
 	 */
 	if (check_config) {
 		DEBUG("Configuration appears to be OK.");
-		
+
 		/* for -C -m|-M */
 		if (mainconfig.debug_memory) {
 			goto cleanup;
 		}
-		
+
 		exit(EXIT_SUCCESS);
 	}
 
@@ -470,6 +513,21 @@ int main(int argc, char *argv[])
 	exec_trigger(NULL, NULL, "server.start", false);
 
 	/*
+	 *	Inform the parent (who should still be waiting) that
+	 *	the rest of initialisation went OK, and that it should
+	 *	exit with a 0 status.  If we don't get this far, then
+	 *	we just close the pipe on exit, and the parent gets a
+	 *	read failure.
+	 */
+	if (!dont_fork) {
+		if (write(from_child[1], "\001", 1) < 0) {
+			WARN("Failed informing parent of successful start: %s",
+			     strerror(errno));
+		}
+		close(from_child[1]);
+	}
+
+	/*
 	 *	Process requests until HUP or exit.
 	 */
 	while ((status = radius_event_process()) == 0x80) {
@@ -492,7 +550,7 @@ int main(int argc, char *argv[])
 	 *	about to die.
 	 */
 	signal(SIGTERM, SIG_IGN);
-	
+
 	/*
 	 *	Send a TERM signal to all
 	 *	associated processes
@@ -502,7 +560,7 @@ int main(int argc, char *argv[])
 #ifndef __MINGW32__
 	if (spawn_flag) kill(-radius_pid, SIGTERM);
 #endif
-	
+
 	/*
 	 *	We're exiting, so we can delete the PID
 	 *	file.  (If it doesn't exist, we can ignore
@@ -511,7 +569,7 @@ int main(int argc, char *argv[])
 	if (dont_fork == false) {
 		unlink(mainconfig.pid_file);
 	}
-	
+
 	radius_event_free();
 
 cleanup:
@@ -519,16 +577,16 @@ cleanup:
 	 *	Detach any modules.
 	 */
 	detach_modules();
-	
+
 	xlat_free();		/* modules may have xlat's */
 
 	/*
 	 *	Free the configuration items.
 	 */
 	free_mainconfig();
-	
+
 	rad_const_free(radius_dir);
-		
+
 #ifdef WIN32
 	WSACleanup();
 #endif
@@ -550,7 +608,7 @@ static void NEVER_RETURNS usage(int status)
 	FILE *output = status?stderr:stdout;
 
 	fprintf(output, "Usage: %s [-d db_dir] [-l log_dir] [-i address] [-n name] [-fsvXx]\n", progname);
-	fprintf(output, "Options:\n\n");
+	fprintf(output, "Options:\n");
 	fprintf(output, "  -C            Check configuration and exit.\n");
 	fprintf(output, "  -d raddb_dir  Configuration files are in \"raddbdir/*\".\n");
 	fprintf(output, "  -f            Run as a foreground process, not a daemon.\n");
@@ -558,9 +616,9 @@ static void NEVER_RETURNS usage(int status)
 	fprintf(output, "  -i ipaddr     Listen on ipaddr ONLY.\n");
 	fprintf(output, "  -l log_file   Logging output will be written to this file.\n");
 	fprintf(output, "  -m            On SIGINT or SIGQUIT exit cleanly instead of immediately.\n");
-	fprintf(output, "  -n name       Read raddb/name.conf instead of raddb/radiusd.conf\n");
+	fprintf(output, "  -n name       Read raddb/name.conf instead of raddb/radiusd.conf.\n");
 	fprintf(output, "  -p port       Listen on port ONLY.\n");
-	fprintf(output, "  -P            Always write out PID, even with -f");
+	fprintf(output, "  -P            Always write out PID, even with -f.\n");
 	fprintf(output, "  -s            Do not spawn child processes to handle requests.\n");
 	fprintf(output, "  -t            Disable threads.\n");
 	fprintf(output, "  -v            Print server version information.\n");

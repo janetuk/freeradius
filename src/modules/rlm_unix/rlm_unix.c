@@ -27,6 +27,7 @@
  * @copyright 2000  Alan Curry <pacman@world.std.com>
  */
 RCSID("$Id$")
+USES_APPLE_DEPRECATED_API
 
 #include	<freeradius-devel/radiusd.h>
 
@@ -95,7 +96,7 @@ static int groupcmp(UNUSED void *instance, REQUEST *req, UNUSED VALUE_PAIR *requ
 	grp = getgrnam(check->vp_strvalue);
 	if (!grp)
 		return -1;
-	
+
 	retval = (pwd->pw_gid == grp->gr_gid) ? 0 : -1;
 	if (retval < 0) {
 		for (member = grp->gr_mem; *member && retval; member++) {
@@ -116,9 +117,10 @@ static int mod_instantiate(UNUSED CONF_SECTION *conf, void *instance)
 
 	/* FIXME - delay these until a group file has been read so we know
 	 * groupcmp can actually do something */
-	paircompare_register(PW_GROUP, PW_USER_NAME, groupcmp, inst);
+	paircompare_register(dict_attrbyvalue(PW_GROUP, 0), dict_attrbyvalue(PW_USER_NAME, 0), false, groupcmp, inst);
 #ifdef PW_GROUP_NAME /* compat */
-	paircompare_register(PW_GROUP_NAME, PW_USER_NAME, groupcmp, inst);
+	paircompare_register(dict_attrbyvalue(PW_GROUP_NAME, 0), dict_attrbyvalue(PW_USER_NAME, 0),
+			true, groupcmp, inst);
 #endif
 
 	return 0;

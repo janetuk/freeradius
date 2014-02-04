@@ -7,7 +7,7 @@
 # Version:	$Id$
 #
 
-$(if $(wildcard Make.inc),,$(error Missing 'Make.inc' Run './configure [options]' and retry")) 
+$(if $(wildcard Make.inc),,$(error Missing 'Make.inc' Run './configure [options]' and retry))
 
 include Make.inc
 
@@ -24,9 +24,20 @@ export DESTDIR := $(R)
 # And over-ride all of the other magic.
 include scripts/boiler.mk
 
-test: build.raddb ${BUILD_DIR}/bin/radiusd ${BUILD_DIR}/bin/radclient
+#
+#  Run "radiusd -C", looking for errors.
+#
+$(BUILD_DIR)/tests/radiusd-c: ${BUILD_DIR}/bin/radiusd | build.raddb
 	@$(MAKE) -C raddb/certs
-	@./build/make/jlibtool --mode=execute ./build/bin/radiusd -XCMd ./raddb -n debug -D ./share
+	@if ! ./build/make/jlibtool --mode=execute ./build/bin/radiusd -XCMd ./raddb -n debug -D ./share > $(BUILD_DIR)/tests/radiusd.config.log 2>&1; then \
+		cat $(BUILD_DIR)/tests/radiusd.config.log; \
+		echo "FAIL: radiusd -C"; \
+		exit 1; \
+	fi
+	@echo "OK: radiusd -C"
+	@touch $@
+
+test: ${BUILD_DIR}/bin/radiusd ${BUILD_DIR}/bin/radclient tests.unit tests.keywords $(BUILD_DIR)/tests/radiusd-c | build.raddb
 	@$(MAKE) -C src/tests tests
 
 #  Tests specifically for Travis.  We do a LOT more than just
@@ -133,8 +144,8 @@ distclean: clean
 #
 ifeq "$(MAKECMDGOALS)" "reconfig"
 
-CONFIGURE_IN_FILES := $(shell find . -name configure.ac -print)
-CONFIGURE_FILES	   := $(patsubst %.in,%,$(CONFIGURE_IN_FILES))
+CONFIGURE_AC_FILES := $(shell find . -name configure.ac -print)
+CONFIGURE_FILES	   := $(patsubst %.ac,%,$(CONFIGURE_AC_FILES))
 
 #
 #  The GNU tools make autoconf=="missing autoconf", which then returns
@@ -183,7 +194,8 @@ CONFIGURE_ARGS	   := $(shell head -10 config.log | grep '^  \$$' | sed 's/^..../
 
 src/%all.mk: src/%all.mk.in src/%configure
 	@echo CONFIGURE $(dir $@)
-	@cd $(dir $<) && ./configure $(CONFIGURE_ARGS)
+	@rm -f ./config.cache $(dir $<)/config.cache
+	@cd $(dir $<) && CPPFLAGS=$(DARWIN_CFLAGS) CFLAGS=$(DARWIN_CFLAGS) ./configure $(CONFIGURE_ARGS)
 endif
 
 .PHONY: check-includes
@@ -210,13 +222,13 @@ certs:
 #
 ######################################################################
 freeradius-server-$(RADIUSD_VERSION_STRING).tar.gz: .git
-	git archive --format=tar --prefix=freeradius-server-$(RADIUSD_VERSION_STRING)/ stable | gzip > $@
+	git archive --format=tar --prefix=freeradius-server-$(RADIUSD_VERSION_STRING)/ v3.0.x | gzip > $@
 
 freeradius-server-$(RADIUSD_VERSION_STRING).tar.gz.sig: freeradius-server-$(RADIUSD_VERSION_STRING).tar.gz
 	gpg --default-key aland@freeradius.org -b $<
 
 freeradius-server-$(RADIUSD_VERSION_STRING).tar.bz2: .git
-	git archive --format=tar --prefix=freeradius-server-$(RADIUSD_VERSION_STRING)/ stable | bzip2 > $@
+	git archive --format=tar --prefix=freeradius-server-$(RADIUSD_VERSION_STRING)/ v3.0.x | bzip2 > $@
 
 freeradius-server-$(RADIUSD_VERSION_STRING).tar.bz2.sig: freeradius-server-$(RADIUSD_VERSION_STRING).tar.bz2
 	gpg --default-key aland@freeradius.org -b $<
@@ -236,7 +248,7 @@ dist-check: redhat/freeradius.spec suse/freeradius.spec debian/changelog
 		echo suse/freeradius.spec 'Version' needs to be updated; \
 		exit 1; \
 	fi
-	@if [ `head -n 1 debian/changelog | sed 's/.*(//;s/-0).*//;s/-1).*//;'`  != "$(RADIUSD_VERSION_STRING)" ]; then \
+	@if [ `head -n 1 debian/changelog | sed 's/.*(//;s/-0).*//;s/-1).*//;s/\+.*//'`  != "$(RADIUSD_VERSION_STRING)" ]; then \
 		echo debian/changelog needs to be updated; \
 		exit 1; \
 	fi
@@ -246,8 +258,7 @@ dist: dist-check freeradius-server-$(RADIUSD_VERSION_STRING).tar.gz freeradius-s
 dist-sign: freeradius-server-$(RADIUSD_VERSION_STRING).tar.gz.sig freeradius-server-$(RADIUSD_VERSION_STRING).tar.bz2.sig
 
 dist-publish: freeradius-server-$(RADIUSD_VERSION_STRING).tar.gz.sig freeradius-server-$(RADIUSD_VERSION_STRING).tar.gz freeradius-server-$(RADIUSD_VERSION_STRING).tar.gz.sig freeradius-server-$(RADIUSD_VERSION_STRING).tar.bz2 freeradius-server-$(RADIUSD_VERSION_STRING).tar.gz.sig freeradius-server-$(RADIUSD_VERSION_STRING).tar.bz2.sig
-	scp $^ freeradius.org@ns5.freeradius.org:public_ftp
-	scp $^ freeradius.org@www.tr.freeradius.org:public_ftp
+	scp $^ freeradius.org@ftp.freeradius.org:public_ftp
 
 #
 #  Note that we do NOT do the tagging here!  We just print out what

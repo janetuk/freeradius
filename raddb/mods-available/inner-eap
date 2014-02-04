@@ -87,7 +87,7 @@ eap inner-eap {
 	#	ca_path = /path/to/directory/with/ca_certs/and/crls/
 
 		#
-		#  The session resumption / fast reauthentication
+		#  The session resumption / fast re-authentication
 		#  cache CANNOT be used for inner sessions.
 		#
 	}

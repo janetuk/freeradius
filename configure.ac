@@ -90,7 +90,7 @@ if test -d $srcdir/.git; then
   if test "x$developer" != "xno"; then
     AC_MSG_NOTICE([found .git directory, enabling developer build implicitly, disable with --disable-developer])
     developer="yes"
-  fi  
+  fi
 fi
 
 dnl #
@@ -115,6 +115,45 @@ dnl #
 AC_CANONICAL_SYSTEM
 
 dnl #
+dnl #  As of OSX 10.9 (Mavericks), /usr is no longer populated with the
+dnl #  standard set of headers and libraries, instead were meant to use
+dnl #  one of the SDKs which contains system headers and libraries for
+dnl #  different versions of OSX and iOS.
+dnl #
+case "$host" in
+  *-darwin*)
+    dnl #
+    dnl #  The version of GCC apple ships with Mavericks works out of the
+    dnl #  box, and presumably selects the highest version SDK for OSX.
+    dnl #
+    AC_MSG_CHECKING([if cc is apple llvm])
+    if ! $CC --version 2>&1 | grep -I 'Apple LLVM' > /dev/null; then
+      AC_MSG_RESULT(no)
+      AC_CHECK_PROG(SW_VERS, sw_vers, yes, no)
+      AC_CHECK_PROG(XCODEBUILD, xcodebuild, yes, no)
+
+      if test "x$SW_VERS" = "xyes" && test "x$XCODEBUILD" = "xyes"; then
+        AC_MSG_NOTICE([determining OSX SDK path])
+        osx_sdk_path=$(xcodebuild -version -sdk macosx$(sw_vers -productVersion | egrep -o '^[[0-9]]+\.[[0-9]]+') Path)
+        AC_MSG_RESULT([$osx_sdk_path])
+
+        dnl #
+        dnl #  We need to export these, else the child configure scripts all fail
+        dnl #  their compiler checks.
+        dnl #
+        export CFLAGS="$CFLAGS --sysroot=$osx_sdk_path"
+        export CPPFLAGS="$CPPFLAGS --sysroot=$osx_sdk_path"
+        export LDFLAGS="$LDFLAGS -L$osx_sdk_path/usr/lib/"
+        DARWIN_CFLAGS="--sysroot=$osx_sdk_path"
+	AC_SUBST(DARWIN_CFLAGS)
+      fi
+    else
+      AC_MSG_RESULT(yes)
+    fi
+    ;;
+esac
+
+dnl #
 dnl #  Check for GNU cc
 dnl #
 AC_PROG_CC
@@ -134,6 +173,12 @@ dnl #
 dnl #  Definitive check for whether the compiler is clang
 dnl #
 AX_CC_IS_CLANG
+if test "x$ax_cv_cc_clang" = "xyes"; then
+  AC_SUBST(clang_path, "$CC")
+else
+  AC_SUBST(clang_path, "")
+fi
+
 
 dnl #
 dnl #  Set Default CFLAGS for GCC compatible compilers
@@ -149,7 +194,7 @@ AX_CC_QUNUSED_ARGUMENTS_FLAG
 if test "x$ax_cv_cc_qunused_arguments_flag" = "xyes"; then
   CFLAGS="$CFLAGS -Qunused-arguments"
   LDFLAGS="$LDFLAGS -Qunused-arguments"
-fi 
+fi
 
 dnl #
 dnl #  Compile in large (2G+) file support.
@@ -176,8 +221,8 @@ if test -z "$makever"; then
   AC_MSG_ERROR([GNU Make is not installed.  Please download and install it from ftp://prep.ai.mit.edu/pub/gnu/make/ before continuing.])
 fi
 
-dnl #  
-dnl #  autoconf explicitly sets MAKEFLAGS and MFLAGS to '' even though we 
+dnl #
+dnl #  autoconf explicitly sets MAKEFLAGS and MFLAGS to '' even though we
 dnl #  didn't tell it to, so we have to use FR_MAKEFLAGS.
 dnl #
 dnl #  determine the number of cores available and set the number of build
@@ -317,7 +362,7 @@ AC_ARG_WITH(raddbdir,
 AC_SUBST(raddbdir)
 AC_MSG_RESULT($raddbdir)
 
-modconfdir="$raddbdir/mods-config"
+modconfdir='${raddbdir}/mods-config'
 AC_SUBST(modconfdir)
 
 dnl #
@@ -342,7 +387,7 @@ dnl #  extra argument: --with-threads
 dnl #
 WITH_THREADS=yes
 AC_ARG_WITH(threads,
-[  --with-threads          Use threads, if available.  (default=yes) ],
+[  --with-threads          use threads, if available.  (default=yes) ],
 [ case "$withval" in
   yes)
     ;;
@@ -356,7 +401,7 @@ dnl #  extra argument: --with-tcp
 dnl #
 WITH_TCP=yes
 AC_ARG_WITH(tcp,
-[  --with-tcp              Compile in TCP support. (default=yes)],
+[  --with-tcp              compile in TCP support. (default=yes)],
 [ case "$withval" in
   yes)
     ;;
@@ -373,7 +418,7 @@ dnl #  extra argument: --with-vmps
 dnl #
 WITH_VMPS=yes
 AC_ARG_WITH(vmps,
-[  --with-vmps             Compile in VMPS support. (default=yes)],
+[  --with-vmps             compile in VMPS support. (default=yes)],
 [ case "$withval" in
   yes)
     ;;
@@ -390,7 +435,7 @@ dnl #  extra argument: --with-dhcp
 dnl #
 WITH_DHCP=yes
 AC_ARG_WITH(dhcp,
-[  --with-dhcp             Compile in DHCP support. (default=yes)],
+[  --with-dhcp             compile in DHCP support. (default=yes)],
 [ case "$withval" in
   yes)
     ;;
@@ -414,6 +459,17 @@ AC_ARG_WITH(static_modules,
   done
 ])
 
+USE_SHARED_LIBS=yes
+AC_ARG_WITH(shared-libs,
+[  --with-shared-libs               build dynamic libraries and link against them. (default=yes)],
+[ case "$withval" in
+  no)
+    USE_SHARED_LIBS=no
+    ;;
+  *)
+  esac
+])
+
 MODULES=
 AC_ARG_WITH(modules,
 [  --with-modules=QUOTED-MODULE-LIST],[
@@ -427,7 +483,7 @@ dnl #  extra argument: --with-experimental-modules
 dnl #
 EXPERIMENTAL=
 AC_ARG_WITH(experimental-modules,
-[  --with-experimental-modules      Use experimental and unstable modules. (default=no, unless --enable-developer=yes) ],
+[  --with-experimental-modules      use experimental and unstable modules. (default=no, unless --enable-developer=yes) ],
 [ case "$withval" in
   yes)
     EXPERIMENTAL=yes
@@ -440,11 +496,30 @@ AC_ARG_WITH(experimental-modules,
 )
 
 dnl #
+dnl #  extra argument: --with-udpfromto
+dnl #
+WITH_UDPFROMTO=yes
+AC_ARG_WITH(udpfromto,
+[  --with-udpfromto                 compile in UDPFROMTO support. (default=yes)],
+[ case "$withval" in
+  yes)
+    WITH_UDPFROMTO=yes
+    ;;
+  *)
+    WITH_UDPFROMTO=no
+  esac ]
+)
+
+if test "x$WITH_UDPFROMTO" = "xyes"; then
+  AC_DEFINE(WITH_UDPFROMTO, [], [define if you want udpfromto])
+fi
+
+dnl #
 dnl #  extra argument: --with-openssl
 dnl #
 WITH_OPENSSL=yes
 AC_ARG_WITH(openssl,
-[  --with-openssl                   Use OpenSSL. (default=yes)],
+[  --with-openssl                   use OpenSSL. (default=yes)],
 [ case "$withval" in
   no)
     WITH_OPENSSL=no
@@ -460,7 +535,7 @@ dnl #  extra argument: --with-openssl-includes=dir
 dnl #
 OPENSSL_INCLUDE_DIR=
 AC_ARG_WITH(openssl-includes,
-[  --with-openssl-includes=DIR      Directory to look for OpenSSL include files],
+[  --with-openssl-includes=DIR      directory to look for OpenSSL include files in],
 [ case "$withval" in
   *) OPENSSL_INCLUDE_DIR="$withval"
     ;;
@@ -472,7 +547,7 @@ dnl #  extra argument: --with-openssl-libraries=dir
 dnl #
 OPENSSL_LIB_DIR=
 AC_ARG_WITH(openssl-libraries,
-[  --with-openssl-libraries=DIR     Directory to look for OpenSSL library files],
+[  --with-openssl-libraries=DIR     directory to look for OpenSSL library files in],
 [ case "$withval" in
   *) OPENSSL_LIB_DIR="$withval"
     ;;
@@ -489,7 +564,7 @@ dnl #
 dnl #  extra argument: --with-rlm-FOO-lib-dir
 dnl #
 AC_ARG_WITH(rlm-FOO-lib-dir,
-[  --with-rlm-FOO-lib-dir=DIR       Directory to look for library files used by module FOO],
+[  --with-rlm-FOO-lib-dir=DIR       directory to look for library files used by module FOO in],
 [ case "$withval" in
   *)
     ;;
@@ -500,31 +575,12 @@ dnl #
 dnl #  extra argument: --with-rlm-FOO-include-dir
 dnl #
 AC_ARG_WITH(rlm-FOO-include-dir,
-[  --with-rlm-FOO-include-dir=DIR   Directory to look for include files used by module FOO],
+[  --with-rlm-FOO-include-dir=DIR   directory to look for include files used by module FOO in],
 [ case "$withval" in
   *)
     ;;
   esac ]
 )
-
-dnl # 
-dnl #  extra argument: --with-udpfromto
-dnl #
-WITH_UDPFROMTO=no
-AC_ARG_WITH(udpfromto,
-[  --with-udpfromto        Compile in UDPFROMTO support. (default=no)],
-[ case "$withval" in
-  yes)
-    WITH_UDPFROMTO=yes
-    ;;
-  *)
-    WITH_UDPFROMTO=no
-  esac ]
-)
-
-if test "x$WITH_UDPFROMTO" = "xyes"; then
-  AC_DEFINE(WITH_UDPFROMTO, [], [define if you want udpfromto])
-fi
 
 dnl #############################################################
 dnl #
@@ -653,18 +709,18 @@ AC_CHECK_LIB(ws2_32, htonl)
 dnl #
 dnl #  Check the pcap library for the RADIUS sniffer.
 dnl #
-PCAP_LIBS=
-AC_CHECK_LIB(pcap, pcap_open_live,
-  [
-    PCAP_LIBS="-lpcap"
-    AC_DEFINE(HAVE_LIBPCAP, 1,
-      [Define to 1 if you have the `pcap' library (-lpcap).]
-    )
-  ],
-  [
-    AC_MSG_WARN([pcap library not found, silently disabling the RADIUS sniffer.])
-  ]
-)
+smart_try_dir="$pcap_lib_dir"
+FR_SMART_CHECK_LIB(pcap, pcap_open_live)
+if test "x$ac_cv_lib_pcap_pcap_open_live" != "xyes"; then
+  AC_MSG_WARN([pcap library not found. Use --with-pcap-lib-dir=<path>.])
+  AC_MSG_WARN([pcap library not found, silently disabling the RADIUS sniffer and ARP listener.])
+else
+  PCAP_LIBS="${smart_lib}"
+  LIBS=$old_LIBS
+  AC_DEFINE(HAVE_LIBPCAP, 1,
+    [Define to 1 if you have the `pcap' library (-lpcap).]
+  )
+fi
 
 VL_LIB_READLINE
 
@@ -740,9 +796,10 @@ dnl #
 dnl #  FreeBSD requires sys/socket.h before net/if.h
 dnl #
 AC_CHECK_HEADERS(net/if.h, [], [],
-[#ifdef HAVE_SYS_SOCKET_H
-#  include <sys/socket.h>
-#  endif
+[
+  #ifdef HAVE_SYS_SOCKET_H
+  #  include <sys/socket.h>
+  #endif
 ])
 
 dnl #
@@ -764,11 +821,11 @@ dnl #
 if test "x$WITH_OPENSSL" = xyes; then
   old_LIBS=$LIBS
   old_LDFLAGS="$LDFLAGS"
-  
+
   OPENSSL_INCLUDE="-DNO_OPENSSL"
   OPENSSL_LIBS=
   if test "x$OPENSSL_LIB_DIR" != "x"; then
-    LDFLAGS="$LDFLAGS -L$OPENSSL_LIB_DIR"
+    LDFLAGS="-L$OPENSSL_LIB_DIR $LDFLAGS"
   fi
 
   dnl #
@@ -798,11 +855,13 @@ if test "x$WITH_OPENSSL" = xyes; then
   dnl #  Check we can find required headers
   dnl #
   old_CPPFLAGS=$CPPFLAGS
+  old_CFLAGS=$CFLAGS
   if test "x$OPENSSL_INCLUDE_DIR" != "x"; then
-    CPPFLAGS="$CPPFLAGS -I$OPENSSL_INCLUDE_DIR"
+    CPPFLAGS="-isystem $OPENSSL_INCLUDE_DIR $CPPFLAGS"
+    CFLAGS="-isystem $OPENSSL_INCLUDE_DIR $CFLAGS"
   fi
- 
-  dnl # 
+
+  dnl #
   dnl #  Stupid RedHat shit
   dnl #
   CPPFLAGS="$CPPFLAGS -DOPENSSL_NO_KRB5"
@@ -821,7 +880,7 @@ if test "x$WITH_OPENSSL" = xyes; then
       AC_MSG_FAILURE([failed locating OpenSSL headers])
     ]
   )
-  
+
   AC_MSG_CHECKING([for OpenSSL version >= 0.9.7])
   AC_EGREP_CPP(yes,
     [#include <openssl/crypto.h>
@@ -839,7 +898,7 @@ if test "x$WITH_OPENSSL" = xyes; then
   )
 
   if test "x$OPENSSL_INCLUDE_DIR" != "x"; then
-    OPENSSL_INCLUDE="-I$OPENSSL_INCLUDE_DIR -DOPENSSL_NO_KRB5"
+    OPENSSL_INCLUDE="-isystem $OPENSSL_INCLUDE_DIR -DOPENSSL_NO_KRB5"
   else
     OPENSSL_INCLUDE="-DOPENSSL_NO_KRB5"
   fi
@@ -872,10 +931,15 @@ if test "x$WITH_OPENSSL" = xyes; then
       AC_MSG_FAILURE([OpenSSL library version does not match header version])
     ]
   )
-  
-  CPPFLAGS=$old_CPPFLAGS 
-  LIBS=$old_LIBS
-  LDFLAGS="$old_LDFLAGS"
+
+  if test "x$OPENSSL_LIBS" = x; then
+    LIBS=$old_LIBS
+    LDFLAGS="$old_LDFLAGS"
+  fi
+  if test "x$OPENSSL_INCLUDE" = x; then
+    CPPFLAGS=$old_CPPFLAGS
+    CFLAGS=$old_CFLAGS
+  fi
 fi
 
 AC_SUBST(OPENSSL_INCLUDE)
@@ -888,27 +952,26 @@ dnl #
 if test "x$PCAP_LIBS" = x; then
   AC_MSG_NOTICE([skipping test for pcap.h.])
 else
-  AC_CHECK_HEADER(pcap.h,
-    [
-      AC_DEFINE(HAVE_PCAP_H, 1, [Define to 1 if you have the <pcap.h> header file.])
-      
-      AC_CHECK_LIB(pcap, pcap_fopen_offline,
-        [
-          AC_DEFINE(HAVE_PCAP_FOPEN_OFFLINE, 1, [Define to 1 if you have the function pcap_fopen_offline.])
-        ]
-      )
-      
-      AC_CHECK_LIB(pcap, pcap_dump_fopen,
-        [
-          AC_DEFINE(HAVE_PCAP_DUMP_FOPEN, 1, [Define to 1 if you have the function pcap_dump_fopen.])
-        ]
-      )
-    ],
-    [
-      PCAP_LIBS=
-      AC_MSG_WARN([pcap.h not found, silently disabling the RADIUS sniffer.])
-    ]
-  )
+  smart_try_dir="$pcap_include_dir"
+  FR_SMART_CHECK_INCLUDE([pcap.h])
+  if test "x$ac_cv_header_pcap_h" != "xyes"; then
+    AC_MSG_WARN([pcap headers not found. Use --with-pcap-include-dir=<path>.])
+    AC_MSG_WARN([pcap.h not found, silently disabling the RADIUS sniffer, and ARP listener.])
+  else
+    AC_DEFINE(HAVE_PCAP_H, 1, [Define to 1 if you have the <pcap.h> header file.])
+
+    AC_CHECK_LIB(pcap, pcap_fopen_offline,
+      [
+        AC_DEFINE(HAVE_PCAP_FOPEN_OFFLINE, 1, [Define to 1 if you have the function pcap_fopen_offline.])
+      ]
+    )
+
+    AC_CHECK_LIB(pcap, pcap_dump_fopen,
+      [
+        AC_DEFINE(HAVE_PCAP_DUMP_FOPEN, 1, [Define to 1 if you have the function pcap_dump_fopen.])
+      ]
+    )
+  fi
 fi
 AC_SUBST(PCAP_LIBS)
 
@@ -934,7 +997,7 @@ FR_CHECK_TYPE_INCLUDE(
     #ifdef HAVE_SYS_TYPES_H
     #  include <sys/types.h>
     #endif
-    
+
     #ifdef HAVE_SYS_SOCKET_H
     #  include <sys/socket.h>
     #endif
@@ -950,7 +1013,7 @@ FR_CHECK_TYPE_INCLUDE(
     #ifdef HAVE_INTTYPES_H
     #  include <inttypes.h>
     #endif
-  
+
     #ifdef HAVE_STDINT_H
     #  include <stdint.h>
     #endif
@@ -1128,7 +1191,7 @@ AC_SUBST(LIBPREFIX)
 
 if test "x$developer" = "xyes"; then
   AC_MSG_NOTICE([Setting additional developer CFLAGS])
-  
+
   dnl #
   dnl #  Tell the compiler to parse doxygen documentation and verify it against function and variable declarations
   dnl #
@@ -1141,9 +1204,9 @@ if test "x$developer" = "xyes"; then
     devflags="$devflags -Wshadow -Wpointer-arith -Wcast-qual -Wcast-align -Wwrite-strings -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations -Wnested-externs -W -Wredundant-decls -Wundef -Wformat-y2k -Wno-format-extra-args -Wno-format-zero-length -Wno-cast-align -Wformat-nonliteral -Wformat-security -Wformat=2 -DWITH_VERIFY_PTR=1"
     INSTALLSTRIP=""
   fi
-  
+
   AC_MSG_NOTICE([Developer CFLAGS are "$devflags"])
-  
+
   CFLAGS="$CFLAGS $devflags"
   dnl #
   dnl #  Enable experimental modules (we want to know if code changes breaks one of them)
@@ -1156,7 +1219,17 @@ else
   devflags=""
   CFLAGS="$CFLAGS -DNDEBUG"
   INSTALLSTRIP=""
-  AC_MSG_RESULT([no.])
+fi
+
+dnl #
+dnl #  May of been set outside of this configure script
+dnl #
+AC_MSG_CHECKING([if building with -DNDEBUG])
+if echo "$CFLAGS" | grep '\-DNDEBUG' > /dev/null; then
+  AC_MSG_RESULT([yes])
+  AC_DEFINE([WITH_NDEBUG], [1], [define if the server was built with -DNDEBUG])
+else
+  AC_MSG_RESULT([no])
 fi
 
 export EXPERIMENTAL
@@ -1181,8 +1254,7 @@ dnl Check for talloc
 dnl extra argument: --with-talloc-include-dir=DIR
 talloc_include_dir=
 AC_ARG_WITH(talloc-include-dir,
-  [AS_HELP_STRING([--with-talloc-include-dir=DIR],
-  [Directory where the talloc includes may be found])],
+  [  --with-talloc-include-dir=DIR    directory to look for talloc include files in],
   [case "$withval" in
     no)
       AC_MSG_ERROR([Need talloc-include-dir])
@@ -1194,6 +1266,54 @@ AC_ARG_WITH(talloc-include-dir,
       ;;
   esac])
 
+dnl Check for talloc
+dnl extra argument: --with-talloc-lib-dir=DIR
+talloc_lib_dir=
+AC_ARG_WITH(talloc-lib-dir,
+  [  --with-talloc-lib-dir=DIR        directory to look for talloc library files in],
+  [case "$withval" in
+    no)
+      AC_MSG_ERROR([Need talloc-lib-dir])
+      ;;
+    yes)
+      ;;
+    *)
+      talloc_lib_dir="$withval"
+      ;;
+  esac])
+
+dnl Check for pcap
+dnl extra argument: --with-pcap-include-dir=DIR
+pcap_include_dir=
+AC_ARG_WITH(pcap-include-dir,
+  [  --with-pcap-include-dir=DIR    directory to look for pcap include files in],
+  [case "$withval" in
+    no)
+      AC_MSG_ERROR([Need pcap-include-dir])
+      ;;
+    yes)
+      ;;
+    *)
+      pcap_include_dir="$withval"
+      ;;
+  esac])
+
+dnl Check for pcap
+dnl extra argument: --with-pcap-lib-dir=DIR
+pcap_lib_dir=
+AC_ARG_WITH(pcap-lib-dir,
+  [  --with-pcap-lib-dir=DIR        directory to look for pcap library files in],
+  [case "$withval" in
+    no)
+      AC_MSG_ERROR([Need pcap-lib-dir])
+      ;;
+    yes)
+      ;;
+    *)
+      pcap_lib_dir="$withval"
+      ;;
+  esac])
+
 dnl #
 dnl # Check for talloc header files
 dnl #
@@ -1202,9 +1322,13 @@ FR_SMART_CHECK_INCLUDE([talloc.h])
 if test "x$ac_cv_header_talloc_h" != "xyes"; then
   AC_MSG_WARN([talloc headers not found. Use --with-talloc-include-dir=<path>.])
   AC_MSG_ERROR([FreeRADIUS requires libtalloc])
-else
-  INCLUDE="${SMART_CFLAGS} ${INCLUDE}"
-  LIBS="-ltalloc ${LIBS}"
+fi
+
+smart_try_dir="$talloc_lib_dir"
+FR_SMART_CHECK_LIB(talloc, _talloc)
+if test "x$ac_cv_lib_talloc__talloc" != "xyes"; then
+  AC_MSG_WARN([talloc library not found. Use --with-talloc-lib-dir=<path>.])
+  AC_MSG_ERROR([FreeRADIUS requires libtalloc])
 fi
 
 dnl #
@@ -1230,14 +1354,14 @@ AC_SUBST(CRYPTLIB)
 
 dnl #
 dnl #  Check for regular expression support, if were using PCRE it MUST be included
-dnl #  before all others, else we seem to still pickup the posix symbols for regcomp 
-dnl #  and regexec, which results in crashes as soon as we call any posix regex 
+dnl #  before all others, else we seem to still pickup the posix symbols for regcomp
+dnl #  and regexec, which results in crashes as soon as we call any posix regex
 dnl #  functions.
 dnl #
 dnl extra argument: --with-pcre-lib-dir
 pcre_lib_dir=
 AC_ARG_WITH(rlm-pcre-lib-dir,
-[  --with-pcre-lib-dir=DIR       directory for PCRE library files []],
+[  --with-pcre-lib-dir=DIR          directory to look for PCRE library files in],
 [ case "$withval" in
     no)
 	AC_MSG_ERROR(Need rlm-pcre-lib-dir)
@@ -1253,7 +1377,7 @@ AC_ARG_WITH(rlm-pcre-lib-dir,
 dnl extra argument: --with-pcre-include--dir
 pcre_include_dir=
 AC_ARG_WITH(rlm-pcre-include-dir,
-[  --with-pcre-include-dir=DIR   directory for PCRE include files []],
+[  --with-pcre-include-dir=DIR      directory to look for PCRE include files in],
 [ case "$withval" in
     no)
 	AC_MSG_ERROR(Need rlm-pcre-include-dir)
@@ -1282,7 +1406,7 @@ if test "x$ac_cv_header_pcreposix_h" = "xyes"; then
   REGEX_EXTENDED=yes
   REGEX_PCRE=yes
   LIBS="-lpcre -lpcreposix $LIBS"
-  
+
 dnl #
 dnl #  Then fallback to POSIX regular expressions
 dnl #
@@ -1301,7 +1425,11 @@ else
        ],
     [AC_DEFINE(HAVE_REG_EXTENDED, [1], [define this if we have REG_EXTENDED (from <regex.h>)]) REGEX_EXTENDED=yes]
     )
-    LIBS="$LIBS -lregex"
+dnl #
+dnl # Fixme, this is needed for mingw builds, but not available on some Linux systems
+dnl # despite the presence of regex.h
+dnl #
+dnl # LIBS="$LIBS -lregex"
   fi
 fi
 
@@ -1346,7 +1474,7 @@ case "$host" in
           [style of gethostbyaddr_r functions ])
         gethostbyaddrrstyle=BSD
         AC_MSG_WARN([FreeBSD overridden to BSD-style])
-      ], 
+      ],
       [
         #ifdef HAVE_NETDB_H
         #include <netdb.h>
@@ -1579,7 +1707,7 @@ dnl #
 dnl #############################################################
 if test "x$werror" == "xyes"; then
   CFLAGS="-Werror $CFLAGS"
-fi  
+fi
 
 dnl #############################################################
 dnl #
@@ -1589,7 +1717,7 @@ dnl #############################################################
 AC_CONFIG_COMMANDS([stamp-h], [echo timestamp > src/include/stamp-h])
 AC_CONFIG_COMMANDS([build-radpaths-h], [(cd ./src/include && /bin/sh ./build-radpaths-h)])
 AC_CONFIG_COMMANDS([main-chmod], [(cd ./src/main && chmod +x checkrad radlast radtest)])
-AC_CONFIG_COMMANDS([scripts-chmod], [(cd ./scripts && chmod +x rc.radiusd radiusd.cron.daily radiusd.cron.monthly cryptpasswd)])
+AC_CONFIG_COMMANDS([scripts-chmod], [(cd ./scripts && chmod +x rc.radiusd cron/radiusd.cron.daily cron/radiusd.cron.monthly cryptpasswd)])
 
 dnl #
 dnl #  Substitute whatever libraries we found to be necessary
@@ -1597,9 +1725,8 @@ dnl #
 AC_SUBST(LIBS)
 AC_SUBST(INSTALLSTRIP)
 
-USE_SHARED_LIBS=$enable_shared
 AC_SUBST(USE_SHARED_LIBS)
-USE_STATIC_LIBS=$enable_static
+USE_STATIC_LIBS="yes"
 AC_SUBST(USE_STATIC_LIBS)
 AC_SUBST(STATIC_MODULES)
 
@@ -1611,8 +1738,8 @@ AC_OUTPUT(\
   ./src/main/radlast \
   ./src/main/radtest \
   ./scripts/rc.radiusd \
-  ./scripts/radiusd.cron.daily \
-  ./scripts/radiusd.cron.monthly \
+  ./scripts/cron/radiusd.cron.daily \
+  ./scripts/cron/radiusd.cron.monthly \
   ./scripts/cryptpasswd \
   ./raddb/dictionary \
   ./raddb/radrelay.conf \

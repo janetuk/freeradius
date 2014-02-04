@@ -32,7 +32,6 @@ INSTALL_RADDB_DIRS :=	$(R)$(raddbdir)/ $(addprefix $(R)$(raddbdir)/, $(RADDB_DIR
 
 # Grab files from the various subdirectories
 INSTALL_FILES := 	$(wildcard raddb/sites-available/* raddb/mods-available/*) \
-		 	$(LOCAL_SITES) $(LOCAL_MODULES) \
 		 	$(addprefix raddb/,$(LOCAL_FILES)) \
 		 	$(addprefix raddb/certs/,$(LOCAL_CERT_FILES)) \
 		 	$(shell find raddb/mods-config -type f -print) \
@@ -78,9 +77,17 @@ $(INSTALL_RADDB_DIRS):
 #  system, hopefully without breaking anything.
 
 ifeq "$(wildcard $(R)$(raddbdir)/mods-available/)" ""
+INSTALL_RADDB +=	$(patsubst raddb/%,$(R)$(raddbdir)/%,\
+			$(filter-out %~,$(LOCAL_MODULES)))
+
 # Installation rules for mods-enabled.  Note ORDER dependencies
 $(R)$(raddbdir)/mods-enabled/%: | $(R)$(raddbdir)/mods-available/%
 	@cd $(dir $@) && ln -sf ../mods-available/$(notdir $@)
+endif
+
+ifeq "$(wildcard $(R)$(raddbdir)/sites-available/)" ""
+INSTALL_RADDB +=	$(patsubst raddb/%,$(R)$(raddbdir)/%,\
+			$(filter-out %~,$(LOCAL_SITES)))
 
 # Installation rules for sites-enabled.  Note ORDER dependencies
 $(R)$(raddbdir)/sites-enabled/%: | $(R)$(raddbdir)/sites-available/%
@@ -94,15 +101,15 @@ $(R)$(raddbdir)/%: | raddb/%
 
 # Create symbolic links for legacy files
 $(R)$(raddbdir)/huntgroups: $(R)$(modconfdir)/preprocess/huntgroups
-	@[ -e $@ ] || lecho LN-S $(patsubst $(R)$(raddbdir)/%,raddb/%,$@)
+	@[ -e $@ ] || echo LN-S $(patsubst $(R)$(raddbdir)/%,raddb/%,$@)
 	@[ -e $@ ] || ln -s $(patsubst $(R)$(raddbdir)/%,./%,$<) $@
 
 $(R)$(raddbdir)/hints: $(R)$(modconfdir)/preprocess/hints
-	@[ -e $@ ] || lecho LN-S $(patsubst $(R)$(raddbdir)/%,raddb/%,$@)
+	@[ -e $@ ] || echo LN-S $(patsubst $(R)$(raddbdir)/%,raddb/%,$@)
 	@[ -e $@ ] || ln -s $(patsubst $(R)$(raddbdir)/%,./%,$<) $@
 
 $(R)$(raddbdir)/users: $(R)$(modconfdir)/files/authorize
-	@[ -e $@ ] || lecho LN-S $(patsubst $(R)$(raddbdir)/%,raddb/%,$@)
+	@[ -e $@ ] || echo LN-S $(patsubst $(R)$(raddbdir)/%,raddb/%,$@)
 	@[ -e $@ ] || ln -s $(patsubst $(R)$(raddbdir)/%,./%,$<) $@
 
 $(LOCAL_CERT_PRODUCTS):

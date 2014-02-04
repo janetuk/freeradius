@@ -44,18 +44,18 @@ static long ssl_built = OPENSSL_VERSION_NUMBER;
 int ssl_check_version(void)
 {
 	long ssl_linked;
-	
+
 	ssl_linked = SSLeay();
-	
+
 	if (ssl_linked != ssl_built) {
 		ERROR("libssl version mismatch."
 		       "  Built with: %lx\n  Linked: %lx",
 		       (unsigned long) ssl_built,
 		       (unsigned long) ssl_linked);
-	
+
 		return -1;
 	};
-	
+
 	return 0;
 }
 
@@ -68,7 +68,7 @@ char const *ssl_version(void)
 	return SSLeay_version(SSLEAY_VERSION);
 }
 #else
-int ssl_check_Version(void) {
+int ssl_check_version(void) {
 	return 0;
 }
 
@@ -84,9 +84,9 @@ char const *ssl_version()
 void version(void)
 {
 	INFO("%s: %s", progname, radiusd_version);
-	
+
 	DEBUG3("Server was built with: ");
-		
+
 #ifdef WITH_ACCOUNTING
 	DEBUG3("  accounting");
 #endif
@@ -151,14 +151,13 @@ void version(void)
 	       talloc_version_minor());
 	DEBUG3("  ssl    : %s", ssl_version());
 
-
-	INFO("Copyright (C) 1999-2013 The FreeRADIUS server project and contributors.");
+	INFO("Copyright (C) 1999-2014 The FreeRADIUS server project and contributors");
 	INFO("There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A");
-	INFO("PARTICULAR PURPOSE.");
+	INFO("PARTICULAR PURPOSE");
 	INFO("You may redistribute copies of FreeRADIUS under the terms of the");
-	INFO("GNU General Public License.");
-	INFO("For more information about these matters, see the file named COPYRIGHT.");
-	
+	INFO("GNU General Public License");
+	INFO("For more information about these matters, see the file named COPYRIGHT");
+
 	fflush(NULL);
 }
 

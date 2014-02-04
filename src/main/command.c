@@ -24,11 +24,7 @@
 #ifdef WITH_COMMAND_SOCKET
 
 #include <freeradius-devel/modpriv.h>
-#include <freeradius-devel/conffile.h>
-#include <freeradius-devel/stats.h>
-#include <freeradius-devel/realms.h>
 #include <freeradius-devel/parser.h>
-#include <freeradius-devel/log.h>
 
 #ifdef HAVE_INTTYPES_H
 #include <inttypes.h>
@@ -139,7 +135,7 @@ static int getpeereid(int s, uid_t *euid, gid_t *egid)
 #else
 	struct ucred cr;
 	socklen_t cl = sizeof(cr);
-	
+
 	if (getsockopt(s, SOL_SOCKET, SO_PEERCRED, &cr, &cl) < 0) {
 		return -1;
 	}
@@ -159,12 +155,12 @@ static int fr_server_domain_socket(char const *path)
 	socklen_t socklen;
 	struct sockaddr_un salocal;
 	struct stat buf;
-	
+
 	if (!path) {
 		ERROR("No path provided, was NULL.");
 		return -1;
 	}
-	
+
 	len = strlen(path);
 	if (len >= sizeof(salocal.sun_path)) {
 		ERROR("Path too long in socket filename.");
@@ -180,7 +176,7 @@ static int fr_server_domain_socket(char const *path)
 	memset(&salocal, 0, sizeof(salocal));
 	salocal.sun_family = AF_UNIX;
 	memcpy(salocal.sun_path, path, len + 1); /* SUN_LEN does strlen */
-	
+
 	socklen = SUN_LEN(&salocal);
 
 	/*
@@ -205,7 +201,7 @@ static int fr_server_domain_socket(char const *path)
 			) {
 			ERROR("Cannot turn %s into socket", path);
 			close(sockfd);
-			return -1;		
+			return -1;
 		}
 
 		/*
@@ -253,14 +249,14 @@ static int fr_server_domain_socket(char const *path)
 #ifdef O_NONBLOCK
 	{
 		int flags;
-		
+
 		if ((flags = fcntl(sockfd, F_GETFL, NULL)) < 0)  {
 			ERROR("Failure getting socket flags: %s",
 				strerror(errno));
 			close(sockfd);
 			return -1;
 		}
-		
+
 		flags |= O_NONBLOCK;
 		if( fcntl(sockfd, F_SETFL, flags) < 0) {
 			ERROR("Failure setting socket flags: %s",
@@ -277,7 +273,7 @@ static int fr_server_domain_socket(char const *path)
 
 static void command_close_socket(rad_listen_t *this)
 {
-	this->status = RAD_LISTEN_STATUS_CLOSED;
+	this->status = RAD_LISTEN_STATUS_EOL;
 
 	/*
 	 *	This removes the socket from the event fd, so no one
@@ -297,7 +293,7 @@ static ssize_t cprintf(rad_listen_t *listener, char const *fmt, ...)
 	len = vsnprintf(buffer, sizeof(buffer), fmt, ap);
 	va_end(ap);
 
-	if (listener->status == RAD_LISTEN_STATUS_CLOSED) return 0;
+	if (listener->status == RAD_LISTEN_STATUS_EOL) return 0;
 
 	len = write(listener->fd, buffer, len);
 	if (len <= 0) command_close_socket(listener);
@@ -407,13 +403,13 @@ static char const *tabs = "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t";
  */
 static void cprint_conf_parser(rad_listen_t *listener, int indent, CONF_SECTION *cs,
 			       void const *base)
-			
+
 {
 	int i;
-	const void *data;
+	void const *data;
 	char const *name1 = cf_section_name1(cs);
 	char const *name2 = cf_section_name2(cs);
-	const CONF_PARSER *variables = cf_section_parse_table(cs);
+	CONF_PARSER const *variables = cf_section_parse_table(cs);
 	char buffer[256];
 
 	if (name2) {
@@ -423,7 +419,7 @@ static void cprint_conf_parser(rad_listen_t *listener, int indent, CONF_SECTION 
 	}
 
 	indent++;
-	
+
 	/*
 	 *	Print
 	 */
@@ -437,12 +433,12 @@ static void cprint_conf_parser(rad_listen_t *listener, int indent, CONF_SECTION 
 			if (!variables[i].data) {
 				continue;
 			}
-			
+
 			data = variables[i].data;;
-			
+
 		} else if (variables[i].data) {
 			data = variables[i].data;;
-			
+
 		} else {
 			data = (((char const *)base) + variables[i].offset);
 		}
@@ -452,12 +448,12 @@ static void cprint_conf_parser(rad_listen_t *listener, int indent, CONF_SECTION 
 			cprintf(listener, "%.*s%s = ?\n", indent, tabs,
 				variables[i].name);
 			break;
-			
+
 		case PW_TYPE_INTEGER:
 			cprintf(listener, "%.*s%s = %u\n", indent, tabs,
 				variables[i].name, *(int const *) data);
 			break;
-			
+
 		case PW_TYPE_IPADDR:
 			inet_ntop(AF_INET, data, buffer, sizeof(buffer));
 			break;
@@ -469,9 +465,9 @@ static void cprint_conf_parser(rad_listen_t *listener, int indent, CONF_SECTION 
 		case PW_TYPE_BOOLEAN:
 			cprintf(listener, "%.*s%s = %s\n", indent, tabs,
 				variables[i].name,
-				((*(int const *) data) == 0) ? "no" : "yes");
+				((*(bool const *) data) == false) ? "no" : "yes");
 			break;
-			
+
 		case PW_TYPE_STRING_PTR:
 		case PW_TYPE_FILE_INPUT:
 		case PW_TYPE_FILE_OUTPUT:
@@ -485,7 +481,7 @@ static void cprint_conf_parser(rad_listen_t *listener, int indent, CONF_SECTION 
 				cprintf(listener, "%.*s%s = \n", indent, tabs,
 					variables[i].name);
 			}
-				
+
 			break;
 		}
 	}
@@ -535,8 +531,8 @@ static int command_show_module_methods(rad_listen_t *listener, int argc, char *a
 {
 	int i;
 	CONF_SECTION *cs;
-	const module_instance_t *mi;
-	const module_t *mod;
+	module_instance_t const *mi;
+	module_t const *mod;
 
 	if (argc != 1) {
 		cprintf(listener, "ERROR: No module name was given\n");
@@ -565,8 +561,8 @@ static int command_show_module_methods(rad_listen_t *listener, int argc, char *a
 static int command_show_module_flags(rad_listen_t *listener, int argc, char *argv[])
 {
 	CONF_SECTION *cs;
-	const module_instance_t *mi;
-	const module_t *mod;
+	module_instance_t const *mi;
+	module_t const *mod;
 
 	if (argc != 1) {
 		cprintf(listener, "ERROR: No module name was given\n");
@@ -760,7 +756,7 @@ static int command_show_xml(rad_listen_t *listener, UNUSED int argc, UNUSED char
 		fclose(fp);
 		return 0;
 	}
-	
+
 	ci = cf_reference_item(mainconfig.config, mainconfig.config, argv[0]);
 	if (!ci) {
 		cprintf(listener, "ERROR: No such item <reference>\n");
@@ -846,7 +842,7 @@ static int command_debug_file(rad_listen_t *listener, int argc, char *argv[])
 }
 
 extern fr_cond_t *debug_condition;
-static int command_debug_condition(rad_listen_t *listener, int argc, char *argv[])
+static int command_debug_condition(UNUSED rad_listen_t *listener, int argc, char *argv[])
 {
 	char const *error;
 
@@ -854,7 +850,7 @@ static int command_debug_condition(rad_listen_t *listener, int argc, char *argv[
 	 *	Delete old condition.
 	 *
 	 *	This is thread-safe because the condition is evaluated
-	 *	in the main server thread, as is this code.
+	 *	in the main server thread, along with code.
 	 */
 	talloc_free(debug_condition);
 	debug_condition = NULL;
@@ -866,7 +862,7 @@ static int command_debug_condition(rad_listen_t *listener, int argc, char *argv[
 		return 0;
 	}
 
-	if (fr_condition_tokenize(listener, argv[0], &debug_condition, &error) < 0) {
+	if (fr_condition_tokenize(NULL, NULL, argv[0], &debug_condition, &error, FR_COND_ONE_PASS) < 0) {
 		ERROR("Failed parsing condition '%s': %s", argv[0], error);
 	}
 
@@ -1109,7 +1105,7 @@ static int command_show_home_server_state(rad_listen_t *listener, int argc, char
 		cprintf(listener, "invalid\n");
 		break;
 	}
-	
+
 	return 1;
 }
 #endif
@@ -1320,7 +1316,7 @@ static int command_inject_file(rad_listen_t *listener, int argc, char *argv[])
 		return 0;
 	}
 
-	fake = rad_malloc(sizeof(*fake));
+	fake = talloc(NULL, rad_listen_t);
 	memcpy(fake, sock->inject_listener, sizeof(*fake));
 
 	/*
@@ -1362,8 +1358,8 @@ static int command_inject_file(rad_listen_t *listener, int argc, char *argv[])
 					  &packet->src_ipaddr.ipaddr,
 					  buffer, sizeof(buffer)),
 				packet->code, packet->id);
-		
-		for (vp = paircursor(&cursor, &packet->vps); 
+
+		for (vp = paircursor(&cursor, &packet->vps);
 		     vp;
 		     vp = pairnext(&cursor)) {
 			vp_prints(buffer, sizeof(buffer), vp);
@@ -1385,8 +1381,8 @@ static int command_inject_file(rad_listen_t *listener, int argc, char *argv[])
 	 *	Remember what the output file is, and remember to
 	 *	delete the fake listener when done.
 	 */
-	request_data_add(request, null_socket_send, 0, strdup(buffer), free);
-	request_data_add(request, null_socket_send, 1, fake, free);
+	request_data_add(request, null_socket_send, 0, talloc_strdup(NULL, buffer), true);
+	request_data_add(request, null_socket_send, 1, fake, true);
 
 #endif
 
@@ -1528,7 +1524,7 @@ static int command_set_module_config(rad_listen_t *listener, int argc, char *arg
 	CONF_PAIR *cp;
 	CONF_SECTION *cs;
 	module_instance_t *mi;
-	const CONF_PARSER *variables;
+	CONF_PARSER const *variables;
 	void *data;
 
 	if (argc < 3) {
@@ -1671,7 +1667,7 @@ static int command_print_stats(rad_listen_t *listener, fr_stats_t *stats,
 
 	cprintf(listener, "\trequests\t" PU "\n", stats->total_requests);
 	cprintf(listener, "\tresponses\t" PU "\n", stats->total_responses);
-	
+
 	if (auth) {
 		cprintf(listener, "\taccepts\t\t" PU "\n",
 			stats->total_access_accepts);
@@ -1692,7 +1688,7 @@ static int command_print_stats(rad_listen_t *listener, fr_stats_t *stats,
 		cprintf(listener, "\ttimeouts\t" PU "\n", stats->total_timeouts);
 	}
 
-	cprintf(listener, "\tlast_packet\t%lu\n", stats->last_packet);
+	cprintf(listener, "\tlast_packet\t%" PRId64 "\n", (int64_t) stats->last_packet);
 	for (i = 0; i < 8; i++) {
 		cprintf(listener, "\telapsed.%s\t%u\n",
 			elapsed_names[i], stats->elapsed[i]);
@@ -2145,7 +2141,7 @@ static int command_socket_parse_unix(CONF_SECTION *cs, rad_listen_t *this)
 #if defined(HAVE_GETPEEREID) || defined (SO_PEERCRED)
 	if (sock->uid_name) {
 		struct passwd *pw;
-		
+
 		pw = getpwnam(sock->uid_name);
 		if (!pw) {
 			ERROR("Failed getting uid for %s: %s",
@@ -2194,7 +2190,7 @@ static int command_socket_parse_unix(CONF_SECTION *cs, rad_listen_t *this)
 
 	/*
 	 *	FIXME: check for absolute pathnames?
-	 *	check for uid/gid on the other end...	
+	 *	check for uid/gid on the other end...
 	 */
 
 	this->fd = fr_server_domain_socket(sock->path);
@@ -2225,7 +2221,7 @@ static int command_socket_parse_unix(CONF_SECTION *cs, rad_listen_t *this)
 static int command_socket_parse(CONF_SECTION *cs, rad_listen_t *this)
 {
 	int rcode;
-	const CONF_PAIR *cp;
+	CONF_PAIR const *cp;
 	listen_socket_t *sock;
 
 	cp = cf_pair_find(cs, "socket");
@@ -2310,7 +2306,7 @@ static int str2argvX(char *str, char **argv, int max_argc)
 
 			memcpy(str, buffer, len + 1);
 			argv[argc] = str;
-			
+
 			memcpy(&str, &p, sizeof(str));
 		} else {
 			argv[argc] = str;
@@ -2331,7 +2327,7 @@ static void print_help(rad_listen_t *listener,
 		       fr_command_table_t *table, int recursive)
 {
 	int i;
-	
+
 	for (i = 0; table[i].command != NULL; i++) {
 		if (table[i].help) {
 			cprintf(listener, "%s\n",
@@ -2474,7 +2470,7 @@ static int command_domain_recv_co(rad_listen_t *listener, fr_cs_buffer_t *co)
 				/*
 				 *	This is the last argument, but
 				 *	there's a sub-table.  Print help.
-				 *	
+				 *
 				 */
 				if (argc == 1) {
 					table = table[i].table;
@@ -2552,7 +2548,7 @@ static int command_write_magic(int newfd, listen_socket_t *sock)
 		       strerror(errno));
 		return -1;
 	}
-	
+
 	if (sock) {
 		magic = htonl(2);	/* protocol version */
 	} else {
@@ -2605,7 +2601,7 @@ static int command_tcp_recv(rad_listen_t *this)
 		 */
 		if (co->offset < 16) {
 			ssize_t r;
-			
+
 			r = read(this->fd,
 				 co->buffer + 16 + co->offset, 16 - co->offset);
 			if (r == 0) {
@@ -2619,7 +2615,7 @@ static int command_tcp_recv(rad_listen_t *this)
 				if (errno == ECONNRESET) goto close_socket;
 #endif
 				if (errno == EINTR) return 0;
-				
+
 				ERROR("Failed reading from control socket; %s",
 				       strerror(errno));
 				goto close_socket;
@@ -2669,7 +2665,7 @@ static int command_domain_accept(rad_listen_t *listener)
 	socklen_t salen;
 	struct sockaddr_storage src;
 	fr_command_socket_t *sock = listener->data;
-	
+
 	salen = sizeof(src);
 
 	DEBUG2(" ... new connection request on command socket.");
@@ -2716,12 +2712,12 @@ static int command_domain_accept(rad_listen_t *listener)
 
 			if (sock->uid_name && (sock->uid != uid)) {
 				ERROR("Unauthorized connection to %s from uid %ld",
-				
+
 				       sock->path, (long int) uid);
 				close(newfd);
 				return 0;
 			}
-			
+
 			if (sock->gid_name && (sock->gid != gid)) {
 				ERROR("Unauthorized connection to %s from gid %ld",
 				       sock->path, (long int) gid);

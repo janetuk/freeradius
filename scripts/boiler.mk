@@ -27,6 +27,17 @@
 #       instances of "$" within them need to be escaped with a second "$" to
 #       accomodate the double expansion that occurs when eval is invoked.
 
+#
+#  You can watch what it's doing by:
+#
+#	$ VERBOSE=1 make ... args ...
+#
+ifeq "${VERBOSE}" ""
+    Q=@
+else
+    Q=
+endif
+
 # ADD_CLEAN_RULE - Parameterized "function" that adds a new rule and phony
 #   target for cleaning the specified target (removing its build-generated
 #   files).
@@ -37,7 +48,7 @@ define ADD_CLEAN_RULE
     clean: clean_$(notdir ${1})
     .PHONY: clean_$(notdir ${1})
     clean_$(notdir ${1}):
-	@$(strip rm -f ${${1}_BUILD}/${1} ${${1}_NOLIBTOOL} ${${1}_BUILD}/${${1}_RELINK} $${${1}_OBJS} $${${1}_DEPS} $${${1}_OBJS:%.${OBJ_EXT}=%.[do]}) $(if ${TARGET_DIR},$${TARGET_DIR}/$(notdir ${1}))
+	$(Q)$(strip rm -f ${${1}_BUILD}/${1} $${${1}_OBJS} $${${1}_DEPS} $${${1}_OBJS:%.${OBJ_EXT}=%.[do]}) $(if ${TARGET_DIR},$${TARGET_DIR}/$(notdir ${1}))
 	$${${1}_POSTCLEAN}
 
 endef
@@ -77,9 +88,9 @@ endef
 #	remove sequential duplicate lines
 #
 define FILTER_DEPENDS
-	@mkdir -p $$(dir $${BUILD_DIR}/make/src/$$*)
-	@mkdir -p $$(dir $${BUILD_DIR}/objs/$$*)
-	@sed  -e 's/#.*//' \
+	$(Q)mkdir -p $$(dir $${BUILD_DIR}/make/src/$$*)
+	$(Q)mkdir -p $$(dir $${BUILD_DIR}/objs/$$*)
+	$(Q)sed  -e 's/#.*//' \
 	  -e 's,^$${top_srcdir},$$$${top_srcdir},' \
 	  -e 's, $${top_srcdir}, $$$${top_srcdir},' \
 	  -e 's,^$${BUILD_DIR},$$$${BUILD_DIR},' \
@@ -92,7 +103,7 @@ define FILTER_DEPENDS
 	  -e '/^ *\\$$$$/ d' \
 	  < $${BUILD_DIR}/objs/$$*.d | sed -e '$$$$!N; /^\(.*\)\n\1$$$$/!P; D' \
 	  >  $${BUILD_DIR}/make/src/$$*.mk
-	@sed -e 's/#.*//' \
+	$(Q)sed -e 's/#.*//' \
 	  -e 's, $${BUILD_DIR}/make/include/[^ :]*,,' \
 	  -e 's, /[^: ]*,,g' \
 	  -e 's,^ *[^:]* *: *$$$$,,' \
@@ -131,6 +142,11 @@ $${BUILD_DIR}/objs/%.${OBJ_EXT} $${BUILD_DIR}/objs/%.d: ${1} ${JLIBTOOL}
 ${FILTER_DEPENDS}
 endef
 endif
+
+define ADD_ANALYZE_RULE
+$${BUILD_DIR}/plist/%.plist: ${1} ${JLIBTOOL}
+	${2}
+endef
 
 # ADD_TARGET_DIR - Parameterized "function" that makes a link from
 #   TARGET_DIR to the executable or library in the BUILD_DIR directory.
@@ -176,13 +192,16 @@ define ADD_TARGET_RULE.exe
 
     # Create executable ${1}
     $${${1}_BUILD}/${1}: $${${1}_OBJS} $${${1}_PRBIN} $${${1}_PRLIBS}
-	    @$(strip mkdir -p $(dir $${${1}_BUILD}/${1}))
-	    @$(ECHO) LINK $${${1}_BUILD}/${1}
-	    @$${${1}_LINKER} -o $${${1}_BUILD}/${1} $${RPATH_FLAGS} $${LDFLAGS} \
+	    $(Q)$(strip mkdir -p $(dir $${${1}_BUILD}/${1}))
+	    $(Q)$(ECHO) LINK $${${1}_BUILD}/${1}
+	    $(Q)$${${1}_LINKER} -o $${${1}_BUILD}/${1} $${RPATH_FLAGS} $${LDFLAGS} \
                 $${${1}_LDFLAGS} $${${1}_OBJS} $${${1}_PRLIBS} \
                 $${LDLIBS} $${${1}_LDLIBS}
-	    @$${${1}_POSTMAKE}
+	    $(Q)$${${1}_POSTMAKE}
 
+    ifneq "${ANALYZE.c}" ""
+        scan.${1}: $${${1}_PLISTS}
+    endif
 endef
 
 # ADD_TARGET_RULE.a - Build a static library target.
@@ -196,11 +215,14 @@ define ADD_TARGET_RULE.a
 
     # Create static library ${1}
     $${${1}_BUILD}/${1}: $${${1}_OBJS} $${${1}_PRLIBS}
-	    @$(strip mkdir -p $(dir $${${1}_BUILD}/${1}))
-	    @$(ECHO) LINK $${${1}_BUILD}/${1}
-	    @$${AR} $${ARFLAGS} $${${1}_BUILD}/${1} $${${1}_OBJS}
-	    @$${${1}_POSTMAKE}
+	    $(Q)$(strip mkdir -p $(dir $${${1}_BUILD}/${1}))
+	    $(Q)$(ECHO) LINK $${${1}_BUILD}/${1}
+	    $(Q)$${AR} $${ARFLAGS} $${${1}_BUILD}/${1} $${${1}_OBJS}
+	    $(Q)$${${1}_POSTMAKE}
 
+    ifneq "${ANALYZE.c}" ""
+        scan.${1}: $${${1}_PLISTS}
+    endif
 endef
 
 # ADD_TARGET_RULE.so - Build a ".so" target.
@@ -239,16 +261,25 @@ endef
 
 # COMPILE_C_CMDS - Commands for compiling C source code.
 define COMPILE_C_CMDS
-	@mkdir -p $(dir $@)
-	@$(ECHO) CC $<
-	@$(strip ${COMPILE.c} -o $@ -c -MD ${CFLAGS} ${SRC_CFLAGS} ${INCDIRS} \
+	$(Q)mkdir -p $(dir $@)
+	$(Q)$(ECHO) CC $<
+	$(Q)$(strip ${COMPILE.c} -o $@ -c -MD ${CFLAGS} ${SRC_CFLAGS} ${INCDIRS} \
 	    ${SRC_INCDIRS} ${SRC_DEFS} ${DEFS} $<)
+endef
+
+# ANALYZE_C_CMDS - Commands for analyzing C source code with clang.
+define ANALYZE_C_CMDS
+	$(Q)mkdir -p $(dir $@)
+	$(Q)$(ECHO) SCAN $<
+	$(Q)$(strip ${ANALYZE.c} --analyze -c $< ${CFLAGS} ${SRC_CFLAGS} ${INCDIRS} \
+	    ${SRC_INCDIRS} ${SRC_DEFS} ${DEFS}) || (rm -f $@ && false)
+	$(Q)touch $@
 endef
 
 # COMPILE_CXX_CMDS - Commands for compiling C++ source code.
 define COMPILE_CXX_CMDS
-	@mkdir -p $(dir $@)
-	@$(strip ${COMPILE.cxx} -o $@ -c -MD ${CXXFLAGS} ${SRC_CXXFLAGS} ${INCDIRS} \
+	$(Q)mkdir -p $(dir $@)
+	$(Q)$(strip ${COMPILE.cxx} -o $@ -c -MD ${CXXFLAGS} ${SRC_CXXFLAGS} ${INCDIRS} \
 	    ${SRC_INCDIRS} ${SRC_DEFS} ${DEFS} $<)
 endef
 
@@ -367,10 +398,15 @@ define INCLUDE_SUBMAKEFILE
         OBJS := $$(addprefix $${BUILD_DIR}/objs/,\
                    $$(addsuffix .${OBJ_EXT},$$(basename $${SOURCES})))
 
+	PLISTS := $$(addprefix $${BUILD_DIR}/plist/,\
+                   $$(addsuffix .plist,$$(basename $${SOURCES})))
+	ALL_PLISTS += ${PLISTS}
+
         # Add the objects to the current target's list of objects, and create
         # target-specific variables for the objects based on any source
         # variables that were defined.
         $${TGT}_OBJS += $${OBJS}
+        $${TGT}_PLISTS += $${PLISTS}
         $${TGT}_DEPS += $$(addprefix $${BUILD_DIR}/make/src/,\
                    $$(addsuffix .mk,$$(basename $${SOURCES})))
 
@@ -382,6 +418,12 @@ define INCLUDE_SUBMAKEFILE
         $${OBJS}: SRC_DEFS := $$(addprefix -D,$${SRC_DEFS})
         $${OBJS}: SRC_INCDIRS := $$(addprefix -I,$${SRC_INCDIRS})
         $${OBJS}: ${1}
+
+        $${PLISTS}: SRC_CFLAGS := $${SRC_CFLAGS}
+        $${PLISTS}: SRC_CXXFLAGS := $${SRC_CXXFLAGS}
+        $${PLISTS}: SRC_DEFS := $$(addprefix -D,$${SRC_DEFS})
+        $${PLISTS}: SRC_INCDIRS := $$(addprefix -I,$${SRC_INCDIRS})
+        $${PLISTS}: ${1}
     endif
     endif
 
@@ -559,6 +601,11 @@ INCDIRS := $(addprefix -I,$(call CANONICAL_PATH,${INCDIRS}))
 $(foreach EXT,${C_SRC_EXTS},\
   $(eval $(call ADD_OBJECT_RULE,${EXT},$${COMPILE_C_CMDS})))
 
+ifneq "${ANALYZE.c}" ""
+$(foreach EXT,${C_SRC_EXTS},\
+  $(eval $(call ADD_ANALYZE_RULE,${EXT},$${ANALYZE_C_CMDS})))
+endif
+
 # Add pattern rule(s) for creating compiled object code from C++ source.
 $(foreach EXT,${CXX_SRC_EXTS},\
   $(eval $(call ADD_OBJECT_RULE,${EXT},$${COMPILE_CXX_CMDS})))
@@ -570,3 +617,11 @@ ifneq "$(MAKECMDGOALS)" "clean"
     $(foreach TGT,${ALL_TGTS},\
       $(eval -include ${${TGT}_DEPS}))
 endif
+
+scan: ${ALL_PLISTS}
+
+.PHONY: clean.scan
+clean.scan:
+	$(Q)rm -f ${ALL_PLISTS}
+
+clean: clean.scan

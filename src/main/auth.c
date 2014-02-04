@@ -85,7 +85,7 @@ static int rad_authlog(char const *msg, REQUEST *request, int goodpass)
 	/*
 	 * Get the correct username based on the configured value
 	 */
-	if (log_stripped_names == 0) {
+	if (!log_stripped_names) {
 		username = pairfind(request->packet->vps, PW_USER_NAME, 0, TAG_ANY);
 	} else {
 		username = request->username;
@@ -188,7 +188,7 @@ static int rad_check_password(REQUEST *request)
 		RDEBUG2("Found Auth-Type = %s", dict_valnamebyattr(PW_AUTH_TYPE, 0, auth_type));
 		if (auth_type == PW_AUTHTYPE_REJECT) {
 			RDEBUG2("Auth-Type = Reject, rejecting user");
-			
+
 			return -2;
 		}
 	}
@@ -338,11 +338,9 @@ int rad_postauth(REQUEST *request)
  */
 int rad_authenticate(REQUEST *request)
 {
-	VALUE_PAIR	*namepair;
 #ifdef WITH_SESSION_MGMT
 	VALUE_PAIR	*check_item;
 #endif
-	VALUE_PAIR	*auth_item = NULL;
 	VALUE_PAIR	*module_msg;
 	VALUE_PAIR	*tmp = NULL;
 	int		result;
@@ -394,30 +392,15 @@ int rad_authenticate(REQUEST *request)
 		}
 	}
 #endif
-
-	/*
-	 *	Get the username from the request.
-	 *
-	 *	Note that namepair MAY be NULL, in which case there
-	 *	is no User-Name attribute in the request.
-	 */
-	namepair = request->username;
-
 	/*
 	 *	Look for, and cache, passwords.
 	 */
 	if (!request->password) {
 		request->password = pairfind(request->packet->vps, PW_USER_PASSWORD, 0, TAG_ANY);
 	}
-
-	/*
-	 *	Discover which password we want to use.
-	 */
-	auth_item = request->password;
-	if (!auth_item) {
-		auth_item = pairfind(request->packet->vps, PW_CHAP_PASSWORD, 0, TAG_ANY);
+	if (!request->password) {
+		request->password = pairfind(request->packet->vps, PW_CHAP_PASSWORD, 0, TAG_ANY);
 	}
-	request->password = auth_item;
 
 	/*
 	 *	Get the user's authorization information from the database
@@ -501,11 +484,6 @@ autz_redo:
 #endif
 
 	/*
-	 *	Perhaps there is a Stripped-User-Name now.
-	 */
-	namepair = request->username;
-
-	/*
 	 *	Validate the user
 	 */
 	do {
@@ -537,21 +515,24 @@ autz_redo:
 			rad_authlog("Login incorrect", request, 0);
 		}
 
-		/* double check: maybe the secret is wrong? */
-		if ((debug_flag > 1) && (auth_item != NULL) &&
-				(auth_item->da->attr == PW_USER_PASSWORD)) {
-			uint8_t const *p;
+		if (request->password) {
+			VERIFY_VP(request->password);
+			/* double check: maybe the secret is wrong? */
+			if ((debug_flag > 1) && (request->password->da->attr == PW_USER_PASSWORD)) {
+				uint8_t const *p;
 
-			p = (uint8_t const *) auth_item->vp_strvalue;
-			while (*p) {
-				int size;
+				p = (uint8_t const *) request->password->vp_strvalue;
+				while (*p) {
+					int size;
 
-				size = fr_utf8_char(p);
-				if (!size) {
-					RWDEBUG("Unprintable characters in the password.  Double-check the shared secret on the server and the NAS!");
-					break;
+					size = fr_utf8_char(p);
+					if (!size) {
+						RWDEBUG("Unprintable characters in the password.  Double-check the "
+							"shared secret on the server and the NAS!");
+						break;
+					}
+					p += size;
 				}
-				p += size;
 			}
 		}
 	}
@@ -575,7 +556,7 @@ autz_redo:
 		 *	User authenticated O.K. Now we have to check
 		 *	for the Simultaneous-Use parameter.
 		 */
-		if (namepair &&
+		if (request->username &&
 		    (r = process_checksimul(session_type, request, check_item->vp_integer)) != 0) {
 			char mpp_ok = 0;
 
