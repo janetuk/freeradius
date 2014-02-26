@@ -420,6 +420,10 @@ static int dual_tcp_recv(rad_listen_t *listener)
 	listen_socket_t *sock = listener->data;
 	RADCLIENT	*client = sock->client;
 
+	rad_assert(client != NULL);
+
+	if (listener->status != RAD_LISTEN_STATUS_KNOWN) return 0;
+
 	/*
 	 *	Allocate a packet for partial reads.
 	 */
@@ -458,7 +462,7 @@ static int dual_tcp_recv(rad_listen_t *listener)
 	}
 
 	if (rcode < 0) {	/* error or connection reset */
-		listener->status = RAD_LISTEN_STATUS_REMOVE_NOW;
+		listener->status = RAD_LISTEN_STATUS_EOL;
 
 		/*
 		 *	Tell the event handler that an FD has disappeared.
@@ -1920,9 +1924,11 @@ static int proxy_socket_tcp_recv(rad_listen_t *listener)
 	listen_socket_t	*sock = listener->data;
 	char		buffer[128];
 
+	if (listener->status != RAD_LISTEN_STATUS_KNOWN) return 0;
+
 	packet = fr_tcp_recv(listener->fd, 0);
 	if (!packet) {
-		listener->status = RAD_LISTEN_STATUS_REMOVE_NOW;
+		listener->status = RAD_LISTEN_STATUS_EOL;
 		event_new_fd(listener);
 		return 0;
 	}
@@ -3178,8 +3184,9 @@ add_sockets:
 					DEBUG("Thread %d for %s\n", i, buffer);
 				}
 #endif
-			} else
+			} else {
 				event_new_fd(this);
+			}
 
 		}
 	}
