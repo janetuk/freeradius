@@ -200,7 +200,8 @@ static void tr_response_func( TIDC_INSTANCE *inst,
 REALM *tr_query_realm(const char *q_realm,
 		      const char  *q_community,
 		      const char *q_rprealm,
-		      const char *q_trustrouter)
+		      const char *q_trustrouter,
+		      unsigned int q_trport)
 {
   int conn = 0;
   int rc;
@@ -212,7 +213,7 @@ REALM *tr_query_realm(const char *q_realm,
   memset (cookie, 0, sizeof(struct resp_opaque));
 
   /* Set-up TID connection */
-  if (-1 == (conn = tidc_open_connection(global_tidc, (char *)q_trustrouter, &gssctx))) {
+  if (-1 == (conn = tidc_open_connection(global_tidc, (char *)q_trustrouter, q_trport, &gssctx))) {
     /* Handle error */
     printf("Error in tidc_open_connection.\n");
     return NULL;
