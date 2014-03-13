@@ -86,19 +86,19 @@ void fr_strerror_printf(char const *fmt, ...)
 	char *buffer;
 
 	pthread_once(&fr_strerror_once, fr_strerror_make_key);
-	
+
 	buffer = pthread_getspecific(fr_strerror_key);
 	if (!buffer) {
 		int ret;
-		
+
 		buffer = malloc(FR_STRERROR_BUFSIZE);
 		if (!buffer) return; /* panic and die! */
-	
+
 		ret = pthread_setspecific(fr_strerror_key, buffer);
 		if (ret != 0) {
 			fr_perror("Failed recording thread error: %s",
 				  strerror(ret));
-			
+
 			return;
 		}
 	}
@@ -141,4 +141,38 @@ void fr_perror(char const *fmt, ...)
 		fprintf(stderr, ": ");
 	fprintf(stderr, "%s\n", fr_strerror());
 	va_end(ap);
+}
+
+bool fr_assert_cond(char const *file, int line, char const *expr, bool cond)
+{
+	if (!cond) {
+		fr_perror("SOFT ASSERT FAILED %s[%u]: %s", file, line, expr);
+		return false;
+	}
+
+	return cond;
+}
+
+void NEVER_RETURNS _fr_exit(char const *file, int line, int status)
+{
+#ifndef NDEBUG
+	fr_perror("EXIT CALLED %s[%u]: %i", file, line, status);
+#endif
+	fflush(stderr);
+
+	fr_debug_break();	/* If running under GDB we'll break here */
+
+	exit(status);
+}
+
+void NEVER_RETURNS _fr_exit_now(char const *file, int line, int status)
+{
+#ifndef NDEBUG
+	fr_perror("_EXIT CALLED %s[%u]: %i", file, line, status);
+#endif
+	fflush(stderr);
+
+	fr_debug_break();	/* If running under GDB we'll break here */
+
+	_exit(status);
 }

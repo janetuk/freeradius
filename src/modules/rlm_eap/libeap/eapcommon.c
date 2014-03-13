@@ -88,11 +88,11 @@ eap_type_t eap_name2type(char const *name)
 	DICT_VALUE	*dv;
 
 	dv = dict_valbyname(PW_EAP_TYPE, 0, name);
-	if (dv) {
-		return dv->value;
-	}
-	
-	return PW_EAP_INVALID;
+	if (!dv) return PW_EAP_INVALID;
+
+	if (dv->value >= PW_EAP_MAX_TYPES) return PW_EAP_INVALID;
+
+	return dv->value;
 }
 
 /** Return an EAP-name for a particular type
@@ -107,7 +107,7 @@ char const *eap_type2name(eap_type_t method)
 	if (dv) {
 		return dv->name;
 	}
-	
+
 	return "unknown";
 }
 
@@ -154,7 +154,7 @@ int eap_wireformat(eap_packet_t *reply)
 
 	header->code = (reply->code & 0xFF);
 	header->id = (reply->id & 0xFF);
-	
+
 	total_length = htons(total_length);
 	memcpy(header->length, &total_length, sizeof(total_length));
 
@@ -251,7 +251,7 @@ int eap_basic_compose(RADIUS_PACKET *packet, eap_packet_t *reply)
 VALUE_PAIR *eap_packet2vp(RADIUS_PACKET *packet, eap_packet_raw_t const *eap)
 {
 	int		total, size;
-	const uint8_t	*ptr;
+	uint8_t const *ptr;
 	VALUE_PAIR	*head = NULL;
 	VALUE_PAIR	*vp;
 	vp_cursor_t	out;

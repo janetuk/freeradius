@@ -57,13 +57,13 @@ typedef struct rlm_eap {
 	 *	Configuration items.
 	 */
 	int		timer_limit;
-	
+
 	char const	*default_method_name;
 	eap_type_t	default_method;
-	
-	int		ignore_unknown_types;
-	int		mod_accounting_username_bug;
-	
+
+	bool		ignore_unknown_types;
+	bool		mod_accounting_username_bug;
+
 	int		max_sessions;
 
 #ifdef HAVE_PTHREAD_H
@@ -105,9 +105,6 @@ eap_handler_t 	*eap_handler(rlm_eap_t *inst, eap_packet_raw_t **eap_msg, REQUEST
 EAP_DS      	*eap_ds_alloc(eap_handler_t *handler);
 eap_handler_t 	*eap_handler_alloc(rlm_eap_t *inst);
 void	    	eap_ds_free(EAP_DS **eap_ds);
-void	    	eap_opaque_free(eap_handler_t *handler);
-void	    	eap_handler_free(rlm_eap_t *inst, eap_handler_t *handler);
-
 int 	    	eaplist_add(rlm_eap_t *inst, eap_handler_t *handler);
 eap_handler_t 	*eaplist_find(rlm_eap_t *inst, REQUEST *request,
 			      eap_packet_raw_t *eap_packet);

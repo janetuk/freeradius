@@ -68,8 +68,8 @@ struct fr_event_t {
 
 static int fr_event_list_time_cmp(void const *one, void const *two)
 {
-	const fr_event_t *a = one;
-	const fr_event_t *b = two;
+	fr_event_t const *a = one;
+	fr_event_t const *b = two;
 
 	if (a->when.tv_sec < b->when.tv_sec) return -1;
 	if (a->when.tv_sec > b->when.tv_sec) return +1;
@@ -301,7 +301,7 @@ int fr_event_fd_delete(fr_event_list_t *el, int type, int fd)
 	}
 
 	return 0;
-}			
+}
 
 
 void fr_event_loop_exit(fr_event_list_t *el, int code)
@@ -328,16 +328,16 @@ int fr_event_loop(fr_event_list_t *el)
 		 */
 		if (el->changed) {
 			FD_ZERO(&master_fds);
-			
+
 			for (i = 0; i < el->max_readers; i++) {
 				if (el->readers[i].fd < 0) continue;
-				
+
 				if (el->readers[i].fd > maxfd) {
 					maxfd = el->readers[i].fd;
 				}
 				FD_SET(el->readers[i].fd, &master_fds);
 			}
-			
+
 			el->changed = 0;
 		}
 
@@ -352,7 +352,10 @@ int fr_event_loop(fr_event_list_t *el)
 			fr_event_t *ev;
 
 			ev = fr_heap_peek(el->times);
-			if (!ev) _exit(42);
+			if (!ev) {
+				fr_exit_now(42);
+				_exit(42);
+			}
 
 			gettimeofday(&el->now, NULL);
 
@@ -401,7 +404,7 @@ int fr_event_loop(fr_event_list_t *el)
 				when = el->now;
 			} while (fr_event_run(el, &when) == 1);
 		}
-		
+
 		if (rcode <= 0) continue;
 
 		for (i = 0; i < el->max_readers; i++) {
@@ -410,7 +413,7 @@ int fr_event_loop(fr_event_list_t *el)
 			if (ef->fd < 0) continue;
 
 			if (!FD_ISSET(ef->fd, &read_fds)) continue;
-			
+
 			ef->handler(el, ef->fd, ef->ctx);
 
 			if (el->changed) break;

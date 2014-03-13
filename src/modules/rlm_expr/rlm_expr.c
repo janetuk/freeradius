@@ -37,7 +37,7 @@ RCSID("$Id$")
  *	Define a structure for our module configuration.
  */
 typedef struct rlm_expr_t {
-	const char *xlat_name;
+	char const *xlat_name;
 	char *allowed_chars;
 } rlm_expr_t;
 
@@ -49,16 +49,17 @@ static const CONF_PARSER module_config[] = {
 };
 
 typedef enum expr_token_t {
-  TOKEN_NONE = 0,
-  TOKEN_INTEGER,
-  TOKEN_ADD,
-  TOKEN_SUBTRACT,
-  TOKEN_DIVIDE,
-  TOKEN_REMAINDER,
-  TOKEN_MULTIPLY,
-  TOKEN_AND,
-  TOKEN_OR,
-  TOKEN_LAST
+	TOKEN_NONE = 0,
+	TOKEN_INTEGER,
+	TOKEN_ADD,
+	TOKEN_SUBTRACT,
+	TOKEN_DIVIDE,
+	TOKEN_REMAINDER,
+	TOKEN_MULTIPLY,
+	TOKEN_AND,
+	TOKEN_OR,
+	TOKEN_POWER,
+	TOKEN_LAST
 } expr_token_t;
 
 typedef struct expr_map_t {
@@ -75,6 +76,7 @@ static expr_map_t map[] =
 	{'%',	TOKEN_REMAINDER },
 	{'&',	TOKEN_AND },
 	{'|',	TOKEN_OR },
+	{'^',	TOKEN_POWER },
 	{0,	TOKEN_LAST}
 };
 
@@ -226,6 +228,14 @@ static int get_number(REQUEST *request, char const **string, int64_t *answer)
 		case TOKEN_OR:
 			result |= x;
 			break;
+
+		case TOKEN_POWER:
+			if ((x > 255) || (x < 0)) {
+				REDEBUG("Exponent must be between 0-255");
+				return -1;
+			}
+			x = fr_pow((int32_t) result, (uint8_t) x);
+			break;
 		}
 
 		/*
@@ -309,7 +319,7 @@ static ssize_t randstr_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 	char const 	*p;
 	unsigned int	result;
 	size_t		freespace = outlen;
-	
+
 	if (outlen <= 1) return 0;
 
 	*out = '\0';
@@ -324,49 +334,49 @@ static ssize_t randstr_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 			case 'c':
 				*out++ = 'a' + (result % 26);
 				break;
-			
+
 			/*
 			 *  Uppercase letters
 			 */
 			case 'C':
 				*out++ = 'A' + (result % 26);
 				break;
-			
+
 			/*
 			 *  Numbers
 			 */
 			case 'n':
 				*out++ = '0' + (result % 10);
 				break;
-			
+
 			/*
 			 *  Alpha numeric
 			 */
 			case 'a':
 				*out++ = randstr_salt[result % (sizeof(randstr_salt) - 3)];
 				break;
-			
+
 			/*
 			 *  Punctuation
 			 */
 			case '!':
 				*out++ = randstr_punc[result % (sizeof(randstr_punc) - 1)];
 				break;
-			
+
 			/*
 			 *  Alpa numeric + punctuation
 			 */
 			case '.':
 				*out++ = '!' + (result % 95);
 				break;
-			
+
 			/*
 			 *  Alpha numeric + salt chars './'
-			 */	
+			 */
 			case 's':
 				*out++ = randstr_salt[result % (sizeof(randstr_salt) - 1)];
 				break;
-			
+
 			/*
 			 *  Binary data as hexits (we don't really support
 			 *  non printable chars).
@@ -375,25 +385,25 @@ static ssize_t randstr_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 				if (freespace < 2) {
 					break;
 				}
-				
+
 				snprintf(out, 3, "%02x", result % 256);
-				
+
 				/* Already decremented */
 				freespace -= 1;
 				out += 2;
 				break;
-			
+
 			default:
 				ERROR("rlm_expr: invalid character class '%c'", *p);
-				
+
 				return -1;
 		}
-	
+
 		p++;
 	}
-	
+
 	*out++ = '\0';
-	
+
 	return outlen - freespace;
 }
 
@@ -407,7 +417,7 @@ static ssize_t urlquote_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 {
 	char const 	*p;
 	size_t	freespace = outlen;
-	
+
 	if (outlen <= 1) return 0;
 
 	p = fmt;
@@ -427,9 +437,9 @@ static ssize_t urlquote_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 			default:
 				if (freespace < 3)
 					break;
-				
+
 				snprintf(out, 4, "%%%02x", *p++); /* %xx */
-				
+
 				/* Already decremented */
 				freespace -= 2;
 				out += 3;
@@ -444,7 +454,7 @@ static ssize_t urlquote_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 /**
  * @brief Equivalent to the old safe_characters functionality in rlm_sql
  *
- * @verbatim Example: "%{escape:<img>foo.jpg</img>}" == "=60img=62foo.jpg=60=/img=62" @endverbatim
+ * @verbatim Example: "%{escape:<img>foo.jpg</img>}" == "=60img=62foo.jpg=60/img=62" @endverbatim
  */
 static ssize_t escape_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 			   char const *fmt, char *out, size_t outlen)
@@ -452,7 +462,7 @@ static ssize_t escape_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 	rlm_expr_t *inst = instance;
 	char const 	*p;
 	size_t	freespace = outlen;
-	
+
 	if (outlen <= 1) return 0;
 
 	p = fmt;
@@ -465,26 +475,26 @@ static ssize_t escape_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 			*out++ = *p++;
 			continue;
 		}
-		
+
 		if (freespace < 3)
 			break;
 
 		snprintf(out, 4, "=%02X", *p++);
-		
+
 		/* Already decremented */
 		freespace -= 2;
 		out += 3;
 	}
-	
+
 	*out = '\0';
-	
+
 	return outlen - freespace;
 }
 
 /**
  * @brief Convert a string to lowercase
  *
- * Example "%{lc:Bar}" == "bar"
+ * Example "%{tolower:Bar}" == "bar"
  *
  * Probably only works for ASCII
  */
@@ -510,7 +520,7 @@ static ssize_t lc_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 /**
  * @brief Convert a string to uppercase
  *
- * Example: "%{uc:Foo}" == "FOO"
+ * Example: "%{toupper:Foo}" == "FOO"
  *
  * Probably only works for ASCII
  */
@@ -521,7 +531,7 @@ static ssize_t uc_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 	char const *p;
 
 	if (outlen <= 1) return 0;
-	
+
 	for (p = fmt, q = out; *p != '\0'; p++, outlen--) {
 		if (outlen <= 1) break;
 
@@ -544,7 +554,7 @@ static ssize_t md5_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 	uint8_t digest[16];
 	int i, len;
 	FR_MD5_CTX ctx;
-	
+
 	/*
 	 *	We need room for at least one octet of output.
 	 */
@@ -620,7 +630,7 @@ static ssize_t base64_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 	ssize_t len;
 
 	len = strlen(fmt);
-	
+
 	/*
 	 *  We can accurately calculate the length of the output string
 	 *  if it's larger than outlen, the output would be useless so abort.
@@ -630,7 +640,7 @@ static ssize_t base64_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 		*out = '\0';
 		return -1;
 	}
-	
+
 	return fr_base64_encode((const uint8_t *) fmt, len, out, outlen);
 }
 
@@ -641,35 +651,26 @@ static ssize_t base64_xlat(UNUSED void *instance, UNUSED REQUEST *request,
  */
 static ssize_t base64_to_hex_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 				  char const *fmt, char *out, size_t outlen)
-{	
-	uint8_t decbuf[1024], *p;
-	
+{
+	uint8_t decbuf[1024];
+
 	ssize_t declen;
-	size_t freespace = outlen;
 	ssize_t len = strlen(fmt);
 
 	*out = '\0';
-		
+
 	declen = fr_base64_decode(fmt, len, decbuf, sizeof(decbuf));
 	if (declen < 0) {
 		REDEBUG("Base64 string invalid");
 		return -1;
 	}
-	
-	p = decbuf;
-	while ((declen-- > 0) && (--freespace > 0)) {
-		if (freespace < 3) {
-			break;
-		}
 
-		snprintf(out, 3, "%02x", *p++);
-		
-		/* Already decremented */
-		freespace -= 1;
-		out += 2;
+	if ((size_t)((declen * 2) + 1) > outlen) {
+		REDEBUG("Base64 conversion failed, output buffer exhausted, needed %zd bytes, have %zd bytes",
+			(declen * 2) + 1, outlen);
 	}
 
-	return outlen - freespace;
+	return fr_bin2hex(out, decbuf, declen);
 }
 
 

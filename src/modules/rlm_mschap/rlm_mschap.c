@@ -45,18 +45,18 @@ extern int od_mschap_auth(REQUEST *request, VALUE_PAIR *challenge, VALUE_PAIR * 
 #endif
 
 /* Allowable account control bits */
-#define ACB_DISABLED   0x00010000	//!< User account disabled.
-#define ACB_HOMDIRREQ  0x00020000	//!< Home directory required.
-#define ACB_PWNOTREQ   0x00040000	//!< User password not required.
-#define ACB_TEMPDUP    0x00080000	//!< Temporary duplicate account.
-#define ACB_NORMAL     0x00100000	//!< Normal user account.
-#define ACB_MNS	0x00200000	//!< MNS logon user account.
-#define ACB_DOMTRUST   0x00400000	//!< Interdomain trust account.
-#define ACB_WSTRUST    0x00800000	//!< Workstation trust account.
-#define ACB_SVRTRUST   0x01000000	//!< Server trust account.
-#define ACB_PWNOEXP    0x02000000	//!< User password does not expire.
-#define ACB_AUTOLOCK   0x04000000	//!< Account auto locked.
-#define ACB_PW_EXPIRED 0x00020000	//!< Password Expired.
+#define ACB_DISABLED	0x00010000	//!< User account disabled.
+#define ACB_HOMDIRREQ	0x00020000	//!< Home directory required.
+#define ACB_PWNOTREQ	0x00040000	//!< User password not required.
+#define ACB_TEMPDUP	0x00080000	//!< Temporary duplicate account.
+#define ACB_NORMAL	0x00100000	//!< Normal user account.
+#define ACB_MNS		0x00200000	//!< MNS logon user account.
+#define ACB_DOMTRUST	0x00400000	//!< Interdomain trust account.
+#define ACB_WSTRUST	0x00800000	//!< Workstation trust account.
+#define ACB_SVRTRUST	0x01000000	//!< Server trust account.
+#define ACB_PWNOEXP	0x02000000	//!< User password does not expire.
+#define ACB_AUTOLOCK	0x04000000	//!< Account auto locked.
+#define ACB_PW_EXPIRED	0x00020000	//!< Password Expired.
 
 static int pdb_decode_acct_ctrl(char const *p)
 {
@@ -138,21 +138,22 @@ static int pdb_decode_acct_ctrl(char const *p)
 
 
 typedef struct rlm_mschap_t {
-	int use_mppe;
-	int require_encryption;
-	int require_strong;
-	int with_ntdomain_hack;	/* this should be in another module */
-	char const *xlat_name;
-	char *ntlm_auth;
-	char *ntlm_cpw;
-	char *ntlm_cpw_username;
-	char *ntlm_cpw_domain;
-	char *local_cpw;
-	char const *auth_type;
-	int allow_retry;
-	char *retry_msg;
+	bool		use_mppe;
+	bool		require_encryption;
+	bool		require_strong;
+	bool		with_ntdomain_hack;	/* this should be in another module */
+	char const	*xlat_name;
+	char		*ntlm_auth;
+	int		ntlm_auth_timeout;
+	char		*ntlm_cpw;
+	char		*ntlm_cpw_username;
+	char		*ntlm_cpw_domain;
+	char		*local_cpw;
+	char const	*auth_type;
+	bool		allow_retry;
+	char		*retry_msg;
 #ifdef WITH_OPEN_DIRECTORY
-	int  open_directory;
+	bool		open_directory;
 #endif
 } rlm_mschap_t;
 
@@ -253,7 +254,7 @@ static ssize_t mschap_xlat(void *instance, REQUEST *request,
 				if (inst->with_ntdomain_hack) {
 					username_string++;
 				} else {
-					RDEBUG2("NT Domain delimeter found, should we have enabled with_ntdomain_hack?");
+					RDEBUG2("NT Domain delimiter found, should we have enabled with_ntdomain_hack?");
 					username_string = name_attr->vp_strvalue;
 				}
 			} else {
@@ -460,9 +461,13 @@ static ssize_t mschap_xlat(void *instance, REQUEST *request,
 			return 0;
 		}
 
-		mschap_ntpwdhash(buffer,buf2);
+		if (mschap_ntpwdhash(buffer, buf2) < 0) {
+			RERROR("Failed generating NT-Password");
+			*buffer = '\0';
+			return 0;
+		}
 
-		fr_bin2hex(buffer, out, 16);
+		fr_bin2hex(out, buffer, 16);
 		out[32] = '\0';
 		RDEBUG("NT-Hash of %s = %s", buf2, out);
 		return 32;
@@ -486,7 +491,7 @@ static ssize_t mschap_xlat(void *instance, REQUEST *request,
 		}
 
 		smbdes_lmpwdhash(buf2, buffer);
-		fr_bin2hex(buffer, out, 16);
+		fr_bin2hex(out, buffer, 16);
 		out[32] = '\0';
 		RDEBUG("LM-Hash of %s = %s", buf2, out);
 		return 32;
@@ -550,6 +555,8 @@ static const CONF_PARSER module_config[] = {
 	  offsetof(rlm_mschap_t,with_ntdomain_hack), NULL, "yes" },
 	{ "ntlm_auth",   PW_TYPE_STRING_PTR,
 	  offsetof(rlm_mschap_t, ntlm_auth), NULL,  NULL },
+	{ "ntlm_auth_timeout",   PW_TYPE_INTEGER,
+	  offsetof(rlm_mschap_t, ntlm_auth_timeout), NULL,  NULL },
 	{ "passchange", PW_TYPE_SUBSECTION, 0, NULL, (void const *) passchange_config },
 	{ "allow_retry",   PW_TYPE_BOOLEAN,
 	  offsetof(rlm_mschap_t, allow_retry), NULL,  "yes" },
@@ -588,6 +595,23 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		inst->auth_type = "MS-CHAP";
 	} else {
 		inst->auth_type = inst->xlat_name;
+	}
+
+	/*
+	 *	Check ntlm_auth_timeout is sane
+	 */
+	if (!inst->ntlm_auth_timeout) {
+		inst->ntlm_auth_timeout = EXEC_TIMEOUT;
+	}
+	if (inst->ntlm_auth_timeout < 1) {
+		cf_log_err_cs(conf, "ntml_auth_timeout '%d' is too small (minimum: 1)",
+			      inst->ntlm_auth_timeout);
+		return -1;
+	}
+	if (inst->ntlm_auth_timeout > 10) {
+		cf_log_err_cs(conf, "ntlm_auth_timeout '%d' is too large (maximum: 10)",
+			      inst->ntlm_auth_timeout);
+		return -1;
 	}
 
 	return 0;
@@ -649,10 +673,15 @@ static int write_all(int fd, char const *buf, int len) {
  */
 
 static int do_mschap_cpw(rlm_mschap_t *inst,
-		     REQUEST *request, VALUE_PAIR *nt_password,
-		     uint8_t *new_nt_password,
-		     uint8_t *old_nt_hash,
-		     int do_ntlm_auth)
+			 REQUEST *request,
+#ifdef HAVE_OPENSSL_CRYPTO_H
+			 VALUE_PAIR *nt_password,
+#else
+			 UNUSED VALUE_PAIR *nt_password,
+#endif
+			 uint8_t *new_nt_password,
+			 uint8_t *old_nt_hash,
+			 int do_ntlm_auth)
 {
 	if (inst->ntlm_cpw && do_ntlm_auth) {
 		/*
@@ -707,7 +736,7 @@ static int do_mschap_cpw(rlm_mschap_t *inst,
 			if (len < 0) {
 				goto ntlm_auth_err;
 			}
-			
+
 			buf[len++] = '\n';
 			buf[len] = '\0';
 
@@ -724,7 +753,7 @@ static int do_mschap_cpw(rlm_mschap_t *inst,
 			if (len < 0) {
 				goto ntlm_auth_err;
 			}
-			
+
 			buf[len++] = '\n';
 			buf[len] = '\0';
 
@@ -738,7 +767,7 @@ static int do_mschap_cpw(rlm_mschap_t *inst,
 
 		/* now the password blobs */
 		len = sprintf(buf, "new-nt-password-blob: ");
-		fr_bin2hex(new_nt_password, buf+len, 516);
+		fr_bin2hex(buf+len, new_nt_password, 516);
 		buf[len+1032] = '\n';
 		buf[len+1033] = '\0';
 		len = strlen(buf);
@@ -748,7 +777,7 @@ static int do_mschap_cpw(rlm_mschap_t *inst,
 		}
 
 		len = sprintf(buf, "old-nt-hash-blob: ");
-		fr_bin2hex(old_nt_hash, buf+len, 16);
+		fr_bin2hex(buf+len, old_nt_hash, 16);
 		buf[len+32] = '\n';
 		buf[len+33] = '\0';
 		len = strlen(buf);
@@ -1054,7 +1083,7 @@ static int do_mschap(rlm_mschap_t *inst,
 		 *	Run the program, and expect that we get 16
 		 */
 		result = radius_exec_program(request, inst->ntlm_auth, true, true,
-					     buffer, sizeof(buffer),
+					     buffer, sizeof(buffer), inst->ntlm_auth_timeout,
 					     NULL, NULL);
 		if (result != 0) {
 			char *p;
@@ -1101,7 +1130,7 @@ static int do_mschap(rlm_mschap_t *inst,
 		/*
 		 *	Update the NT hash hash, from the NT key.
 		 */
-		if (fr_hex2bin(buffer + 8, nthashhash, 16) != 16) {
+		if (fr_hex2bin(nthashhash, buffer + 8, 16) != 16) {
 			RDEBUG2("Invalid output from ntlm_auth: NT_KEY has non-hex values");
 			return -1;
 		}
@@ -1358,37 +1387,27 @@ static rlm_rcode_t mod_authenticate(void * instance, REQUEST *request)
 	 */
 	lm_password = pairfind(request->config_items, PW_LM_PASSWORD, 0, TAG_ANY);
 	if (lm_password) {
-		p = talloc_array(lm_password, uint8_t, 16);
-
-		/*
-		 *	Allow raw octets.
-		 */
-		if ((lm_password->length == 16) ||
-		    ((lm_password->length == 32) &&
-		     (fr_hex2bin(lm_password->vp_strvalue,
-				 p, 16) == 16))) {
+		if (lm_password->length == 16) {
 			RDEBUG2("Found LM-Password");
-			lm_password->length = 16;
-			lm_password->vp_octets = p;
-
 		} else {
-			RERROR("Invalid LM-Password");
+			RERROR("LM-Password has not been normalized by the \"pap\" module.  Authentication will fail.");
 			lm_password = NULL;
 		}
-
-	} else if (!password) {
-		if (!do_ntlm_auth) RDEBUG2("No Cleartext-Password configured.  Cannot create LM-Password.");
-
-	} else {		/* there is a configured Cleartext-Password */
+	/*
+	 *	... or a Cleartext-Password, which we now transform into an LM-Password
+	 */
+	} else if (password) {
+		RDEBUG2("Found Cleartext-Password, hashing to create LM-Password");
 		lm_password = pairmake_config("LM-Password", NULL, T_OP_EQ);
 		if (!lm_password) {
 			RERROR("No memory");
 		} else {
 			lm_password->length = 16;
 			lm_password->vp_octets = p = talloc_array(lm_password, uint8_t, lm_password->length);
-			smbdes_lmpwdhash(password->vp_strvalue,
-					 p);
+			smbdes_lmpwdhash(password->vp_strvalue, p);
 		}
+	} else if (!do_ntlm_auth) {
+		RDEBUG2("No Cleartext-Password configured.  Cannot create LM-Password");
 	}
 
 	/*
@@ -1396,34 +1415,31 @@ static rlm_rcode_t mod_authenticate(void * instance, REQUEST *request)
 	 */
 	nt_password = pairfind(request->config_items, PW_NT_PASSWORD, 0, TAG_ANY);
 	if (nt_password) {
-		p = talloc_array(nt_password, uint8_t, 16);
-
-		if ((nt_password->length == 16) ||
-		    ((nt_password->length == 32) &&
-		     (fr_hex2bin(nt_password->vp_strvalue,
-				 p, 16) == 16))) {
+		if (nt_password->length == 16) {
 			RDEBUG2("Found NT-Password");
-			nt_password->length = 16;
-			nt_password->vp_octets = p;
-
 		} else {
-			RERROR("Invalid NT-Password");
+			RERROR("NT-Password has not been normalized by the \"pap\" module.  Authentication will fail.");
 			nt_password = NULL;
 		}
-	} else if (!password) {
-		if (!do_ntlm_auth) RDEBUG2("No Cleartext-Password configured.  Cannot create NT-Password.");
-
-	} else {		/* there is a configured Cleartext-Password */
+	/*
+	 *	... or a Cleartext-Password, which we now transform into an NT-Password
+	 */
+	} else if (password) {
+		RDEBUG2("Found Cleartext-Password, hashing to create NT-Password");
 		nt_password = pairmake_config("NT-Password", NULL, T_OP_EQ);
 		if (!nt_password) {
 			RERROR("No memory");
 			return RLM_MODULE_FAIL;
-		} else {
-			nt_password->length = 16;
-			nt_password->vp_octets = p = talloc_array(nt_password, uint8_t, nt_password->length);
-				mschap_ntpwdhash(p,
-						 password->vp_strvalue);
 		}
+		nt_password->length = 16;
+		nt_password->vp_octets = p = talloc_array(nt_password, uint8_t, nt_password->length);
+
+		if (mschap_ntpwdhash(p, password->vp_strvalue) < 0) {
+			RERROR("Failed generating NT-Password");
+			return RLM_MODULE_FAIL;
+		}
+	} else if (!do_ntlm_auth) {
+		RDEBUG2("No Cleartext-Password configured.  Cannot create NT-Password");
 	}
 
 	cpw = pairfind(request->packet->vps, PW_MSCHAP2_CPW, VENDORPEC_MICROSOFT, TAG_ANY);
@@ -1459,7 +1475,7 @@ static rlm_rcode_t mod_authenticate(void * instance, REQUEST *request)
 		for (seq = 1; seq < 4; seq++) {
 			vp_cursor_t cursor;
 			int found = 0;
-			
+
 			for (nt_enc = paircursor(&cursor, &request->packet->vps);
 			     nt_enc;
 			     nt_enc = pairnext(&cursor)) {
@@ -1521,9 +1537,8 @@ static rlm_rcode_t mod_authenticate(void * instance, REQUEST *request)
 			RDEBUG("Password change failed");
 
 			snprintf(buffer, sizeof(buffer), "E=709 R=0 M=Password change failed");
-			mschap_add_reply(request,
-					cpw->vp_octets[1], "MS-CHAP-Error",
-					buffer, strlen(buffer));
+			mschap_add_reply(request, cpw->vp_octets[1], "MS-CHAP-Error", buffer, strlen(buffer));
+
 			return RLM_MODULE_REJECT;
 		}
 		RDEBUG("Password change successful");
@@ -1536,7 +1551,6 @@ static rlm_rcode_t mod_authenticate(void * instance, REQUEST *request)
 		if (smb_ctrl && smb_ctrl->vp_integer & ACB_PW_EXPIRED) {
 			RDEBUG("clearing expiry bit in SMB-Acct-Ctrl to allow authentication");
 			smb_ctrl->vp_integer &= ~ACB_PW_EXPIRED;
-		} else {
 		}
 
 		/*
@@ -1608,8 +1622,7 @@ static rlm_rcode_t mod_authenticate(void * instance, REQUEST *request)
 		/*
 		 *	Do the MS-CHAP authentication.
 		 */
-		if (do_mschap(inst, request, password, challenge->vp_octets,
-			      response->vp_octets + offset, nthashhash,
+		if (do_mschap(inst, request, password, challenge->vp_octets, response->vp_octets + offset, nthashhash,
 			      do_ntlm_auth) < 0) {
 			RDEBUG2("MS-CHAP-Response is incorrect.");
 			goto do_error;
@@ -1662,7 +1675,7 @@ static rlm_rcode_t mod_authenticate(void * instance, REQUEST *request)
 		} else {
 			name_attr = username;
 		}
-		
+
 		/*
 		 *	with_ntdomain_hack moved here, too.
 		 */
@@ -1676,11 +1689,11 @@ static rlm_rcode_t mod_authenticate(void * instance, REQUEST *request)
 		} else {
 			username_string = name_attr->vp_strvalue;
 		}
-		
-		if (response_name &&
-		    ((username->length != response_name->length) ||
-		     (strncasecmp(username->vp_strvalue, response_name->vp_strvalue, username->length) != 0))) {
-			RWDEBUG("User-Name (%s) is not the same as MS-CHAP Name (%s) from EAP-MSCHAPv2", username->vp_strvalue, response_name->vp_strvalue);
+
+		if (response_name && ((username->length != response_name->length) ||
+		    (strncasecmp(username->vp_strvalue, response_name->vp_strvalue, username->length) != 0))) {
+			RWDEBUG("User-Name (%s) is not the same as MS-CHAP Name (%s) from EAP-MSCHAPv2",
+				username->vp_strvalue, response_name->vp_strvalue);
 		}
 
 #ifdef WITH_OPEN_DIRECTORY
@@ -1707,19 +1720,16 @@ static rlm_rcode_t mod_authenticate(void * instance, REQUEST *request)
 		 *	MS-CHAPv2 takes some additional data to create an
 		 *	MS-CHAPv1 challenge, and then does MS-CHAPv1.
 		 */
-		RDEBUG2("Creating challenge hash with username: %s",
-			username_string);
-		mschap_challenge_hash(response->vp_octets + 2, /* peer challenge */
-			       challenge->vp_octets, /* our challenge */
-			       username_string,	/* user name */
-			       mschapv1_challenge); /* resulting challenge */
+		RDEBUG2("Creating challenge hash with username: %s", username_string);
+		mschap_challenge_hash(response->vp_octets + 2,	/* peer challenge */
+				      challenge->vp_octets,	/* our challenge */
+				      username_string,		/* user name */
+				      mschapv1_challenge);	/* resulting challenge */
 
-		RDEBUG2("Client is using MS-CHAPv2 for %s, we need NT-Password",
-		       username_string);
+		RDEBUG2("Client is using MS-CHAPv2 for %s, we need NT-Password", username_string);
 
 		mschap_result = do_mschap(inst, request, nt_password, mschapv1_challenge,
-				response->vp_octets + 26, nthashhash,
-				do_ntlm_auth);
+					  response->vp_octets + 26, nthashhash, do_ntlm_auth);
 		if (mschap_result == -648)
 			goto password_expired;
 
@@ -1730,53 +1740,48 @@ static rlm_rcode_t mod_authenticate(void * instance, REQUEST *request)
 			RDEBUG2("FAILED: MS-CHAP2-Response is incorrect");
 
 		do_error:
-			snprintf(buffer, sizeof(buffer), "E=691 R=%d",
-				 inst->allow_retry);
+			snprintf(buffer, sizeof(buffer), "E=691 R=%d", inst->allow_retry);
 
 			if (inst->retry_msg) {
 				snprintf(buffer + 9, sizeof(buffer) - 9, " C=");
 				for (i = 0; i < 16; i++) {
-					snprintf(buffer + 12 + i*2,
-						 sizeof(buffer) - 12 - i*2, "%02x",
+					snprintf(buffer + 12 + (i * 2),
+						 sizeof(buffer) - 12 - (i * 2), "%02x",
 						 fr_rand() & 0xff);
 				}
-				snprintf(buffer + 45, sizeof(buffer) - 45,
-					 " V=3 M=%s", inst->retry_msg);
+				snprintf(buffer + 45, sizeof(buffer) - 45, " V=3 M=%s", inst->retry_msg);
 			}
-			mschap_add_reply(request,
-					 *response->vp_octets, "MS-CHAP-Error",
-					 buffer, strlen(buffer));
+			mschap_add_reply(request, *response->vp_octets, "MS-CHAP-Error", buffer, strlen(buffer));
 			return RLM_MODULE_REJECT;
 		}
 
+		/*
+		 *	If the password is correct and it has expired
+		 *	we can permit password changes (only in MS-CHAPv2)
+		 */
 		if (smb_ctrl && smb_ctrl->vp_integer & ACB_PW_EXPIRED) {
-			/*
-			 * if the password is correct and it has expired
-			 * we can permit password changes (only in MS-CHAPv2)
-			 */
+
 			char newchal[33], buffer[128];
 			int i;
 		password_expired:
 
-			for (i = 0; i < 16; i++)
-				snprintf(newchal + i*2, 3, "%02x", fr_rand() & 0xff);
+			for (i = 0; i < 16; i++) {
+				snprintf(newchal + (i * 2), 3, "%02x", fr_rand() & 0xff);
+			}
 
 			snprintf(buffer, sizeof(buffer), "E=648 R=0 C=%s V=3 M=Password Expired", newchal);
 
-			mschap_add_reply(request,
-					 *response->vp_octets, "MS-CHAP-Error",
-					 buffer, strlen(buffer));
+			mschap_add_reply(request, *response->vp_octets, "MS-CHAP-Error", buffer, strlen(buffer));
 			return RLM_MODULE_REJECT;
 		}
 
-		mschap_auth_response(username_string, /* without the domain */
-			      nthashhash, /* nt-hash-hash */
-			      response->vp_octets + 26, /* peer response */
-			      response->vp_octets + 2, /* peer challenge */
-			      challenge->vp_octets, /* our challenge */
-			      msch2resp); /* calculated MPPE key */
-		mschap_add_reply(request, *response->vp_octets,
-				 "MS-CHAP2-Success", msch2resp, 42);
+		mschap_auth_response(username_string,		/* without the domain */
+				     nthashhash,		/* nt-hash-hash */
+				     response->vp_octets + 26,	/* peer response */
+				     response->vp_octets + 2,	/* peer challenge */
+				     challenge->vp_octets,	/* our challenge */
+				     msch2resp);		/* calculated MPPE key */
+		mschap_add_reply(request, *response->vp_octets, "MS-CHAP2-Success", msch2resp, 42);
 		chap = 2;
 
 	} else {		/* Neither CHAPv1 or CHAPv2 response: die */
@@ -1798,10 +1803,8 @@ static rlm_rcode_t mod_authenticate(void * instance, REQUEST *request)
 		 */
 		if (((smb_ctrl->vp_integer & ACB_DISABLED) != 0) ||
 		    ((smb_ctrl->vp_integer & (ACB_NORMAL|ACB_WSTRUST)) == 0)) {
-			RDEBUG2("SMB-Account-Ctrl says that the account is disabled, or is not a normal or workstatin trust account.");
-			mschap_add_reply(request,
-					  *response->vp_octets,
-					  "MS-CHAP-Error", "E=691 R=1", 9);
+			RDEBUG2("SMB-Account-Ctrl says that the account is disabled, or is not a normal or workstation trust account");
+			mschap_add_reply(request, *response->vp_octets, "MS-CHAP-Error", "E=691 R=1", 9);
 			return RLM_MODULE_NOTFOUND;
 		}
 
@@ -1809,10 +1812,8 @@ static rlm_rcode_t mod_authenticate(void * instance, REQUEST *request)
 		 *	User is locked out.
 		 */
 		if ((smb_ctrl->vp_integer & ACB_AUTOLOCK) != 0) {
-			RDEBUG2("SMB-Account-Ctrl says that the account is locked out.");
-			mschap_add_reply(request,
-					  *response->vp_octets,
-					  "MS-CHAP-Error", "E=647 R=0", 9);
+			RDEBUG2("SMB-Account-Ctrl says that the account is locked out");
+			mschap_add_reply(request, *response->vp_octets, "MS-CHAP-Error", "E=647 R=0", 9);
 			return RLM_MODULE_USERLOCK;
 		}
 	}
@@ -1841,16 +1842,11 @@ static rlm_rcode_t mod_authenticate(void * instance, REQUEST *request)
 			 *	do_mschap cares to zero nthashhash if NT hash
 			 *	is not available.
 			 */
-			memcpy(mppe_sendkey + 8,
-			       nthashhash, 16);
-			mppe_add_reply(request,
-				       "MS-CHAP-MPPE-Keys",
-				       mppe_sendkey, 32);
+			memcpy(mppe_sendkey + 8, nthashhash, 16);
+			mppe_add_reply(request, "MS-CHAP-MPPE-Keys", mppe_sendkey, 32);
 		} else if (chap == 2) {
 			RDEBUG2("adding MS-CHAPv2 MPPE keys");
-			mppe_chap2_gen_keys128(nthashhash,
-					       response->vp_octets + 26,
-					       mppe_sendkey, mppe_recvkey);
+			mppe_chap2_gen_keys128(nthashhash, response->vp_octets + 26, mppe_sendkey, mppe_recvkey);
 
 			mppe_add_reply(request,
 				       "MS-MPPE-Recv-Key",
@@ -1875,14 +1871,14 @@ static rlm_rcode_t mod_authenticate(void * instance, REQUEST *request)
 module_t rlm_mschap = {
 	RLM_MODULE_INIT,
 	"MS-CHAP",
-	RLM_TYPE_THREAD_SAFE | RLM_TYPE_HUP_SAFE,		/* type */
+	RLM_TYPE_THREAD_SAFE | RLM_TYPE_HUP_SAFE,	/* type */
 	sizeof(rlm_mschap_t),
 	module_config,
 	mod_instantiate,		/* instantiation */
 	NULL,				/* detach */
 	{
 		mod_authenticate,	/* authenticate */
-		mod_authorize,	/* authorize */
+		mod_authorize,		/* authorize */
 		NULL,			/* pre-accounting */
 		NULL,			/* accounting */
 		NULL,			/* checksimul */

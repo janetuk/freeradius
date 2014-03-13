@@ -119,7 +119,7 @@ static unsigned int psk_server_callback(SSL *ssl, const char *identity,
 		psk_len = strlen(conf->psk_password);
 	if (psk_len > (2 * max_psk_len)) return 0;
 
-	return fr_hex2bin(conf->psk_password, psk, psk_len);
+	return fr_hex2bin(psk, conf->psk_password, psk_len);
 }
 
 static unsigned int psk_client_callback(SSL *ssl, UNUSED char const *hint,
@@ -138,7 +138,7 @@ static unsigned int psk_client_callback(SSL *ssl, UNUSED char const *hint,
 
 	strlcpy(identity, conf->psk_identity, max_identity_len);
 
-	return fr_hex2bin(conf->psk_password, psk, psk_len);
+	return fr_hex2bin(psk, conf->psk_password, psk_len);
 }
 
 #endif
@@ -147,7 +147,7 @@ tls_session_t *tls_new_client_session(fr_tls_server_conf_t *conf, int fd)
 {
 	int verify_mode;
 	tls_session_t *ssn = NULL;
-	
+
 	ssn = talloc_zero(conf, tls_session_t);
 	if (!ssn) return NULL;
 
@@ -196,6 +196,8 @@ tls_session_t *tls_new_session(fr_tls_server_conf_t *conf, REQUEST *request,
 	SSL *new_tls = NULL;
 	int		verify_mode = 0;
 	VALUE_PAIR	*vp;
+
+	rad_assert(request != NULL);
 
 	/*
 	 *	Manually flush the sessions every so often.  If HALF
@@ -299,7 +301,7 @@ tls_session_t *tls_new_session(fr_tls_server_conf_t *conf, REQUEST *request,
 	if (conf->session_cache_enable) {
 		state->allow_session_resumption = 1; /* otherwise it's zero */
 	}
-	
+
 	RDEBUG2("Initiate");
 
 	return state;
@@ -507,7 +509,7 @@ void session_init(tls_session_t *ssn)
 }
 
 void session_close(tls_session_t *ssn)
-{	
+{
 	SSL_set_quiet_shutdown(ssn->ssl, 1);
 	SSL_shutdown(ssn->ssl);
 
@@ -963,20 +965,20 @@ static int load_dh_params(SSL_CTX *ctx, char *file)
 	BIO *bio;
 
 	if ((bio = BIO_new_file(file, "r")) == NULL) {
-		ERROR("rlm_eap_tls: Unable to open DH file - %s", file);
+		ERROR("tls: Unable to open DH file - %s", file);
 		return -1;
 	}
 
 	dh = PEM_read_bio_DHparams(bio, NULL, NULL, NULL);
 	BIO_free(bio);
 	if (!dh) {
-		WDEBUG2("rlm_eap_tls: Unable to set DH parameters.  DH cipher suites may not work!");
+		WDEBUG2("tls: Unable to set DH parameters.  DH cipher suites may not work!");
 		WDEBUG2("Fix this by running the OpenSSL command listed in eap.conf");
 		return 0;
 	}
 
 	if (SSL_CTX_set_tmp_dh(ctx, dh) < 0) {
-		ERROR("rlm_eap_tls: Unable to set DH parameters");
+		ERROR("tls: Unable to set DH parameters");
 		DH_free(dh);
 		return -1;
 	}
@@ -996,7 +998,7 @@ static int generate_eph_rsa_key(SSL_CTX *ctx)
 	rsa = RSA_generate_key(512, RSA_F4, NULL, NULL);
 
 	if (!SSL_CTX_set_tmp_rsa(ctx, rsa)) {
-		ERROR("rlm_eap_tls: Couldn't set ephemeral RSA key");
+		ERROR("tls: Couldn't set ephemeral RSA key");
 		return -1;
 	}
 
@@ -1027,7 +1029,7 @@ static void cbtls_remove_session(SSL_CTX *ctx, SSL_SESSION *sess)
 	size = sess->session_id_length;
 	if (size > MAX_SESSION_SIZE) size = MAX_SESSION_SIZE;
 
-	fr_bin2hex(sess->session_id, buffer, size);
+	fr_bin2hex(buffer, sess->session_id, size);
 
 	DEBUG2("  SSL: Removing session %s from the cache", buffer);
 	conf = (fr_tls_server_conf_t *)SSL_CTX_get_app_data(ctx);
@@ -1036,18 +1038,16 @@ static void cbtls_remove_session(SSL_CTX *ctx, SSL_SESSION *sess)
 		char filename[256];
 
 		/* remove session and any cached VPs */
-		rv = snprintf(filename, sizeof(filename), "%s%c%s.asn1",
-			conf->session_cache_path, FR_DIR_SEP, buffer
-			);
+		snprintf(filename, sizeof(filename), "%s%c%s.asn1",
+			 conf->session_cache_path, FR_DIR_SEP, buffer);
 		rv = unlink(filename);
 		if (rv != 0) {
 			DEBUG2("  SSL: could not remove persisted session file %s: %s", filename, strerror(errno));
 		}
 		/* VPs might be absent; might not have been written to disk yet */
-		rv = snprintf(filename, sizeof(filename), "%s%c%s.vps",
-			conf->session_cache_path, FR_DIR_SEP, buffer
-			);
-		rv = unlink(filename);
+		snprintf(filename, sizeof(filename), "%s%c%s.vps",
+			 conf->session_cache_path, FR_DIR_SEP, buffer);
+		unlink(filename);
 	}
 
 	return;
@@ -1063,7 +1063,7 @@ static int cbtls_new_session(SSL *ssl, SSL_SESSION *sess)
 	size = sess->session_id_length;
 	if (size > MAX_SESSION_SIZE) size = MAX_SESSION_SIZE;
 
-	fr_bin2hex(sess->session_id, buffer, size);
+	fr_bin2hex(buffer, sess->session_id, size);
 
 	DEBUG2("  SSL: adding session %s to cache", buffer);
 
@@ -1096,8 +1096,8 @@ static int cbtls_new_session(SSL *ssl, SSL_SESSION *sess)
 		}
 
 		/* open output file */
-		rv = snprintf(filename, sizeof(filename), "%s%c%s.asn1",
-			      conf->session_cache_path, FR_DIR_SEP, buffer);
+		snprintf(filename, sizeof(filename), "%s%c%s.asn1",
+			 conf->session_cache_path, FR_DIR_SEP, buffer);
 		fd = open(filename, O_RDWR|O_CREAT|O_EXCL, 0600);
 		if (fd < 0) {
 			DEBUG2("  SSL: could not open session file %s: %s", filename, strerror(errno));
@@ -1141,7 +1141,7 @@ static SSL_SESSION *cbtls_get_session(SSL *ssl,
 	size = len;
 	if (size > MAX_SESSION_SIZE) size = MAX_SESSION_SIZE;
 
-	fr_bin2hex(data, buffer, size);
+	fr_bin2hex(buffer, data, size);
 
 	DEBUG2("  SSL: Client requested cached session %s", buffer);
 
@@ -1154,9 +1154,8 @@ static SSL_SESSION *cbtls_get_session(SSL *ssl,
 		VALUE_PAIR *vp;
 
 		/* read in the cached VPs from the .vps file */
-		rv = snprintf(filename, sizeof(filename), "%s%c%s.vps",
-			conf->session_cache_path, FR_DIR_SEP, buffer
-			);
+		snprintf(filename, sizeof(filename), "%s%c%s.vps",
+			 conf->session_cache_path, FR_DIR_SEP, buffer);
 		rv = pairlist_read(NULL, filename, &pairlist, 1);
 		if (rv < 0) {
 			/* not safe to un-persist a session w/o VPs */
@@ -1165,17 +1164,16 @@ static SSL_SESSION *cbtls_get_session(SSL *ssl,
 		}
 
 		/* load the actual SSL session */
-		rv = snprintf(filename, sizeof(filename), "%s%c%s.asn1",
-			conf->session_cache_path, FR_DIR_SEP, buffer
-			);
+		snprintf(filename, sizeof(filename), "%s%c%s.asn1",
+			 conf->session_cache_path, FR_DIR_SEP, buffer);
 		fd = open(filename, O_RDONLY);
-		if (fd == -1) {
+		if (fd < 0) {
 			DEBUG2("  SSL: could not find persisted session file %s: %s", filename, strerror(errno));
 			goto err;
 		}
 
 		rv = fstat(fd, &st);
-		if (rv == -1) {
+		if (rv < 0) {
 			DEBUG2("  SSL: could not stat persisted session file %s: %s", filename, strerror(errno));
 			close(fd);
 			goto err;
@@ -1311,7 +1309,7 @@ static int ocsp_check(X509_STORE *store, X509 *issuer_cert, X509 *client_cert,
 		ocsp_ok = 2;
 		goto ocsp_skip;
 	}
-	
+
 	DEBUG2("[ocsp] --> Responder URL = http://%s:%s%s", host, port, path);
 
 	/* Setup BIO socket to OCSP responder */
@@ -1512,6 +1510,8 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 {
 	char subject[1024]; /* Used for the subject name */
 	char issuer[1024]; /* Used for the issuer name */
+	char attribute[1024];
+	char value[1024];
 	char common_name[1024];
 	char cn_str[1024];
 	char buf[64];
@@ -1694,7 +1694,7 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 		BIO *out;
 
 		out = BIO_new(BIO_s_mem());
-		strlcpy(subject, "TLS-Client-Cert-", sizeof(subject));
+		strlcpy(attribute, "TLS-Client-Cert-", sizeof(attribute));
 
 		for (i = 0; i < sk_X509_EXTENSION_num(ext_list); i++) {
 			ASN1_OBJECT *obj;
@@ -1705,32 +1705,32 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 
 			obj = X509_EXTENSION_get_object(ext);
 			i2a_ASN1_OBJECT(out, obj);
-			len = BIO_read(out, subject + 16 , sizeof(subject) - 16 - 1);
+			len = BIO_read(out, attribute + 16 , sizeof(attribute) - 16 - 1);
 			if (len <= 0) continue;
 
-			subject[16 + len] = '\0';
+			attribute[16 + len] = '\0';
 
 			X509V3_EXT_print(out, ext, 0, 0);
-			len = BIO_read(out, issuer , sizeof(issuer) - 1);
+			len = BIO_read(out, value , sizeof(value) - 1);
 			if (len <= 0) continue;
 
-			issuer[len] = '\0';
+			value[len] = '\0';
 
 			/*
 			 *	Mash the OpenSSL name to our name, and
 			 *	create the attribute.
 			 */
-			for (p = subject + 16; *p != '\0'; p++) {
+			for (p = value + 16; *p != '\0'; p++) {
 				if (*p == ' ') *p = '-';
 			}
-				
-			vp = pairmake(NULL, certs, subject, issuer, T_OP_ADD);
+
+			vp = pairmake(NULL, certs, attribute, value, T_OP_ADD);
 			if (vp) debug_pair_list(vp);
 		}
 
 		BIO_free_all(out);
 	}
-	
+
 	switch (ctx->error) {
 
 	case X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT:
@@ -1764,7 +1764,7 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 		 */
 		if (conf->check_cert_issuer &&
 		    (strcmp(issuer, conf->check_cert_issuer) != 0)) {
-			AUTH("rlm_eap_tls: Certificate issuer (%s) does not match specified value (%s)!", issuer, conf->check_cert_issuer);
+			AUTH("tls: Certificate issuer (%s) does not match specified value (%s)!", issuer, conf->check_cert_issuer);
 			my_ok = 0;
 		}
 
@@ -1780,7 +1780,7 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 			} else {
 				RDEBUG2("checking certificate CN (%s) with xlat'ed value (%s)", common_name, cn_str);
 				if (strcmp(cn_str, common_name) != 0) {
-					AUTH("rlm_eap_tls: Certificate CN (%s) does not match specified value (%s)!", common_name, cn_str);
+					AUTH("tls: Certificate CN (%s) does not match specified value (%s)!", common_name, cn_str);
 					my_ok = 0;
 				}
 			}
@@ -1833,8 +1833,8 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 
 			RDEBUG("Verifying client certificate: %s", conf->verify_client_cert_cmd);
 			if (radius_exec_program(request, conf->verify_client_cert_cmd, true, true, NULL, 0,
-						request->packet->vps, NULL) != 0) {
-				AUTH("rlm_eap_tls: Certificate CN (%s) fails external verification!", common_name);
+						EXEC_TIMEOUT, request->packet->vps, NULL) != 0) {
+				AUTH("tls: Certificate CN (%s) fails external verification!", common_name);
 				my_ok = 0;
 			} else {
 				RDEBUG("Client certificate CN %s passed external validation", common_name);
@@ -1879,8 +1879,8 @@ static X509_STORE *init_revocation_store(fr_tls_server_conf_t *conf)
 	/* Load the CAs we trust */
 	if (conf->ca_file || conf->ca_path)
 		if(!X509_STORE_load_locations(store, conf->ca_file, conf->ca_path)) {
-			ERROR("rlm_eap: X509_STORE error %s", ERR_error_string(ERR_get_error(), NULL));
-			ERROR("rlm_eap_tls: Error reading Trusted root CA list %s",conf->ca_file );
+			ERROR("tls: X509_STORE error %s", ERR_error_string(ERR_get_error(), NULL));
+			ERROR("tls: Error reading Trusted root CA list %s",conf->ca_file );
 			return NULL;
 		}
 
@@ -1944,6 +1944,17 @@ static void sess_free_vps(UNUSED void *parent, void *data_ptr,
 	pairfree(&vp);
 }
 
+/*
+ *	Add all the default ciphers and message digests
+ *	Create our context.
+ *
+ *	This should be called exactly once from main.
+ */
+void tls_global_init(void)
+{
+	SSL_library_init();
+	SSL_load_error_strings();
+}
 
 /*
  *	Create Global context SSL and use it in every new session
@@ -1959,13 +1970,6 @@ static void sess_free_vps(UNUSED void *parent, void *data_ptr,
 	int verify_mode = SSL_VERIFY_NONE;
 	int ctx_options = 0;
 	int type;
-
-	/*
-	 *	Add all the default ciphers and message digests
-	 *	Create our context.
-	 */
-	SSL_library_init();
-	SSL_load_error_strings();
 
 	/*
 	 *	SHA256 is in all versions of OpenSSL, but isn't
@@ -2009,12 +2013,12 @@ static void sess_free_vps(UNUSED void *parent, void *data_ptr,
 					strlen(special_string)) == 0)
 		{
 			char cmd[256];
-			const long max_password_len = 128;
+			long const max_password_len = 128;
 			snprintf(cmd, sizeof(cmd) - 1,
 					 "/usr/sbin/certadmin --get-private-key-passphrase \"%s\"",
 					 conf->private_key_file);
 
-			DEBUG2("rlm_eap: Getting private key passphrase using command \"%s\"", cmd);
+			DEBUG2("tls: Getting private key passphrase using command \"%s\"", cmd);
 
 			FILE* cmd_pipe = popen(cmd, "r");
 			if (!cmd_pipe) {
@@ -2037,7 +2041,7 @@ static void sess_free_vps(UNUSED void *parent, void *data_ptr,
 
 			/* Get rid of newline at end of password. */
 			conf->private_key_password[strlen(conf->private_key_password) - 1] = '\0';
-			DEBUG2("rlm_eap:  Password from command = \"%s\"", conf->private_key_password);
+			DEBUG2("tls:  Password from command = \"%s\"", conf->private_key_password);
 		}
 #endif
 		SSL_CTX_set_default_passwd_cb_userdata(ctx, conf->private_key_password);
@@ -2086,14 +2090,13 @@ static void sess_free_vps(UNUSED void *parent, void *data_ptr,
 		if (strlen(conf->psk_password) > (2 * PSK_MAX_PSK_LEN)) {
 			ERROR("psk_hexphrase is too long (max %d)",
 			       PSK_MAX_PSK_LEN);
-			return NULL;			
+			return NULL;
 		}
 
-		hex_len = fr_hex2bin(conf->psk_password,
-				     (uint8_t *) buffer, psk_len);
+		hex_len = fr_hex2bin((uint8_t *) buffer, conf->psk_password, psk_len);
 		if (psk_len != (2 * hex_len)) {
 			ERROR("psk_hexphrase is not all hex");
-			return NULL;			
+			return NULL;
 		}
 
 		goto post_ca;
@@ -2132,8 +2135,8 @@ static void sess_free_vps(UNUSED void *parent, void *data_ptr,
 load_ca:
 	if (conf->ca_file || conf->ca_path) {
 		if (!SSL_CTX_load_verify_locations(ctx, conf->ca_file, conf->ca_path)) {
-			ERROR("rlm_eap: SSL error %s", ERR_error_string(ERR_get_error(), NULL));
-			ERROR("rlm_eap_tls: Error reading Trusted root CA list %s",conf->ca_file );
+			ERROR("tls: SSL error %s", ERR_error_string(ERR_get_error(), NULL));
+			ERROR("tls: Error reading Trusted root CA list %s",conf->ca_file );
 			return NULL;
 		}
 	}
@@ -2146,7 +2149,7 @@ load_ca:
 			       ERR_error_string(ERR_get_error(), NULL));
 			return NULL;
 		}
-		
+
 		/*
 		 * Check if the loaded private key is the right one
 		 */
@@ -2220,7 +2223,7 @@ post_ca:
 
 	/*
 	 *	Callbacks, etc. for session resumption.
-	 */						
+	 */
 	if (conf->session_cache_enable) {
 		SSL_CTX_sess_set_new_cb(ctx, cbtls_new_session);
 		SSL_CTX_sess_set_get_cb(ctx, cbtls_get_session);
@@ -2238,8 +2241,8 @@ post_ca:
 	if (conf->check_crl) {
 	  certstore = SSL_CTX_get_cert_store(ctx);
 	  if (certstore == NULL) {
-	    ERROR("rlm_eap: SSL error %s", ERR_error_string(ERR_get_error(), NULL));
-	    ERROR("rlm_eap_tls: Error reading Certificate Store");
+	    ERROR("tls: SSL error %s", ERR_error_string(ERR_get_error(), NULL));
+	    ERROR("tls: Error reading Certificate Store");
 	    return NULL;
 	  }
 	  X509_STORE_set_flags(certstore, X509_V_FLAG_CRL_CHECK);
@@ -2262,8 +2265,8 @@ post_ca:
 	/* Load randomness */
 	if (conf->random_file) {
 		if (!(RAND_load_file(conf->random_file, 1024*1024))) {
-			ERROR("rlm_eap: SSL error %s", ERR_error_string(ERR_get_error(), NULL));
-			ERROR("rlm_eap_tls: Error loading randomness");
+			ERROR("tls: SSL error %s", ERR_error_string(ERR_get_error(), NULL));
+			ERROR("tls: Error loading randomness");
 			return NULL;
 		}
 	}
@@ -2273,7 +2276,7 @@ post_ca:
 	 */
 	if (conf->cipher_list) {
 		if (!SSL_CTX_set_cipher_list(ctx, conf->cipher_list)) {
-			ERROR("rlm_eap_tls: Error setting cipher list");
+			ERROR("tls: Error setting cipher list");
 			return NULL;
 		}
 	}
@@ -2515,7 +2518,7 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 			RDEBUG("FAIL: Forcibly stopping session resumption as it is not allowed.");
 			return -1;
 		}
-		
+
 		/*
 		 *	Else resumption IS allowed, so we store the
 		 *	user data in the cache.
@@ -2528,14 +2531,14 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 		size = ssn->ssl->session->session_id_length;
 		if (size > MAX_SESSION_SIZE) size = MAX_SESSION_SIZE;
 
-		fr_bin2hex(ssn->ssl->session->session_id, buffer, size);
+		fr_bin2hex(buffer, ssn->ssl->session->session_id, size);
 
 		vp = paircopy2(NULL, request->reply->vps, PW_USER_NAME, 0, TAG_ANY);
 		if (vp) pairadd(&vps, vp);
-		
+
 		vp = paircopy2(NULL, request->packet->vps, PW_STRIPPED_USER_NAME, 0, TAG_ANY);
 		if (vp) pairadd(&vps, vp);
-		
+
 		vp = paircopy2(NULL, request->reply->vps, PW_CACHED_SESSION_POLICY, 0, TAG_ANY);
 		if (vp) pairadd(&vps, vp);
 
@@ -2598,7 +2601,7 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 		size = ssn->ssl->session->session_id_length;
 		if (size > MAX_SESSION_SIZE) size = MAX_SESSION_SIZE;
 
-		fr_bin2hex(ssn->ssl->session->session_id, buffer, size);
+		fr_bin2hex(buffer, ssn->ssl->session->session_id, size);
 
 		vps = SSL_SESSION_get_ex_data(ssn->ssl->session,
 					     FR_TLS_EX_INDEX_VPS);
@@ -2608,7 +2611,7 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 
 		} else {
 			vp_cursor_t cursor;
-			
+
 			RDEBUG("Adding cached attributes for session %s:", buffer);
 			debug_pair_list(vps);
 
@@ -2665,11 +2668,11 @@ void tls_fail(tls_session_t *ssn)
 
 fr_tls_status_t tls_application_data(tls_session_t *ssn,
 				     REQUEST *request)
-				
+
 {
 	int err;
 
-	/*	
+	/*
 	 *	Decrypt the complete record.
 	 */
 	err = BIO_write(ssn->into_ssl, ssn->dirty_in.data,
@@ -2680,14 +2683,14 @@ fr_tls_status_t tls_application_data(tls_session_t *ssn,
 		       ssn->dirty_in.used, err);
 		return FR_TLS_FAIL;
 	}
-	
+
 	/*
 	 *      Clear the dirty buffer now that we are done with it
 	 *      and init the clean_out buffer to store decrypted data
 	 */
 	record_init(&ssn->dirty_in);
 	record_init(&ssn->clean_out);
-	
+
 	/*
 	 *      Read (and decrypt) the tunneled data from the
 	 *      SSL session, and put it into the decrypted
@@ -2695,12 +2698,12 @@ fr_tls_status_t tls_application_data(tls_session_t *ssn,
 	 */
 	err = SSL_read(ssn->ssl, ssn->clean_out.data,
 		       sizeof(ssn->clean_out.data));
-	
+
 	if (err < 0) {
 		int code;
 
 		RDEBUG("SSL_read Error");
-		
+
 		code = SSL_get_error(ssn->ssl, err);
 		switch (code) {
 		case SSL_ERROR_WANT_READ:
@@ -2721,16 +2724,16 @@ fr_tls_status_t tls_application_data(tls_session_t *ssn,
 		}
 		return FR_TLS_FAIL;
 	}
-	
+
 	if (err == 0) {
 		RWDEBUG("No data inside of the tunnel.");
 	}
-	
+
 	/*
 	 *	Passed all checks, successfully decrypted data
 	 */
 	ssn->clean_out.used = err;
-	
+
 	return FR_TLS_OK;
 }
 
@@ -2785,7 +2788,7 @@ fr_tls_status_t tls_ack_handler(tls_session_t *ssn, REQUEST *request)
 	case application_data:
 		RDEBUG2("ACK handshake fragment handler in application data");
 		return FR_TLS_REQUEST;
-						
+
 		/*
 		 *	For the rest of the conditions, switch over
 		 *	to the default section below.

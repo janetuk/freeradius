@@ -18,7 +18,20 @@ datadir		= @datadir@
 dictdir		= $(datadir)/freeradius
 logdir		= @logdir@
 includedir	= @includedir@
+
+#
+#  In some systems, we don't want to over-write ANY configuration.
+#  So we do:
+#
+#	$./configure
+#	$ make
+#	$ make -Draddbdir=/tmp/garbage install
+#
+#  and all of the configuration files go into /tmp/garbage
+#
+ifeq "${raddbdir}" ""
 raddbdir	= @raddbdir@
+endif
 modconfdir	= @modconfdir@
 radacctdir	= @radacctdir@
 top_builddir	= @abs_top_builddir@
@@ -50,6 +63,7 @@ INSTALL_PROGRAM	= ${INSTALL}
 INSTALL_DATA	= ${INSTALL} -m 644
 INSTALL_SCRIPT	= ${INSTALL_PROGRAM}
 INSTALLSTRIP	= @INSTALLSTRIP@
+DARWIN_CFLAGS	= @DARWIN_CFLAGS@
 
 LCRYPT		= @CRYPTLIB@
 LIBS		= @LIBS@
@@ -60,26 +74,24 @@ RADDBDIR	= ${raddbdir}
 RUNDIR		= ${localstatedir}/run/radiusd
 SBINDIR		= ${sbindir}
 RADIR		= ${radacctdir}
-LIBRADIUS	= $(top_builddir)/src/lib/$(LIBPREFIX)freeradius-radius.la -l talloc
+LIBRADIUS	= $(top_builddir)/src/lib/$(LIBPREFIX)freeradius-radius.la -ltalloc
 
-#USE_SHARED_LIBS = @USE_SHARED_LIBS@
-#USE_STATIC_LIBS = @USE_STATIC_LIBS@
+USE_SHARED_LIBS = @USE_SHARED_LIBS@
+bm_shared_libs  = @USE_SHARED_LIBS@
+USE_STATIC_LIBS = @USE_STATIC_LIBS@
+bm_static_libs  = @USE_STATIC_LIBS@
 
-USE_SHARED_LIBS = yes
-USE_STATIC_LIBS = yes
 STATIC_MODULES	= @STATIC_MODULES@
 
 OPENSSL_LIBS	= @OPENSSL_LIBS@
 OPENSSL_INCLUDE = @OPENSSL_INCLUDE@
-CFLAGS		+= $(OPENSSL_INCLUDE)
 
 #
 #  If the system has OpenSSL, use it's version of MD4/MD5/SHA1, instead of
 #  using ours.
 #
-ifneq "$(OPENSSL_LIBS)" ""
-CFLAGS		+=  -DWITH_OPENSSL_MD4 -DWITH_OPENSSL_MD5 $(OPENSSL_INCLUDE)
-LDFLAGS		+= $(OPENSSL_LIBS)
+ifneq "$(OPENSSL_INCLUDE)" ""
+CFLAGS		+=  -DWITH_OPENSSL_MD4 -DWITH_OPENSSL_MD5
 endif
 
 LIBREADLINE	= @LIBREADLINE@
@@ -160,4 +172,26 @@ ifeq "$(LA)" "so"
 ifneq "$(findstring Darwin,$(shell uname -a))" ""
 LA		:= dylib
 endif
+endif
+
+# Path to clang, setting this enables the 'scan.*' build targets
+# which perform static analysis on various server components.
+ANALYZE.c       := @clang_path@
+
+ifeq "${CC}" "clang"
+    ifeq "${ANALYZE.c}" ""
+        ANALYZE.c := "${CC}"
+    endif
+endif
+
+#
+#  With shared libs, the test binaries are in a different place
+#  AND the method we use to run those binaries changes.
+#
+ifeq "$(USE_SHARED_LIBS)" "yes"
+	TESTBINDIR = ./$(BUILD_DIR)/bin/local
+	TESTBIN    = $(JLIBTOOL) --quiet --mode=execute $(TESTBINDIR)
+else
+	TESTBINDIR = ./$(BUILD_DIR)/bin
+	TESTBIN    = ./$(BUILD_DIR)/bin
 endif

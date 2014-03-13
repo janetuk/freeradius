@@ -37,6 +37,7 @@ static rlm_rcode_t mod_authorize(UNUSED void *instance, REQUEST *request)
 
 	check_item = pairfind(request->config_items, PW_EXPIRATION, 0, TAG_ANY);
 	if (check_item != NULL) {
+		char date[50];
 		/*
 		*      Has this user's password expired?
 		*
@@ -44,12 +45,18 @@ static rlm_rcode_t mod_authorize(UNUSED void *instance, REQUEST *request)
 		*      and add our own Reply-Message, saying
 		*      why they're being rejected.
 		*/
-		RDEBUG("Checking Expiration time: '%s'",check_item->vp_strvalue);
 		if (((time_t) check_item->vp_date) <= request->timestamp) {
-			REDEBUG("Account has expired [Expiration %s]", check_item->vp_strvalue);
-			
+			vp_prints_value(date, sizeof(date), check_item, 0);
+			REDEBUG("Account expired at '%s'", date);
+
 			return RLM_MODULE_USERLOCK;
+		} else {
+			if (RDEBUG_ENABLED) {
+				vp_prints_value(date, sizeof(date), check_item, 0);
+				RDEBUG("Account will expire at '%s'", date);
+			}
 		}
+
 		/*
 		 *	Else the account hasn't expired, but it may do so
 		 *	in the future.  Set Session-Timeout.
@@ -64,7 +71,7 @@ static rlm_rcode_t mod_authorize(UNUSED void *instance, REQUEST *request)
 	} else {
 		return RLM_MODULE_NOOP;
 	}
-	
+
 	return RLM_MODULE_OK;
 }
 
@@ -99,7 +106,7 @@ static int mod_instantiate(UNUSED CONF_SECTION *conf, UNUSED void *instance)
 	/*
 	 *	Register the expiration comparison operation.
 	 */
-	paircompare_register(PW_EXPIRATION, 0, expirecmp, instance);
+	paircompare_register(dict_attrbyvalue(PW_EXPIRATION, 0), NULL, false, expirecmp, instance);
 	return 0;
 }
 

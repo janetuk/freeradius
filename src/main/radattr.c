@@ -27,7 +27,6 @@ RCSID("$Id$")
 #include <freeradius-devel/conf.h>
 #include <freeradius-devel/radpaths.h>
 
-#include <talloc.h>
 #include <ctype.h>
 
 #ifdef HAVE_GETOPT_H
@@ -44,14 +43,10 @@ log_debug_t debug_flag = 0;
 /**********************************************************************
  *	Hacks for xlat
  */
-#include <stdarg.h>
-
 typedef size_t (*RADIUS_ESCAPE_STRING)(REQUEST *, char *out, size_t outlen, char const *in, void *arg);
 typedef ssize_t (*RAD_XLAT_FUNC)(void *instance, REQUEST *, char const *, char *, size_t);
 int            xlat_register(char const *module, RAD_XLAT_FUNC func, RADIUS_ESCAPE_STRING escape,
 			     void *instance);
-void module_failure_msg(UNUSED REQUEST *request, UNUSED char const *fmt, ...);
-
 #include <sys/wait.h>
 pid_t rad_fork(void);
 pid_t rad_waitpid(pid_t pid, int *status);
@@ -72,11 +67,6 @@ static ssize_t xlat_test(UNUSED void *instance, UNUSED REQUEST *request,
 	return 0;
 }
 
-void module_failure_msg(UNUSED REQUEST *request, UNUSED char const *fmt, ...)
-{
-
-}
-
 /*
  *	End of hacks for xlat
  *
@@ -91,7 +81,7 @@ static int encode_data_string(char *buffer,
 {
 	int length = 0;
 	char *p;
-	
+
 	p = buffer + 1;
 
 	while (*p && (outlen > 0)) {
@@ -156,13 +146,13 @@ static int encode_data_tlv(char *buffer, char **endptr,
 
 	*endptr = p + 1;
 	*p = '\0';
-	
+
 	p = buffer + 1;
 	while (isspace((int) *p)) p++;
-	
+
 	length = encode_tlv(p, output, outlen);
 	if (length == 0) return 0;
-	
+
 	return length;
 }
 
@@ -401,7 +391,7 @@ static int encode_extended(char *buffer,
 	int attr;
 	int length;
 	char *p;
-	
+
 	attr = decode_attr(buffer, &p);
 	if (attr == 0) return 0;
 
@@ -427,7 +417,7 @@ static int encode_long_extended(char *buffer,
 	int attr;
 	int length, total;
 	char *p;
-	
+
 	attr = decode_attr(buffer, &p);
 	if (attr == 0) return 0;
 
@@ -526,7 +516,7 @@ static void parse_condition(char const *input, char *output, size_t outlen)
 	char const *error = NULL;
 	fr_cond_t *cond;
 
-	slen = fr_condition_tokenize(NULL, input, &cond, &error);
+	slen = fr_condition_tokenize(NULL, NULL, input, &cond, &error, FR_COND_ONE_PASS);
 	if (slen <= 0) {
 		snprintf(output, outlen, "ERROR offset %d %s", (int) -slen, error);
 		return;
@@ -566,7 +556,7 @@ static void parse_xlat(char const *input, char *output, size_t outlen)
 	talloc_free(fmt);
 }
 
-static void process_file(char const *filename)
+static void process_file(const char *root_dir, char const *filename)
 {
 	int lineno;
 	size_t i, outlen;
@@ -574,17 +564,25 @@ static void process_file(char const *filename)
 	FILE *fp;
 	char input[8192], buffer[8192];
 	char output[8192];
+	char directory[8192];
 	uint8_t *attr, data[2048];
 
 	if (strcmp(filename, "-") == 0) {
 		fp = stdin;
 		filename = "<stdin>";
+		directory[0] = '\0';
 
 	} else {
-		fp = fopen(filename, "r");
+		if (root_dir && *root_dir) {
+			snprintf(directory, sizeof(directory), "%s/%s", root_dir, filename);
+		} else {
+			strlcpy(directory, filename, sizeof(directory));
+		}
+
+		fp = fopen(directory, "r");
 		if (!fp) {
 			fprintf(stderr, "Error opening %s: %s\n",
-				filename, strerror(errno));
+				directory, strerror(errno));
 			exit(1);
 		}
 	}
@@ -603,7 +601,7 @@ static void process_file(char const *filename)
 		if (!p) {
 			if (!feof(fp)) {
 				fprintf(stderr, "Line %d too long in %s\n",
-					lineno, filename);
+					lineno, directory);
 				exit(1);
 			}
 		} else {
@@ -627,7 +625,7 @@ static void process_file(char const *filename)
 			outlen = encode_rfc(p + 4, data, sizeof(data));
 			if (outlen == 0) {
 				fprintf(stderr, "Parse error in line %d of %s\n",
-					lineno, filename);
+					lineno, directory);
 				exit(1);
 			}
 
@@ -650,7 +648,7 @@ static void process_file(char const *filename)
 		if (strncmp(p, "data ", 5) == 0) {
 			if (strcmp(p + 5, output) != 0) {
 				fprintf(stderr, "Mismatch in line %d of %s, expected: %s\n",
-					lineno, filename, output);
+					lineno, directory, output);
 				exit(1);
 			}
 			continue;
@@ -683,7 +681,7 @@ static void process_file(char const *filename)
 				attr += len;
 				if (len == 0) break;
 			}
-			
+
 			pairfree(&head);
 			outlen = len;
 			goto print_hex;
@@ -699,7 +697,7 @@ static void process_file(char const *filename)
 				attr = data;
 				len = encode_hex(p + 7, data, sizeof(data));
 				if (len == 0) {
-					fprintf(stderr, "Failed decoding hex string at line %d of %s\n", lineno, filename);
+					fprintf(stderr, "Failed decoding hex string at line %d of %s\n", lineno, directory);
 					exit(1);
 				}
 			}
@@ -723,10 +721,10 @@ static void process_file(char const *filename)
 				while (vp) {
 					tail = &(vp->next);
 					vp = vp->next;
-				}				
+				}
 
 				attr += my_len;
-				len -= my_len;				
+				len -= my_len;
 			}
 
 			/*
@@ -741,12 +739,12 @@ static void process_file(char const *filename)
 				     vp = pairnext(&cursor)) {
 					vp_prints(p, sizeof(output) - (p - output), vp);
 					p += strlen(p);
-					
+
 					if (vp->next) {strcpy(p, ", ");
 						p += 2;
 					}
 				}
-				
+
 				pairfree(&head);
 			} else if (my_len < 0) {
 				strlcpy(output, fr_strerror(), sizeof(output));
@@ -758,27 +756,36 @@ static void process_file(char const *filename)
 		}
 
 		if (strncmp(p, "$INCLUDE ", 9) == 0) {
+			char *q;
+
 			p += 9;
 			while (isspace((int) *p)) p++;
 
-			process_file(p);
+			q = strrchr(directory, '/');
+			if (q) {
+				*q = '\0';
+				process_file(directory, p);
+				*q = '/';
+			} else {
+				process_file(NULL, p);
+			}
 			continue;
 		}
 
 		if (strncmp(p, "condition ", 10) == 0) {
 			p += 10;
 			parse_condition(p, output, sizeof(output));
-			continue;		     
+			continue;
 		}
 
 		if (strncmp(p, "xlat ", 5) == 0) {
 			p += 5;
 			parse_xlat(p, output, sizeof(output));
-			continue;		     
+			continue;
 		}
 
 		fprintf(stderr, "Unknown input at line %d of %s\n",
-			lineno, filename);
+			lineno, directory);
 		exit(1);
 	}
 
@@ -811,8 +818,8 @@ int main(int argc, char *argv[])
 
 	if (report) {
 		talloc_enable_null_tracking();
-		talloc_set_log_fn(log_talloc);
 	}
+	talloc_set_log_fn(log_talloc);
 
 	if (dict_init(radius_dir, RADIUS_DICTIONARY) < 0) {
 		fr_perror("radattr");
@@ -825,10 +832,10 @@ int main(int argc, char *argv[])
 	}
 
 	if (argc < 2) {
-		process_file("-");
+		process_file(NULL, "-");
 
 	} else {
-		process_file(argv[1]);
+		process_file(NULL, argv[1]);
 	}
 
 	if (report) {

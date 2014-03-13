@@ -164,7 +164,7 @@ if test "x$smart_lib" = "x"; then
 
   for try in $smart_lib_dir /usr/local/lib /opt/lib; do
     AC_MSG_CHECKING([for $2 in -l$1 in $try])
-    LIBS="-L$try -rpath$try -l$1 $old_LIBS -Wl,-rpath,$try"
+    LIBS="-L$try -l$1 $old_LIBS -Wl,-rpath,$try"
     AC_TRY_LINK([extern char $2();],
 		[$2()],
 		[
@@ -233,7 +233,7 @@ if test "x$smart_include" = "x"; then
 		  #include <$1>],
 		 [int a = 1;],
 		 [
-		   smart_include=
+		   smart_include=" "
 		   AC_MSG_RESULT(yes)
 		   break
 		 ],
@@ -310,7 +310,7 @@ $1
     AC_MSG_RESULT(yes)
     eval "ac_cv_type_${ac_safe_type}_has_$3=yes"
   else
-    AC_MSG_RESULT(no) 
+    AC_MSG_RESULT(no)
     eval "ac_cv_type_${ac_safe_type}_has_$3="
  fi
 ])
@@ -330,12 +330,21 @@ m4_pushdef([AC_OUTPUT],
 #
 AC_DEFUN([FR_TLS],
 [
-    AC_MSG_CHECKING(for TLS)
-    AC_RUN_IFELSE([AC_LANG_SOURCE([[ static __thread int val; int main(int argc, char *argv[]) { return val = argc; } ]])],[have_tls=yes],[have_tls=no],[have_tls=no ])
-    AC_MSG_RESULT($have_tls)
-    if test "$have_tls" = "yes"; then
-        AC_DEFINE([HAVE_THREAD_TLS],[1],[Define if the compiler supports __thread])
-    fi
+  AC_MSG_CHECKING(for __thread support in compiler)
+  AC_RUN_IFELSE(
+    [AC_LANG_SOURCE(
+      [[
+        static __thread int val;
+        int main(int argc, char **argv) {
+          val = 0;
+          return val;
+        }
+      ]])
+    ],[have_tls=yes],[have_tls=no],[have_tls=no])
+  AC_MSG_RESULT($have_tls)
+  if test "x$have_tls" = "xyes"; then
+    AC_DEFINE([HAVE_THREAD_TLS],[1],[Define if the compiler supports __thread])
+  fi
 ])
 
 
@@ -365,7 +374,7 @@ AC_DEFUN([VL_LIB_READLINE], [
       LIBS="$ORIG_LIBS"
     fi
   ])
-  
+
   if test "$vl_cv_lib_readline" != "no"; then
     LIBREADLINE="$vl_cv_lib_readline"
     AC_DEFINE(HAVE_LIBREADLINE, 1,

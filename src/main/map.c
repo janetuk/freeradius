@@ -68,7 +68,7 @@ int radius_parse_attr(char const *name, value_pair_tmpl_t *vpt,
 		      request_refs_t request_def,
 		      pair_lists_t list_def)
 {
-	const DICT_ATTR *da;
+	DICT_ATTR const *da;
 	char const *p;
 	size_t len;
 
@@ -157,19 +157,24 @@ value_pair_tmpl_t *radius_str2tmpl(TALLOC_CTX *ctx, char const *name, FR_TOKEN t
 
 	switch (type) {
 	case T_BARE_WORD:
+		if (*name == '&') name++;
+
 		if (!isdigit((int) *name)) {
 			request_refs_t ref;
 			pair_lists_t list;
-			const char *p = name;
+			char const *p = name;
 
 			ref = radius_request_name(&p, REQUEST_CURRENT);
+			if (ref == REQUEST_UNKNOWN) goto literal;
+
 			list = radius_list_name(&p, PAIR_LIST_REQUEST);
+			if (list == PAIR_LIST_UNKNOWN) goto literal;
 
 			if ((p != name) && !*p) {
 				vpt->type = VPT_TYPE_LIST;
 
 			} else {
-				const DICT_ATTR *da;
+				DICT_ATTR const *da;
 				da = dict_attrbyname(p);
 				if (!da) {
 					vpt->type = VPT_TYPE_LITERAL;
@@ -186,6 +191,7 @@ value_pair_tmpl_t *radius_str2tmpl(TALLOC_CTX *ctx, char const *name, FR_TOKEN t
 		/* FALL-THROUGH */
 
 	case T_SINGLE_QUOTED_STRING:
+	literal:
 		vpt->type = VPT_TYPE_LITERAL;
 		break;
 	case T_DOUBLE_QUOTED_STRING:
@@ -231,8 +237,8 @@ value_pair_tmpl_t *radius_str2tmpl(TALLOC_CTX *ctx, char const *name, FR_TOKEN t
  *	in.
  * @return value_pair_map_t if successful or NULL on error.
  */
-value_pair_map_t *radius_str2map(TALLOC_CTX *ctx, const char *lhs, FR_TOKEN lhs_type,
-				 FR_TOKEN op, const char *rhs, FR_TOKEN rhs_type,
+value_pair_map_t *radius_str2map(TALLOC_CTX *ctx, char const *lhs, FR_TOKEN lhs_type,
+				 FR_TOKEN op, char const *rhs, FR_TOKEN rhs_type,
 				 request_refs_t dst_request_def,
 				 pair_lists_t dst_list_def,
 				 request_refs_t src_request_def,
@@ -334,7 +340,6 @@ value_pair_map_t *radius_cp2map(TALLOC_CTX *ctx, CONF_PAIR *cp,
 	if (type == T_BARE_WORD) {
 		if (*value == '&') {
 			map->src = radius_attr2tmpl(map, value + 1, src_request_def, src_list_def);
-
 		} else {
 			if (!isdigit((int) *value) &&
 			    ((strchr(value, ':') != NULL) ||
@@ -386,6 +391,17 @@ value_pair_map_t *radius_cp2map(TALLOC_CTX *ctx, CONF_PAIR *cp,
 	}
 
 	/*
+	 *	Can't copy an xlat expansion or literal into a list,
+	 *	we don't know what type of attribute we'd need
+	 *	to create
+	 */
+	if ((map->dst->type == VPT_TYPE_LIST) &&
+	    ((map->src->type == VPT_TYPE_XLAT) || (map->src->type == VPT_TYPE_LITERAL))) {
+		cf_log_err(ci, "Can't copy value into list (we don't know which attribute to create)");
+		goto error;
+	}
+
+	/*
 	 *	Depending on the attribute type, some operators are
 	 *	disallowed.
 	 */
@@ -416,18 +432,10 @@ value_pair_map_t *radius_cp2map(TALLOC_CTX *ctx, CONF_PAIR *cp,
 			default:
 				cf_log_err(ci, "Operator \"%s\" not allowed "
 					   "for list copy",
-					   fr_int2str(fr_tokens, map->op,
-						      "?unknown?"));
+					   fr_int2str(fr_tokens, map->op, "<INVALID>"));
 				goto error;
 			}
 		break;
-
-		/*
-		 *	@todo add support for exec expansion.
-		 */
-		case VPT_TYPE_EXEC:
-			cf_log_err(ci, "Exec values are not allowed");
-			break;
 
 		default:
 			break;
@@ -540,7 +548,7 @@ error:
 size_t radius_tmpl2str(char *buffer, size_t bufsize, value_pair_tmpl_t const *vpt)
 {
 	char c;
-	const char *p;
+	char const *p;
 	char *q = buffer;
 	char *end;
 

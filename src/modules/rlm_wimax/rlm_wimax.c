@@ -31,7 +31,7 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
  *	FIXME: Fix the build system to create definitions from names.
  */
 typedef struct rlm_wimax_t {
-	int	delete_mppe_keys;
+	bool	delete_mppe_keys;
 } rlm_wimax_t;
 
 /*
@@ -80,7 +80,7 @@ static rlm_rcode_t mod_authorize(UNUSED void *instance, UNUSED REQUEST *request)
 		 *	so we fix it here.
 		 */
 		for (i = 0; i < 6; i++) {
-			fr_bin2hex(&buffer[i], &p[i * 3], 1);
+			fr_bin2hex(&p[i * 3], &buffer[i], 1);
 			p[(i * 3) + 2] = '-';
 		}
 
@@ -159,7 +159,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 	 */
 	HMAC_CTX_init(&hmac);
 	HMAC_Init_ex(&hmac, emsk->vp_octets, emsk->length, EVP_sha256(), NULL);
-	
+
 	HMAC_Update(&hmac, &usage_data[0], sizeof(usage_data));
 	HMAC_Final(&hmac, &mip_rk_1[0], &rk1_len);
 
@@ -167,7 +167,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 	 *	MIP-RK-2 = HMAC-SSHA256(EMSK, MIP-RK-1 | usage-data | 0x01)
 	 */
 	HMAC_Init_ex(&hmac, emsk->vp_octets, emsk->length, EVP_sha256(), NULL);
-	
+
 	HMAC_Update(&hmac, (uint8_t const *) &mip_rk_1, rk1_len);
 	HMAC_Update(&hmac, &usage_data[0], sizeof(usage_data));
 	HMAC_Final(&hmac, &mip_rk_2[0], &rk2_len);
@@ -180,7 +180,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 	 *	MIP-SPI = HMAC-SSHA256(MIP-RK, "SPI CMIP PMIP");
 	 */
 	HMAC_Init_ex(&hmac, mip_rk, rk_len, EVP_sha256(), NULL);
-	
+
 	HMAC_Update(&hmac, (uint8_t const *) "SPI CMIP PMIP", 12);
 	HMAC_Final(&hmac, &mip_rk_1[0], &rk1_len);
 
@@ -198,7 +198,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 
 		if (len > 128) len = 128; /* buffer size */
 
-		fr_bin2hex(mip_rk, buffer, len);
+		fr_bin2hex(buffer, mip_rk, len);
 		RDEBUG("MIP-RK = 0x%s", buffer);
 		RDEBUG("MIP-SPI = %08x", ntohl(mip_spi));
 	}
@@ -390,7 +390,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 	fa_rk = pairfind(request->reply->vps, 14, VENDORPEC_WIMAX, TAG_ANY);
 	if (fa_rk && (fa_rk->length <= 1)) {
 		HMAC_Init_ex(&hmac, mip_rk, rk_len, EVP_sha1(), NULL);
-		
+
 		HMAC_Update(&hmac, (uint8_t const *) "FA-RK", 5);
 
 		HMAC_Final(&hmac, &mip_rk_1[0], &rk1_len);

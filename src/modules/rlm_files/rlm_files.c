@@ -219,11 +219,11 @@ static int getusersfile(TALLOC_CTX *ctx, char const *filename, fr_hash_table_t *
 							(vp->da->attr != PW_HINT) &&
 							(vp->da->attr != PW_HUNTGROUP_NAME)) {
 						DEBUG("\tChanging '%s =' to '%s +='", vp->da->name, vp->da->name);
-						
+
 						vp->op = T_OP_ADD;
 					} else {
 						DEBUG("\tChanging '%s =' to '%s =='", vp->da->name, vp->da->name);
-						
+
 						vp->op = T_OP_CMP_EQ;
 					}
 				}
@@ -375,7 +375,7 @@ static rlm_rcode_t file_common(rlm_files_t *inst, REQUEST *request,
 	char const	*name, *match;
 	VALUE_PAIR	*check_tmp;
 	VALUE_PAIR	*reply_tmp;
-	const PAIR_LIST	*user_pl, *default_pl;
+	PAIR_LIST const *user_pl, *default_pl;
 	int		found = 0;
 	PAIR_LIST	my_pl;
 	char		buffer[256];
@@ -392,7 +392,7 @@ static rlm_rcode_t file_common(rlm_files_t *inst, REQUEST *request,
 		if (len < 0) {
 			return RLM_MODULE_FAIL;
 		}
-		
+
 		name = len ? buffer : "NONE";
 	}
 
@@ -407,7 +407,9 @@ static rlm_rcode_t file_common(rlm_files_t *inst, REQUEST *request,
 	 *	Find the entry for the user.
 	 */
 	while (user_pl || default_pl) {
-		const PAIR_LIST *pl;
+		vp_cursor_t cursor;
+		VALUE_PAIR *vp;
+		PAIR_LIST const *pl;
 
 		if (!default_pl && user_pl) {
 			pl = user_pl;
@@ -430,16 +432,27 @@ static rlm_rcode_t file_common(rlm_files_t *inst, REQUEST *request,
 			default_pl = default_pl->next;
 		}
 
+		check_tmp = paircopy(request, pl->check);
+		for (vp = paircursor(&cursor, &check_tmp);
+		     vp;
+		     vp = pairnext(&cursor)) {
+			if (radius_xlat_do(request, vp) < 0) {
+				RWARN("Failed parsing expanded value for check item, skipping entry: %s", fr_strerror());
+				pairfree(&check_tmp);
+				continue;
+			}
+		}
+
 		if (paircompare(request, request_pairs, pl->check, reply_pairs) == 0) {
-			RDEBUG2("%s: Matched entry %s at line %d",
-			       filename, match, pl->lineno);
+			RDEBUG2("%s: Matched entry %s at line %d", filename, match, pl->lineno);
 			found = 1;
-			check_tmp = paircopy(request, pl->check);
 
 			/* ctx may be reply or proxy */
 			reply_tmp = paircopy(request, pl->reply);
 			radius_xlat_move(request, reply_pairs, &reply_tmp);
 			pairmove(request, &request->config_items, &check_tmp);
+
+			/* Cleanup any unmoved valuepairs */
 			pairfree(&reply_tmp);
 			pairfree(&check_tmp);
 
@@ -477,7 +490,7 @@ static rlm_rcode_t mod_authorize(void *instance, REQUEST *request)
 {
 	rlm_files_t *inst = instance;
 
-	return file_common(inst, request, "users", 
+	return file_common(inst, request, "users",
 			   inst->users ? inst->users : inst->common,
 			   request->packet->vps, &request->reply->vps);
 }
@@ -492,7 +505,7 @@ static rlm_rcode_t mod_preacct(void *instance, REQUEST *request)
 {
 	rlm_files_t *inst = instance;
 
-	return file_common(inst, request, "acct_users", 
+	return file_common(inst, request, "acct_users",
 			   inst->acctusers ? inst->acctusers : inst->common,
 			   request->packet->vps, &request->reply->vps);
 }

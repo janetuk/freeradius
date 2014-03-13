@@ -72,36 +72,9 @@ void eap_ds_free(EAP_DS **eap_ds_p)
 	*eap_ds_p = NULL;
 }
 
-/*
- * Allocate a new eap_handler_t
- */
-eap_handler_t *eap_handler_alloc(rlm_eap_t *inst)
+static int _eap_handler_free(eap_handler_t *handler)
 {
-	eap_handler_t	*handler;
-
-	PTHREAD_MUTEX_LOCK(&(inst->handler_mutex));
-	handler = talloc_zero(inst, eap_handler_t);
-
-	if (inst->handler_tree) {
-		rbtree_insert(inst->handler_tree, handler);
-	}
-	PTHREAD_MUTEX_UNLOCK(&(inst->handler_mutex));
-
-	return handler;
-}
-
-void eap_opaque_free(eap_handler_t *handler)
-{
-	if (!handler)
-		return;
-
-	eap_handler_free(handler->inst_holder, handler);
-}
-
-void eap_handler_free(rlm_eap_t *inst, eap_handler_t *handler)
-{
-	if (!handler)
-		return;
+	rlm_eap_t *inst = handler->inst_holder;
 
 	if (handler->identity) {
 		talloc_free(handler->identity);
@@ -125,10 +98,31 @@ void eap_handler_free(rlm_eap_t *inst, eap_handler_t *handler)
 	if (inst->handler_tree) {
 		rbtree_deletebydata(inst->handler_tree, handler);
 	}
-	talloc_free(handler);
 	PTHREAD_MUTEX_UNLOCK(&(inst->handler_mutex));
+
+	return 0;
 }
 
+/*
+ * Allocate a new eap_handler_t
+ */
+eap_handler_t *eap_handler_alloc(rlm_eap_t *inst)
+{
+	eap_handler_t	*handler;
+
+	PTHREAD_MUTEX_LOCK(&(inst->handler_mutex));
+	handler = talloc_zero(inst, eap_handler_t);
+
+	if (inst->handler_tree) {
+		rbtree_insert(inst->handler_tree, handler);
+	}
+
+	handler->inst_holder = inst;
+	talloc_set_destructor(handler, _eap_handler_free);
+	PTHREAD_MUTEX_UNLOCK(&(inst->handler_mutex));
+
+	return handler;
+}
 
 typedef struct check_handler_t {
 	rlm_eap_t	*inst;
@@ -136,17 +130,13 @@ typedef struct check_handler_t {
 	int		trips;
 } check_handler_t;
 
-static void check_handler(void *data)
+static int check_opaque_free(check_handler_t *check)
 {
 	int do_warning = false;
 	uint8_t state[8];
-	check_handler_t *check = data;
-
-	if (!check) return;
 
 	if (!check->inst || !check->handler) {
-		free(check);
-		return;
+		return 0;
 	}
 
 	if (!check->inst->handler_tree) goto done;
@@ -184,7 +174,6 @@ static void check_handler(void *data)
 
 done:
 	PTHREAD_MUTEX_UNLOCK(&(check->inst->handler_mutex));
-	free(check);
 
 	if (do_warning) {
 		WDEBUG("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
@@ -197,6 +186,8 @@ done:
 		WDEBUG("!! Please read http://wiki.freeradius.org/guide/Certificate_Compatibility     !!");
 		WDEBUG("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
 	}
+
+	return 0;
 }
 
 void eaplist_free(rlm_eap_t *inst)
@@ -205,7 +196,7 @@ void eaplist_free(rlm_eap_t *inst)
 
        	for (node = inst->session_head; node != NULL; node = next) {
 		next = node->next;
-		eap_handler_free(inst, node);
+		talloc_free(node);
 	}
 
 	inst->session_head = inst->session_tail = NULL;
@@ -248,7 +239,7 @@ static eap_handler_t *eaplist_delete(rlm_eap_t *inst, REQUEST *request,
 	 *	Delete old handler from the tree.
 	 */
 	rbtree_delete(inst->session_tree, node);
-	
+
 	/*
 	 *	And unsplice it from the linked list.
 	 */
@@ -283,7 +274,7 @@ static void eaplist_expire(rlm_eap_t *inst, REQUEST *request, time_t timestamp)
 	for (i = 0; i < 3; i++) {
 		handler = inst->session_head;
 		if (!handler) break;
-		
+
 		RDEBUG("Expiring EAP session with state "
 		       "0x%02x%02x%02x%02x%02x%02x%02x%02x",
 		       handler->state[0], handler->state[1],
@@ -311,7 +302,7 @@ static void eaplist_expire(rlm_eap_t *inst, REQUEST *request, time_t timestamp)
 				inst->session_head = NULL;
 				inst->session_tail = NULL;
 			}
-			eap_handler_free(inst, handler);
+			talloc_free(handler);
 		} else {
 			break;
 		}
@@ -380,7 +371,7 @@ int eaplist_add(rlm_eap_t *inst, eap_handler_t *handler)
 
 			memcpy(handler->state + i * 4, &lvalue,
 			       sizeof(lvalue));
-		}		
+		}
 	}
 
 	/*
@@ -401,12 +392,14 @@ int eaplist_add(rlm_eap_t *inst, eap_handler_t *handler)
 	 *	Catch Access-Challenge without response.
 	 */
 	if (inst->handler_tree) {
-		check_handler_t *check = rad_malloc(sizeof(*check));
+		check_handler_t *check = talloc(handler, check_handler_t);
 
 		check->inst = inst;
 		check->handler = handler;
 		check->trips = handler->trips;
-		request_data_add(request, inst, 0, check, check_handler);
+
+		talloc_set_destructor(check, check_opaque_free);
+		request_data_add(request, inst, 0, check, true);
 	}
 
 	if (status) {
@@ -447,7 +440,7 @@ int eaplist_add(rlm_eap_t *inst, eap_handler_t *handler)
 				last_logged = handler->timestamp;
 				ERROR("rlm_eap (%s): Too many open sessions. Try increasing \"max_sessions\" "
 				      "in the EAP module configuration", inst->xlat_name);
-			}				
+			}
 		} else {
 			ERROR("rlm_eap (%s): Failed to store handler", inst->xlat_name);
 		}
@@ -525,9 +518,9 @@ eap_handler_t *eaplist_find(rlm_eap_t *inst, REQUEST *request,
 		       state->vp_octets[2], state->vp_octets[3],
 		       state->vp_octets[4], state->vp_octets[5],
 		       state->vp_octets[6], state->vp_octets[7]);
-		
-		
-		eap_handler_free(inst, handler);
+
+
+		talloc_free(handler);
 		return NULL;
 	}
 	handler->trips++;

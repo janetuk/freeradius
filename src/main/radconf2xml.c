@@ -24,7 +24,6 @@
 RCSID("$Id$")
 
 #include <freeradius-devel/radiusd.h>
-#include <freeradius-devel/radpaths.h>
 
 #ifdef HAVE_GETOPT_H
 #include <getopt.h>
@@ -52,11 +51,14 @@ pid_t rad_fork(void)
 	return fork();
 }
 
+#ifdef HAVE_PTHREAD_H
 pid_t rad_waitpid(pid_t pid, int *status)
 {
 	return waitpid(pid, status, 0);
 }
-int check_config = false;
+#endif
+
+bool check_config = false;
 
 static int usage(void)
 {

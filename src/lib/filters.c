@@ -390,7 +390,7 @@ static int ascend_parse_ipx_net(int argc, char **argv,
 	/*
 	 *	Node must be 6 octets long.
 	 */
-	token = fr_hex2bin(p, net->node, IPX_NODE_ADDR_LEN);
+	token = fr_hex2bin(net->node, p, IPX_NODE_ADDR_LEN);
 	if (token != IPX_NODE_ADDR_LEN) return -1;
 
 	/*
@@ -889,10 +889,10 @@ static int ascend_parse_generic(int argc, char **argv,
 	filter->offset = rcode;
 	filter->offset = htons(filter->offset);
 
-	rcode = fr_hex2bin(argv[1], filter->mask, sizeof(filter->mask));
+	rcode = fr_hex2bin(filter->mask, argv[1], sizeof(filter->mask));
 	if (rcode != sizeof(filter->mask)) return -1;
 
-	token = fr_hex2bin(argv[2], filter->value, sizeof(filter->value));
+	token = fr_hex2bin(filter->value, argv[2], sizeof(filter->value));
 	if (token != sizeof(filter->value)) return -1;
 
 	/*
@@ -1137,11 +1137,12 @@ void print_abinary(VALUE_PAIR const *vp, char *buffer, size_t len, int8_t quote)
    *  Just for paranoia: wrong size filters get printed as octets
    */
   if (vp->length != sizeof(*filter)) {
+          uint8_t *f = (uint8_t *) &vp->vp_filter;
 	  strcpy(p, "0x");
 	  p += 2;
 	  len -= 2;
 	  for (i = 0; i < vp->length; i++) {
-		  snprintf(p, len, "%02x", vp->vp_octets[i]);
+		  snprintf(p, len, "%02x", f[i]);
 		  p += 2;
 		  len -= 2;
 	  }
@@ -1213,7 +1214,6 @@ void print_abinary(VALUE_PAIR const *vp, char *buffer, size_t len, int8_t quote)
     if (filter->u.ip.established) {
       i = snprintf(p, len, " est");
       p += i;
-      len -= i;
     }
 
     /*
@@ -1254,7 +1254,6 @@ void print_abinary(VALUE_PAIR const *vp, char *buffer, size_t len, int8_t quote)
 		     fr_int2str(filterCompare, filter->u.ipx.dstSocComp, "??"),
 		     ntohs(filter->u.ipx.dst.socket));
 	p += i;
-	len -= i;
       }
     }
 
@@ -1264,7 +1263,6 @@ void print_abinary(VALUE_PAIR const *vp, char *buffer, size_t len, int8_t quote)
 
     i = snprintf(p, len, " %u ", (unsigned int) ntohs(filter->u.generic.offset));
     p += i;
-    i -= len;
 
     /* show the mask */
     for (count = 0; count < ntohs(filter->u.generic.len); count++) {
@@ -1291,7 +1289,6 @@ void print_abinary(VALUE_PAIR const *vp, char *buffer, size_t len, int8_t quote)
     if (filter->u.generic.more != 0) {
       i = snprintf(p, len, " more");
       p += i;
-      len -= i;
     }
   }
 

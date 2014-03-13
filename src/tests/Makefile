@@ -18,8 +18,8 @@ export DYLD_LIBRARY_PATH
 
 RADDB_PATH := $(top_builddir)/raddb
 
-TESTS	= user_password vpiter chap mschapv1 digest-01/digest* \
-	test.example.com wimax
+TESTS	= mschapv1 digest-01/digest* \
+	test.example.com 
 
 PORT	 = 12340
 #PORT	 = 1812
@@ -149,9 +149,3 @@ peap:
 
 leap:
 	$(EAPOL_TEST) -c leap.conf -s $(SECRET)
-
-ATTRS	:= rfc.txt errors.txt extended.txt lucent.txt wimax.txt \
-	condition.txt xlat.txt
-
-parse: $(ATTRS) $(BIN_PATH)/radattr
-	$(BIN_PATH)/radattr -d $(top_srcdir)/share $(ATTRS)

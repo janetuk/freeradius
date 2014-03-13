@@ -103,8 +103,8 @@ void client_free(RADCLIENT *client)
  */
 static int client_ipaddr_cmp(void const *one, void const *two)
 {
-	const RADCLIENT *a = one;
-	const RADCLIENT *b = two;
+	RADCLIENT const *a = one;
+	RADCLIENT const *b = two;
 #ifndef WITH_TCP
 
 	return fr_ipaddr_cmp(&a->ipaddr, &b->ipaddr);
@@ -127,8 +127,8 @@ static int client_ipaddr_cmp(void const *one, void const *two)
 #ifdef WITH_STATS
 static int client_num_cmp(void const *one, void const *two)
 {
-	const RADCLIENT *a = one;
-	const RADCLIENT *b = two;
+	RADCLIENT const *a = one;
+	RADCLIENT const *b = two;
 
 	return (a->number - b->number);
 }
@@ -519,7 +519,7 @@ static const CONF_PARSER client_config[] = {
 
 	{ "src_ipaddr",  PW_TYPE_STRING_PTR,
 	  0, &cl_srcipaddr,  NULL },
-	
+
 	{ "require_message_authenticator",  PW_TYPE_BOOLEAN,
 	  offsetof(RADCLIENT, message_authenticator), 0, "no" },
 
@@ -628,7 +628,7 @@ static RADCLIENT *client_parse(CONF_SECTION *cs, int in_server)
 			/* Replace '/' with '\0' */
 			*prefix_ptr = '\0';
 		}
-			
+
 		/*
 		 *	Always get the numeric representation of IP
 		 */
@@ -656,14 +656,14 @@ static RADCLIENT *client_parse(CONF_SECTION *cs, int in_server)
 
 			if ((c->prefix < -1) || (c->prefix > 32)) {
 				cf_log_err_cs(cs, "Netmask must be between 0 and 32");
-				
+
 				goto error;
 			}
-				
+
 		} else if (cf_pair_find(cs, "ipv6addr")) {
 			c->ipaddr.af = AF_INET6;
 			c->ipaddr.ipaddr.ip6addr = cl_ip6addr;
-				
+
 			if ((c->prefix < -1) || (c->prefix > 128)) {
 				cf_log_err_cs(cs,
 					   "Netmask must be between 0 and 128");
@@ -684,26 +684,38 @@ static RADCLIENT *client_parse(CONF_SECTION *cs, int in_server)
 		if (!c->shortname) c->shortname = talloc_strdup(c, name2);
 
 		c->proto = IPPROTO_UDP;
-#ifdef WITH_TCP
 		if (hs_proto) {
 			if (strcmp(hs_proto, "udp") == 0) {
 				hs_proto = NULL;
-				
+
+#ifdef WITH_TCP
 			} else if (strcmp(hs_proto, "tcp") == 0) {
 				hs_proto = NULL;
 				c->proto = IPPROTO_TCP;
-				
+
+#ifdef WITH_TLS
+			} else if (strcmp(hs_proto, "tls") == 0) {
+				hs_proto = NULL;
+				c->proto = IPPROTO_TCP;
+				c->tls_required = true;
+
+			} else if (strcmp(hs_proto, "radsec") == 0) {
+				hs_proto = NULL;
+				c->proto = IPPROTO_TCP;
+				c->tls_required = true;
+#endif
+
 			} else if (strcmp(hs_proto, "*") == 0) {
 				hs_proto = NULL;
 				c->proto = IPPROTO_IP; /* fake for dual */
-				
+#endif
+
 			} else {
 				cf_log_err_cs(cs,
 					   "Unknown proto \"%s\".", hs_proto);
 				goto error;
 			}
 		}
-#endif
 	}
 
 	/*
@@ -720,10 +732,10 @@ static RADCLIENT *client_parse(CONF_SECTION *cs, int in_server)
 #else
 		WDEBUG("Server not build with udpfromto, ignoring client src_ipaddr");
 #endif
-		
+
 		cl_srcipaddr = NULL;
 	}
-	
+
 	if (c->prefix < 0) switch (c->ipaddr.af) {
 	case AF_INET:
 		c->prefix = 32;
@@ -765,9 +777,23 @@ static RADCLIENT *client_parse(CONF_SECTION *cs, int in_server)
 		if (value && (strcmp(value, "yes") == 0)) return c;
 
 #endif
-		cf_log_err_cs(cs,
-			   "secret must be at least 1 character long");
-		goto error;
+
+#ifdef WITH_TLS
+		/*
+		 *	If the client is TLS only, the secret can be
+		 *	omitted.  When omitted, it's hard-coded to
+		 *	"radsec".  See RFC 6614.
+		 */
+		if (c->tls_required) {
+			c->secret = talloc_strdup(cs, "radsec");
+		} else
+#endif
+
+		{
+			cf_log_err_cs(cs,
+				      "secret must be at least 1 character long");
+			goto error;
+		}
 	}
 
 #ifdef WITH_COA
@@ -809,7 +835,11 @@ static RADCLIENT *client_parse(CONF_SECTION *cs, int in_server)
  *	type.  This way we don't have to change too much in the other
  *	source-files.
  */
-RADCLIENT_LIST *clients_parse_section(CONF_SECTION *section)
+#ifdef WITH_TLS
+RADCLIENT_LIST *clients_parse_section(CONF_SECTION *section, bool tls_required)
+#else
+RADCLIENT_LIST *clients_parse_section(CONF_SECTION *section, UNUSED bool tls_required)
+#endif
 {
 	int		global = false, in_server = false;
 	CONF_SECTION	*cs;
@@ -849,6 +879,16 @@ RADCLIENT_LIST *clients_parse_section(CONF_SECTION *section)
 			return NULL;
 		}
 
+#ifdef WITH_TLS
+		/*
+		 *	TLS clients CANNOT use non-TLS listeners.
+		 *	non-TLS clients CANNOT use TLS listeners.
+		 */
+		if (tls_required != c->tls_required) {
+			WARN("Security mismatch (TLS / non-TLS) between client and socket.");
+		}
+#endif
+
 		/*
 		 *	FIXME: Add the client as data via cf_data_add,
 		 *	for migration issues.
@@ -870,7 +910,7 @@ RADCLIENT_LIST *clients_parse_section(CONF_SECTION *section)
 			 */
 			cp = cf_pair_find(cs, "directory");
 			if (!cp) goto add_client;
-			
+
 			value = cf_pair_value(cp);
 			if (!value) {
 				cf_log_err_cs(cs,
@@ -880,14 +920,14 @@ RADCLIENT_LIST *clients_parse_section(CONF_SECTION *section)
 			}
 
 			DEBUG("including dynamic clients in %s", value);
-			
+
 			dir = opendir(value);
 			if (!dir) {
 				cf_log_err_cs(cs, "Error reading directory %s: %s", value, strerror(errno));
 				client_free(c);
 				return NULL;
 			}
-			
+
 			/*
 			 *	Read the directory, ignoring "." files.
 			 */
@@ -928,7 +968,7 @@ RADCLIENT_LIST *clients_parse_section(CONF_SECTION *section)
 				 *	Validate, and add to the list.
 				 */
 				if (!client_validate(clients, c, dc)) {
-					
+
 					client_free(c);
 					closedir(dir);
 					return NULL;
@@ -1026,7 +1066,7 @@ bool client_validate(RADCLIENT_LIST *clients, RADCLIENT *master, RADCLIENT *c)
 	/*
 	 *	Initialize the remaining fields.
 	 */
-	c->dynamic = true;
+	c->dynamic = 1;
 	c->lifetime = master->lifetime;
 	c->created = time(NULL);
 	c->longname = talloc_strdup(c, c->shortname);
@@ -1059,10 +1099,10 @@ RADCLIENT *client_from_query(TALLOC_CTX *ctx, char const *identifier, char const
 	RADCLIENT *c;
 	char *id;
 	char *prefix;
-	
+
 	rad_assert(identifier);
 	rad_assert(secret);
-	
+
 	c = talloc_zero(ctx, RADCLIENT);
 
 #ifdef WITH_DYNAMIC_CLIENTS
@@ -1079,12 +1119,12 @@ RADCLIENT *client_from_query(TALLOC_CTX *ctx, char const *identifier, char const
 	if (prefix) {
 		c->prefix = atoi(prefix + 1);
 		if ((c->prefix < 0) || (c->prefix > 128)) {
-			ERROR("Invalid Prefix value '%s' for IP.", prefix + 1);	
+			ERROR("Invalid Prefix value '%s' for IP.", prefix + 1);
 			talloc_free(c);
-			
+
 			return NULL;
 		}
-		
+
 		/* Replace '/' with '\0' */
 		*prefix = '\0';
 	}
@@ -1095,10 +1135,10 @@ RADCLIENT *client_from_query(TALLOC_CTX *ctx, char const *identifier, char const
 	if (ip_hton(id, AF_UNSPEC, &c->ipaddr) < 0) {
 		ERROR("Failed to look up hostname %s: %s", id, fr_strerror());
 		talloc_free(c);
-		
+
 		return NULL;
 	}
-	
+
 	{
 		char buffer[256];
 		ip_ntoh(&c->ipaddr, buffer, sizeof(buffer));
@@ -1120,19 +1160,19 @@ RADCLIENT *client_from_query(TALLOC_CTX *ctx, char const *identifier, char const
 	 *	Other values (secret, shortname, nas_type, virtual_server)
 	 */
 	c->secret = talloc_strdup(c, secret);
-	
-	if (shortname) { 
+
+	if (shortname) {
 		c->shortname = talloc_strdup(c, shortname);
 	}
-	
+
 	if (type) {
 		c->nas_type = talloc_strdup(c, type);
 	}
-	
+
 	if (server) {
 		c->server = talloc_strdup(c, server);
 	}
-	
+
 	c->message_authenticator = require_ma;
 
 	return c;
@@ -1151,9 +1191,9 @@ RADCLIENT *client_from_request(RADCLIENT_LIST *clients, REQUEST *request)
 	c->cs = request->client->cs;
 	c->ipaddr.af = AF_UNSPEC;
 	c->src_ipaddr.af = AF_UNSPEC;
-	
+
 	for (i = 0; dynamic_config[i].name != NULL; i++) {
-		const DICT_ATTR *da;
+		DICT_ATTR const *da;
 		VALUE_PAIR *vp;
 
 		da = dict_attrbyname(dynamic_config[i].name);
@@ -1173,8 +1213,8 @@ RADCLIENT *client_from_request(RADCLIENT_LIST *clients, REQUEST *request)
 			 *	Not required.  Skip it.
 			 */
 			if (!dynamic_config[i].dflt) continue;
-			
-			DEBUG("- Cannot add client %s: Required attribute \"%s\" is missing.",	
+
+			DEBUG("- Cannot add client %s: Required attribute \"%s\" is missing.",
 			      ip_ntoh(&request->packet->src_ipaddr,
 				      buffer, sizeof(buffer)),
 			      dynamic_config[i].name);
@@ -1195,7 +1235,7 @@ RADCLIENT *client_from_request(RADCLIENT_LIST *clients, REQUEST *request)
 				WDEBUG("Server not build with udpfromto, ignoring FreeRADIUS-Client-Src-IP-Address.");
 #endif
 			}
-			
+
 			break;
 
 		case PW_TYPE_IPV6ADDR:
@@ -1211,7 +1251,7 @@ RADCLIENT *client_from_request(RADCLIENT_LIST *clients, REQUEST *request)
 				WDEBUG("Server not build with udpfromto, ignoring FreeRADIUS-Client-Src-IPv6-Address.");
 #endif
 			}
-			
+
 			break;
 
 		case PW_TYPE_STRING_PTR:
@@ -1225,7 +1265,7 @@ RADCLIENT *client_from_request(RADCLIENT_LIST *clients, REQUEST *request)
 			break;
 
 		case PW_TYPE_BOOLEAN:
-			pi = (int *) ((char *) c + dynamic_config[i].offset);
+			pi = (int *) ((bool *) ((char *) c + dynamic_config[i].offset));
 			*pi = vp->vp_integer;
 			break;
 
@@ -1249,7 +1289,7 @@ RADCLIENT *client_from_request(RADCLIENT_LIST *clients, REQUEST *request)
 		      ip_ntoh(&request->packet->src_ipaddr,
 			      buffer, sizeof(buffer)),
 		      ip_ntoh(&c->ipaddr,
-			      buf2, sizeof(buf2)));		
+			      buf2, sizeof(buf2)));
 		goto error;
 	}
 
@@ -1263,12 +1303,12 @@ RADCLIENT *client_from_request(RADCLIENT_LIST *clients, REQUEST *request)
 	if (!client_validate(clients, request->client, c)) {
 		return NULL;
 	}
-	
+
 	if ((c->src_ipaddr.af != AF_UNSPEC) && (c->src_ipaddr.af != c->ipaddr.af)) {
 		DEBUG("- Cannot add client %s: Client IP and src address are different IP version.",
 		      ip_ntoh(&request->packet->src_ipaddr,
 			      buffer, sizeof(buffer)));
-		
+
 		goto error;
 	}
 
@@ -1289,7 +1329,7 @@ RADCLIENT *client_read(char const *filename, int in_server, int flag)
 
 	cs = cf_file_read(filename);
 	if (!cs) return NULL;
-	
+
 	cs = cf_section_sub_find(cs, "client");
 	if (!cs) {
 		ERROR("No \"client\" section found in client file");

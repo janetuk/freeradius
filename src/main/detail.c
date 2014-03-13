@@ -150,10 +150,10 @@ int detail_send(rad_listen_t *listener, REQUEST *request)
 	 *	handle this, then it's very broken.
 	 */
 	if (data->delay_time > (USEC / 4)) data->delay_time= USEC / 4;
-	
+
 	RDEBUG3("Received response for request %d.  Will read the next packet in %d seconds",
 		request->number, data->delay_time / USEC);
-	
+
 	data->last_packet = now;
 	data->signal = 1;
 	data->state = STATE_REPLIED;
@@ -174,7 +174,6 @@ static int detail_open(rad_listen_t *this)
 {
 	struct stat st;
 	listen_detail_t *data = this->data;
-	char *filename = data->filename;
 
 	rad_assert(data->state == STATE_UNOPENED);
 	data->delay_time = USEC;
@@ -195,6 +194,9 @@ static int detail_open(rad_listen_t *this)
 	 */
 	this->fd = open(data->filename_work, O_RDWR);
 	if (this->fd < 0) {
+		bool free_filename = false;
+		char *filename = data->filename;
+
 		DEBUG2("Polling for detail file %s", filename);
 
 		/*
@@ -206,7 +208,9 @@ static int detail_open(rad_listen_t *this)
 		 *	to read it.
 		 */
 		if (stat(filename, &st) < 0) {
-#ifdef HAVE_GLOB_H
+#ifndef HAVE_GLOB_H
+			return 0;
+#else
 			unsigned int i;
 			int found;
 			time_t chtime;
@@ -236,9 +240,8 @@ static int detail_open(rad_listen_t *this)
 			}
 
 			filename = strdup(files.gl_pathv[found]);
+			free_filename = true;
 			globfree(&files);
-#else
-			return 0;
 #endif
 		}
 
@@ -250,7 +253,7 @@ static int detail_open(rad_listen_t *this)
 		if (this->fd < 0) {
 			ERROR("Detail - Failed to open %s: %s",
 			       filename, strerror(errno));
-			if (filename != data->filename) free(filename);
+			if (free_filename) free(filename);
 			return 0;
 		}
 
@@ -259,12 +262,18 @@ static int detail_open(rad_listen_t *this)
 		 */
 		DEBUG("Detail - Renaming %s -> %s", filename, data->filename_work);
 		if (rename(filename, data->filename_work) < 0) {
-			if (filename != data->filename) free(filename);
+			ERROR("Detail - Failed renaming %s to %s: %s",
+			      filename, data->filename_work, strerror(errno));
+			if (free_filename) free(filename);
 			close(this->fd);
 			this->fd = -1;
 			return 0;
 		}
-		if (filename != data->filename) free(filename);
+
+		/*
+		 *	Ensure we don't leak memory.
+		 */
+		if (free_filename) free(filename);
 	} /* else detail.work existed, and we opened it */
 
 	rad_assert(data->vps == NULL);
@@ -293,9 +302,9 @@ static int detail_open(rad_listen_t *this)
  *
  *	t_rtt		the packet has been processed successfully,
  *			wait for t_delay to enforce load factor.
- *			
+ *
  *	t_rtt + t_delay wait for signal that the server is idle.
- *	
+ *
  */
 int detail_recv(rad_listen_t *listener)
 {
@@ -316,7 +325,7 @@ int detail_recv(rad_listen_t *listener)
 		case STATE_UNOPENED:
 	open_file:
 			rad_assert(listener->fd < 0);
-			
+
 			if (!detail_open(listener)) return 0;
 
 			rad_assert(data->state == STATE_UNLOCKED);
@@ -358,7 +367,7 @@ int detail_recv(rad_listen_t *listener)
 			if (!data->fp) {
 				ERROR("FATAL: Failed to re-open detail file %s: %s",
 				       data->filename, strerror(errno));
-				exit(1);
+				fr_exit(1);
 			}
 
 			/*
@@ -380,13 +389,13 @@ int detail_recv(rad_listen_t *listener)
 
 			{
 				struct stat buf;
-				
+
 				if (fstat(listener->fd, &buf) < 0) {
 					ERROR("Failed to stat "
 					       "detail file %s: %s",
 				       		data->filename,
 				       		strerror(errno));
-				       		
+
 				       	goto cleanup;
 				}
 				if (((off_t) ftell(data->fp)) == buf.st_size) {
@@ -458,7 +467,7 @@ int detail_recv(rad_listen_t *listener)
 		case STATE_NO_REPLY:
 			data->state = STATE_QUEUED;
 			goto alloc_packet;
-				
+
 			/*
 			 *	We have a reply.  Clean up the old
 			 *	request, and go read another one.
@@ -468,7 +477,7 @@ int detail_recv(rad_listen_t *listener)
 			data->state = STATE_HEADER;
 			goto do_header;
 	}
-	
+
 	paircursor(&cursor, &data->vps);
 
 	/*
@@ -544,7 +553,7 @@ int detail_recv(rad_listen_t *listener)
 			data->client_ip.af = AF_INET;
 			if (ip_hton(value, AF_INET, &data->client_ip) < 0) {
 				ERROR("Failed parsing Client-IP-Address");
-				
+
 				pairfree(&data->vps);
 				goto cleanup;
 			}
@@ -597,7 +606,7 @@ int detail_recv(rad_listen_t *listener)
 	 */
  alloc_packet:
 	data->tries++;
-	
+
 	/*
 	 *	The writer doesn't check that the record was
 	 *	completely written.  If the disk is full, this can
@@ -606,7 +615,7 @@ int detail_recv(rad_listen_t *listener)
 	 */
 	if (data->state != STATE_QUEUED) {
 		ERROR("Truncated record: treating it as EOF for detail file %s", data->filename_work);
-		goto cleanup;	
+		goto cleanup;
 	}
 
 	/*
@@ -626,7 +635,8 @@ int detail_recv(rad_listen_t *listener)
 	packet = rad_alloc(NULL, 1);
 	if (!packet) {
 		ERROR("FATAL: Failed allocating memory for detail");
-		exit(1);
+		fr_exit(1);
+		_exit(1);
 	}
 
 	memset(packet, 0, sizeof(*packet));
@@ -807,7 +817,7 @@ int detail_encode(rad_listen_t *this, UNUSED REQUEST *request)
 	}
 
 	data->signal = 0;
-	
+
 	DEBUG2("Detail listener %s state %s signalled %d waiting %d.%06d sec",
 	       data->filename, fr_int2str(state_names, data->state, "?"),
 	       data->signal,
@@ -835,11 +845,11 @@ static const CONF_PARSER detail_config[] = {
 	{ "filename",   PW_TYPE_FILE_OUTPUT | PW_TYPE_REQUIRED,
 	  offsetof(listen_detail_t, filename), NULL,  NULL },
 	{ "load_factor",   PW_TYPE_INTEGER,
-	  offsetof(listen_detail_t, load_factor), NULL, Stringify(10)},
+	  offsetof(listen_detail_t, load_factor), NULL, STRINGIFY(10)},
 	{ "poll_interval",   PW_TYPE_INTEGER,
-	  offsetof(listen_detail_t, poll_interval), NULL, Stringify(1)},
+	  offsetof(listen_detail_t, poll_interval), NULL, STRINGIFY(1)},
 	{ "retry_interval",   PW_TYPE_INTEGER,
-	  offsetof(listen_detail_t, retry_interval), NULL, Stringify(30)},
+	  offsetof(listen_detail_t, retry_interval), NULL, STRINGIFY(30)},
 	{ "one_shot",   PW_TYPE_BOOLEAN,
 	  offsetof(listen_detail_t, one_shot), NULL, NULL},
 	{ "max_outstanding",   PW_TYPE_INTEGER,
@@ -848,7 +858,7 @@ static const CONF_PARSER detail_config[] = {
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
 
-extern int check_config;
+extern bool check_config;
 
 /*
  *	Parse a detail section.
@@ -892,7 +902,7 @@ int detail_parse(CONF_SECTION *cs, rad_listen_t *this)
 	}
 
 	if (data->max_outstanding == 0) data->max_outstanding = 1;
-	
+
 	/*
 	 *	If the filename is a glob, use "detail.work" as the
 	 *	work file name.
@@ -914,7 +924,7 @@ int detail_parse(CONF_SECTION *cs, rad_listen_t *this)
 		}
 		strlcat(buffer, "detail.work",
 			sizeof(buffer) - strlen(buffer));
-			
+
 	} else {
 		snprintf(buffer, sizeof(buffer), "%s.work", data->filename);
 	}

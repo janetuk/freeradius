@@ -73,8 +73,8 @@ static int mod_detach(void *instance)
 static int eap_handler_cmp(void const *a, void const *b)
 {
 	int rcode;
-	const eap_handler_t *one = a;
-	const eap_handler_t *two = b;
+	eap_handler_t const *one = a;
+	eap_handler_t const *two = b;
 
 	if (one->eap_id < two->eap_id) return -1;
 	if (one->eap_id > two->eap_id) return +1;
@@ -146,10 +146,10 @@ static int mod_instantiate(CONF_SECTION *cs, void *instance)
 
 		method = eap_name2type(name);
 		if (method == PW_EAP_INVALID) {
-			cf_log_err_cs(cs, "Unknown EAP method %s", name);
+			cf_log_err_cs(cs, "No dictionary definition for EAP method %s", name);
 			return -1;
 		}
-		
+
 		if ((method < PW_EAP_MD5) || (method >= PW_EAP_MAX_TYPES)) {
 			cf_log_err_cs(cs, "Invalid EAP method %s (unsupported)", name);
 			return -1;
@@ -181,9 +181,9 @@ static int mod_instantiate(CONF_SECTION *cs, void *instance)
 		 *	Load the type.
 		 */
 		ret = eap_module_load(inst, &inst->methods[method], method, scs);
-		
+
 		(void) talloc_get_type_abort(inst->methods[method], eap_module_t);
-		
+
 		if (ret < 0) {
 			(void) talloc_steal(inst, inst->methods[method]);
 			return -1;
@@ -203,7 +203,7 @@ static int mod_instantiate(CONF_SECTION *cs, void *instance)
 	 */
 	method = eap_name2type(inst->default_method_name);
 	if (method == PW_EAP_INVALID) {
-		cf_log_err_cs(cs, "Unknown default EAP method '%s'",
+		cf_log_err_cs(cs, "No dictionary definition for default EAP method '%s'",
 		       inst->default_method_name);
 		return -1;
 	}
@@ -306,7 +306,7 @@ static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
 	 */
 	if (status == EAP_INVALID) {
 		eap_fail(handler);
-		eap_handler_free(inst, handler);
+		talloc_free(handler);
 		RDEBUG2("Failed in EAP select");
 		return RLM_MODULE_INVALID;
 	}
@@ -323,9 +323,8 @@ static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
 		 *	send a response.
 		 */
 		handler->inst_holder = inst;
-		status = request_data_add(request,
-					  inst, REQUEST_DATA_EAP_HANDLER,
-					  handler, (void *) eap_opaque_free);
+		status = request_data_add(request, inst, REQUEST_DATA_EAP_HANDLER, handler, true);
+
 		rad_assert(status == 0);
 		return RLM_MODULE_HANDLED;
 	}
@@ -347,10 +346,9 @@ static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
 		 *	send a response.
 		 */
 		handler->inst_holder = inst;
-		status = request_data_add(request,
-					  inst, REQUEST_DATA_EAP_HANDLER,
-					  handler,
-					  (void *) eap_opaque_free);
+
+		status = request_data_add(request, inst, REQUEST_DATA_EAP_HANDLER, handler, true);
+
 		rad_assert(status == 0);
 
 		/*
@@ -419,14 +417,14 @@ static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
 		if (!eaplist_add(inst, handler)) {
 			RDEBUG("Failed adding handler to the list");
 			eap_fail(handler);
-			eap_handler_free(inst, handler);
+			talloc_free(handler);
 			return RLM_MODULE_FAIL;
 		}
 
 	} else {
 		RDEBUG2("Freeing handler");
 		/* handler is not required any more, free it now */
-		eap_handler_free(inst, handler);
+		talloc_free(handler);
 	}
 
 	/*
@@ -450,15 +448,16 @@ static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
 		/*
 		 *	Cisco AP1230 has a bug and needs a zero
 		 *	terminated string in Access-Accept.
-		 *
-		 *	@todo: fix this
 		 */
-		if ((inst->mod_accounting_username_bug) &&
-		    (vp->length < (int) sizeof(vp->vp_strvalue))) {
-#if 0
-			vp->vp_strvalue[vp->length] = '\0';
-			vp->length++;
-#endif
+		if (inst->mod_accounting_username_bug) {
+		    	char const *old = vp->vp_strvalue;
+		    	char *new = talloc_zero_array(vp, char, vp->length + 1);
+
+		    	memcpy(new, old, vp->length);
+		    	vp->vp_strvalue = new;
+		    	vp->length++;
+
+		    	rad_const_free(old);
 		}
 	}
 
@@ -467,7 +466,7 @@ static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
 
 /*
  * EAP authorization DEPENDS on other rlm authorizations,
- * to check for user existance & get their configured values.
+ * to check for user existence & get their configured values.
  * It Handles EAP-START Messages, User-Name initilization.
  */
 static rlm_rcode_t mod_authorize(void *instance, REQUEST *request)
@@ -573,7 +572,7 @@ static rlm_rcode_t mod_post_proxy(void *inst, REQUEST *request)
 							      REQUEST_DATA_EAP_TUNNEL_CALLBACK);
 		if (!data) {
 			RERROR("Failed to retrieve callback for tunneled session!");
-			eap_handler_free(inst, handler);
+			talloc_free(handler);
 			return RLM_MODULE_FAIL;
 		}
 
@@ -582,11 +581,11 @@ static rlm_rcode_t mod_post_proxy(void *inst, REQUEST *request)
 		 */
 		RDEBUG2("Doing post-proxy callback");
 		rcode = data->callback(handler, data->tls_session);
-		free(data);
+		talloc_free(data);
 		if (rcode == 0) {
 			RDEBUG2("Failed in post-proxy callback");
 			eap_fail(handler);
-			eap_handler_free(inst, handler);
+			talloc_free(handler);
 			return RLM_MODULE_REJECT;
 		}
 
@@ -604,14 +603,14 @@ static rlm_rcode_t mod_post_proxy(void *inst, REQUEST *request)
 		    (handler->eap_ds->request->type.num >= PW_EAP_MD5)) {
 			if (!eaplist_add(inst, handler)) {
 				eap_fail(handler);
-				eap_handler_free(inst, handler);
+				talloc_free(handler);
 				return RLM_MODULE_FAIL;
 			}
-			
+
 		} else {	/* couldn't have been LEAP, there's no tunnel */
 			RDEBUG2("Freeing handler");
 			/* handler is not required any more, free it now */
-			eap_handler_free(inst, handler);
+			talloc_free(handler);
 		}
 
 		/*
@@ -668,7 +667,7 @@ static rlm_rcode_t mod_post_proxy(void *inst, REQUEST *request)
 	/*
 	 *	The format is very specific.
 	 */
-	if (vp->length != 17 + 34) {
+	if (vp->length != (17 + 34)) {
 		RDEBUG2("Cisco-AVPair with leap:session-key has incorrect length %d: Expected %d",
 		       vp->length, 17 + 34);
 		return RLM_MODULE_NOOP;
@@ -676,9 +675,12 @@ static rlm_rcode_t mod_post_proxy(void *inst, REQUEST *request)
 
 	/*
 	 *	Decrypt the session key, using the proxy data.
+	 *
+	 *	Note that the session key is *binary*, and therefore
+	 *	may contain embedded zeros.  So we have to use memdup.
 	 */
-	i = 34;			/* starts off with 34 octets */
-	p = talloc_strdup(vp, vp->vp_strvalue);
+	i = 34;
+	p = talloc_memdup(vp, vp->vp_octets, vp->length);
 	len = rad_tunnel_pwdecode((uint8_t *)p + 17, &i,
 				  request->home_server->secret,
 				  request->proxy->vector);
@@ -693,9 +695,7 @@ static rlm_rcode_t mod_post_proxy(void *inst, REQUEST *request)
 	rad_tunnel_pwencode(p + 17, &len,
 			    request->client->secret,
 			    request->packet->vector);
-//	talloc_free(vp->vp_strvalue);
-	vp->vp_strvalue = p;
-	vp->type = VT_DATA;
+	pairstrsteal(vp, p);
 
 	return RLM_MODULE_UPDATED;
 }
@@ -707,24 +707,24 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 	VALUE_PAIR	*vp;
 	eap_handler_t	*handler;
 	eap_packet_raw_t	*eap_packet;
-	
+
 	/*
 	 * Only build a failure message if something previously rejected the request
 	 */
 	vp = pairfind(request->config_items, PW_POSTAUTHTYPE, 0, TAG_ANY);
 
 	if (!vp || (vp->vp_integer != PW_POSTAUTHTYPE_REJECT)) return RLM_MODULE_NOOP;
-	
+
 	if (!pairfind(request->packet->vps, PW_EAP_MESSAGE, 0, TAG_ANY)) {
 		RDEBUG2("Request didn't contain an EAP-Message, not inserting EAP-Failure");
 		return RLM_MODULE_NOOP;
 	}
-	
+
 	if (pairfind(request->reply->vps, PW_EAP_MESSAGE, 0, TAG_ANY)) {
 		RDEBUG2("Reply already contained an EAP-Message, not inserting EAP-Failure");
 		return RLM_MODULE_NOOP;
 	}
-	
+
 	eap_packet = eap_vp2packet(request, request->packet->vps);
 	if (!eap_packet) {
 		RERROR("Malformed EAP Message");
@@ -739,8 +739,8 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 
 	RDEBUG2("Request was previously rejected, inserting EAP-Failure");
 	eap_fail(handler);
-	eap_handler_free(inst, handler);
-	
+	talloc_free(handler);
+
 	/*
 	 * Make sure there's a message authenticator attribute in the response
 	 * RADIUS protocol code will calculate the correct value later...

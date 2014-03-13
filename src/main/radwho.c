@@ -53,13 +53,13 @@ log_debug_t debug_flag = 0;
 char const *progname = "radwho";
 char const *radlog_dir = NULL;
 char const *radutmp_file = NULL;
-int check_config = false;
+bool check_config = false;
 
 char const *raddb_dir = NULL;
 char const *radacct_dir = NULL;
 char const *radlib_dir = NULL;
 uint32_t myip = INADDR_ANY;
-int log_stripped_names;
+bool log_stripped_names;
 
 /*
  *	Global, for log.c to use.
@@ -72,10 +72,12 @@ pid_t rad_fork(void)
 	return fork();
 }
 
+#ifdef HAVE_PTHREAD_H
 pid_t rad_waitpid(pid_t pid, int *status)
 {
 	return waitpid(pid, status, 0);
 }
+#endif
 
 struct radutmp_config_t {
   char *radutmp_fn;
@@ -217,7 +219,7 @@ int main(int argc, char **argv)
 	int zap = 0;
 
 	raddb_dir = RADIUS_DIR;
-	
+
 	talloc_set_log_stderr();
 
 	while((c = getopt(argc, argv, "d:fF:nN:sSipP:crRu:U:Z")) != EOF) switch(c) {
@@ -356,7 +358,7 @@ int main(int argc, char **argv)
 		char name[sizeof(rt.login) + 1];
 
 		if (rt.type != P_LOGIN) continue; /* hide logout sessions */
-		
+
 		/*
 		 *	We don't show shell users if we are
 		 *	fingerd, as we have done that above.
@@ -447,8 +449,7 @@ int main(int argc, char **argv)
 			 */
 			if ((rt.time <= now) &&
 			    (now - rt.time) <= (86400 * 365)) {
-				printf("Acct-Session-Time = %ld\n",
-				       now - rt.time);
+				printf("Acct-Session-Time = %" PRId64 "\n", (int64_t) (now - rt.time));
 			}
 
 			if (rt.caller_id[0] != '\0') {

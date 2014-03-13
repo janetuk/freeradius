@@ -41,7 +41,7 @@ RCSID("$Id$")
 typedef struct rlm_attr_filter {
 	char		*filename;
 	char		*key;
-	int		relaxed;
+	bool		relaxed;
 	PAIR_LIST	*attrs;
 } rlm_attr_filter_t;
 
@@ -157,6 +157,8 @@ static rlm_rcode_t attr_filter_common(void *instance, REQUEST *request, RADIUS_P
 	char		buffer[256];
 
 	if (!packet) return RLM_MODULE_NOOP;
+
+	rad_assert(request != NULL);
 
 	if (!inst->key) {
 		VALUE_PAIR	*namepair;
@@ -316,7 +318,7 @@ static rlm_rcode_t attr_filter_common(void *instance, REQUEST *request, RADIUS_P
 	}
 
 	return RLM_MODULE_UPDATED;
-	
+
 	error:
 	pairfree(&output);
 	return RLM_MODULE_FAIL;

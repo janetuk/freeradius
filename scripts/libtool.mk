@@ -31,15 +31,15 @@ ifeq "${LIBTOOL}" "JLIBTOOL"
     # include referencing ${LIBTOOL}, as we don't have a jlibtool
     # binary!
     ${JLIBTOOL}: ${top_makedir}/jlibtool.c
-	@mkdir -p $(dir $@)
-	@echo CC jlibtool.c
-	@${CC} $< -o $@
+	$(Q)mkdir -p $(dir $@)
+	$(Q)echo CC jlibtool.c
+	$(Q)${CC} $< -o $@ ${DARWIN_CFLAGS}
 
     clean: jlibtool_clean
 
     .PHONY: jlibtool_clean
     jlibtool_clean:
-	@rm -f ${JLIBTOOL}
+	$(Q)rm -f ${JLIBTOOL}
 
     # Tell GNU Make to use this value, rather than anything specified
     # on the command line.
@@ -53,7 +53,7 @@ clean: .libs_clean
 
 .PHONY: .libs_clean
 .libs_clean:
-	@rm -rf ${BUILD_DIR}/.libs/
+	$(Q)rm -rf ${BUILD_DIR}/.libs/
 
 # Re-define compilers and linkers
 #
@@ -90,6 +90,9 @@ define ADD_TARGET_RULE.la
 		$${${1}_PRLIBS}
 	    @$${${1}_POSTMAKE}
 
+    ifneq "${ANALYZE.c}" ""
+        scan.${1}: $${${1}_PLISTS}
+    endif
 endef
 
 # ADD_RELINK_RULE.exe - Parametric "function" that adds a rule to relink
@@ -129,7 +132,7 @@ endef
 # By default, if libdir is defined, we build shared libraries.
 # However, we can disable shared libraries if explicitly told to.
 ifneq "${libdir}" ""
-    ifneq "bm_shared_libs" "no"
+    ifneq "${bm_shared_libs}" "no"
         bm_shared_libs := yes
     endif
 endif
@@ -147,8 +150,8 @@ ifeq "${bm_shared_libs}" "yes"
     #          with no dependency on the source. 
     # RELINL : flags use to build executables that can be run
     #          from the build directory / source tree.
-    RPATH_FLAGS := -rpath ${libdir} -rdynamic
-    RELINK_FLAGS := -rpath $(abspath ${BUILD_DIR})/lib/${RELINK}/.libs -rdynamic
+    RPATH_FLAGS := -rpath ${libdir}
+    RELINK_FLAGS := -rpath $(abspath ${BUILD_DIR})/lib/${RELINK}/.libs
     
     RELINK_FLAGS_MIN := -rpath ${libdir}
 
@@ -209,6 +212,12 @@ define ADD_LIBTOOL_TARGET
         $${TGT}_R_PRLIBS := $$(subst /lib/,/lib/${RELINK},$${$${TGT}_PRLIBS})
 
         $$(eval $$(call ADD_RELINK_RULE$${$${TGT}_SUFFIX},$${TGT}))
+
+        $$(eval $$(call ADD_CLEAN_RULE,$${$${TGT}_RELINK}_libtool))
+
+	ifneq "$${$${TGT}_NOLIBTOOL}" ""
+            $$(eval $$(call ADD_CLEAN_RULE,$${$${TGT}_NOLIBTOOL}_libtool))
+	endif
     endif
 
 endef

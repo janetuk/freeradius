@@ -4,7 +4,7 @@
 #	the easy creation of certificates.
 #
 #	See the README file in this directory for more information.
-#	
+#
 #	$Id$
 #
 ######################################################################
@@ -79,7 +79,7 @@ server.pem: server.p12
 
 .PHONY: server.vrfy
 server.vrfy: ca.pem
-	openssl verify -CAfile ca.pem server.pem
+	@openssl verify -CAfile ca.pem server.pem
 
 ######################################################################
 #
@@ -101,7 +101,7 @@ client.pem: client.p12
 	cp client.pem $(USER_NAME).pem
 
 .PHONY: client.vrfy
-client.vrfy: ca.pem client.pem 
+client.vrfy: ca.pem client.pem
 	c_rehash .
 	openssl verify -CApath . client.pem
 

@@ -9,6 +9,14 @@ ldap {
 	#
 	#  Note that this needs to match the name in the LDAP
 	#  server certificate, if you're using ldaps.
+	#
+	#  The ldap client libraries can do fail-over from one
+	#  server to another.  Enable this by specifying
+	#  multiple host names, separated by commas.
+	#
+	#	e.g. server = "ldap1.example.org,ldap2.example.org"
+	#
+	#  Otherwise, it will use just one server.
 	server = "ldap.example.org"
 
 	#  Port to connect on, defaults to 389. Setting this to
@@ -20,20 +28,20 @@ ldap {
 #	identity = "cn=admin,dc=example,dc=org"
 #	password = mypass
 
-	#  Unless overridden in another section, the dn from whilch all 
+	#  Unless overridden in another section, the dn from which all
 	#  searches will start from.
 #	base_dn = "dc=example,dc=org"
 
 	#
 	#  Mapping of LDAP directory attributes to RADIUS dictionary attributes.
 	#
-	#  WARNING: Although this format is almost identical to the unlang 
+	#  WARNING: Although this format is almost identical to the unlang
 	#  update section format, it does *NOT* mean that you can use other
 	#  unlang constructs in module configuration files.
 	#
 	#  Configuration items are in the format:
 	# 	<radius attr> <op> <ldap attr>
-	# 
+	#
 	#  Where:
 	#  	<radius attr>:	Is the destination RADIUS attribute
 	# 			with any valid list and request qualifiers.
@@ -42,8 +50,8 @@ ldap {
 	#			profile objects in the LDAP directory.
 	# 			If the attribute name is wrapped in double
 	# 			quotes it will be xlat expanded.
-	# 
-	#  Request and list qualifiers may also be placed after the 'update' 
+	#
+	#  Request and list qualifiers may also be placed after the 'update'
 	#  section name to set defaults destination requests/lists
 	#  for unqualified RADIUS attributes.
 	#
@@ -52,18 +60,19 @@ ldap {
 	#  attribute ref.
 	#
 	update {
+		control:Password-With-Header	+= 'userPassword'
 #		control:NT-Password		:= 'ntPassword'
 #		reply:Reply-Message		:= 'radiusReplyMessage'
 #		reply:Tunnel-Type		:= 'radiusTunnelType'
 #		reply:Tunnel-Medium-Type	:= 'radiusTunnelMediumType'
 #		reply:Tunnel-Private-Group-ID	:= 'radiusTunnelPrivategroupId'
 	}
-	
+
 	#
 	#  Generic valuepair attribute
-	#  If set, this will attribute will be retrieved in addition to any 
+	#  If set, this will attribute will be retrieved in addition to any
 	#  mapped attributes.
-	# 
+	#
 	#  Values should be in the format:
 	#  	<radius attr> <op> <value>
 	#
@@ -75,7 +84,7 @@ ldap {
 	# 			If the attribute name is wrapped in double
 	# 			quotes it will be xlat expanded.
 	#
-#	valuepair_attribute = "radiusValuePair"
+#	valuepair_attribute = "radiusAttribute"
 
 	# Set to yes if you have eDirectory and want to use the universal
 	# password mechanism.
@@ -89,31 +98,44 @@ ldap {
 	#
 	#  User object identification.
 	#
-	user {	
+	user {
 		#   Where to start searching in the tree for users
 		base_dn = "${..base_dn}"
-		
+
 		#  Filter for user objects, should be specific enough
 		#  to identify a single user object.
 		filter = "(uid=%{%{Stripped-User-Name}:-%{User-Name}})"
-		
+
 		# Search scope, may be 'base', 'one', sub' or 'children'
 #		scope = 'sub'
-		
-		#  Control whether or not "access_attribute" is used to
-		#  determine authorization.  If set to "yes", then
-		#  "access_attribute" existing means "allow access".
-		#  "access_attribute" not existing means "deny access"
-		#
-		#   If set to "no", then
-		#  "access_attribute" existing means "deny access".
-		#  "access_attribute" not existing means "allow access"
-#		positive_access = yes
 
-		#  If this is undefined, anyone is authorized.
+		#  If this is undefined, anyone is authorised.
 		#  If it is defined, the contents of this attribute
-		#  determine whether or not the user is authorized
+		#  determine whether or not the user is authorised
 #		access_attribute = "dialupAccess"
+
+		#  Control whether the presence of "access_attribute"
+		#  allows access, or denys access.
+		#
+		#  If "yes", and the access_attribute is present, or
+		#  "no" and the access_attribute is absent then access
+		#  will be allowed.
+		#
+		#  If "yes", and the access_attribute is absent, or
+		#  "no" and the access_attribute is present, then
+		#  access will not be allowed.
+		#
+		#  If the value of the access_attribute is "false", it
+		#  will negate the result.
+		#
+		#  e.g.
+		#    access_positive = yes
+		#    access_attribute = userAccessAllowed
+		#
+		#    userAccessAllowed = false
+		#
+		#  Will result in the user being locked out.
+#		access_positive = yes
 	}
 
 	#
@@ -122,11 +144,11 @@ ldap {
 	group {
 		#   Where to start searching in the tree for groups
 		base_dn = "${..base_dn}"
-		
+
 		#  Filter for group objects, should match all available
 		#  group objects a user might be a member of.
 		filter = "(objectClass=posixGroup)"
-		
+
 		# Search scope, may be 'base', 'one', sub' or 'children'
 #		scope = 'sub'
 
@@ -134,6 +156,11 @@ ldap {
 		#  Is used when converting group DNs to group
 		#  names.
 #		name_attribute = cn
+
+		#  Filter to find group objects a user is a member of.
+		#  That is, group objects with attributes that
+		#  identify members (the inverse of membership_attribute).
+#		membership_filter = "(|(member=%{control:Ldap-UserDn})(memberUid=%{%{Stripped-User-Name}:-%{User-Name}}))"
 
 		#  The attribute in user objects which contain the names
 		#  or DNs of groups a user is a member of.
@@ -143,13 +170,8 @@ ldap {
 		#  referenced to actually exist.
 		membership_attribute = "memberOf"
 
-		#  Filter to find group objects a user is a member of.
-		#  That is, group objects with attributes that 
-		#  identify members (the inverse of membership_attribute).
-#		membership_filter = "(|(member=%{control:Ldap-UserDn})(memberUid=%{%{Stripped-User-Name}:-%{User-Name}}))"
-
 		#  If cacheable_name or cacheable_dn are enabled,
-		#  all group information for the user will be 
+		#  all group information for the user will be
 		#  retrieved from the directory and written to LDAP-Group
 		#  attributes appropriate for the instance of rlm_ldap.
 		#
@@ -158,21 +180,21 @@ ldap {
 		#
 		#  This feature is intended to be used with rlm_cache.
 		#
-		#  If you with to use this feature, you should enable 
+		#  If you with to use this feature, you should enable
 		#  the type that matches the format of your check items
 		#  i.e. if your groups are specified as DNs then enable
 		#  cacheable_dn else enable cacheable_name.
 #		cacheable_name = "no"
 #		cacheable_dn = "no"
 	}
-	
+
 	#
 	#  User profiles. RADIUS profile objects contain sets of attributes
-	#  to insert into the request. These attribtues are mapped using
-	#  the same mapping scheme appled to user objects.
+	#  to insert into the request. These attributes are mapped using
+	#  the same mapping scheme applied to user objects.
 	#
 	profile {
-		#  Filter for RAIDUS profile objects
+		#  Filter for RADIUS profile objects
 #		filter = "(objectclass=radiusprofile)"
 
 		#  The default profile applied to all users.
@@ -184,19 +206,19 @@ ldap {
 		#  will override this setting at run-time.
 #		attribute = "radiusProfileDn"
 	}
-	
+
 	#
 	#  Bulk load clients from the directory
 	#
 	client {
 		#   Where to start searching in the tree for clients
 		base_dn = "${..base_dn}"
-		
+
 		#
 		#  Filter to match client objects
 		#
 		filter = '(objectClass=frClient)'
-		
+
 		# Search scope, may be 'base', 'one', 'sub' or 'children'
 #		scope = 'sub'
 
@@ -217,13 +239,15 @@ ldap {
 		#    * require_message_authenticator - Whether we require the Message-Authenticator
 		#      attribute to be present in requests from the client.
 		#
+		#  Schemas are available in doc/schemas/ldap for openldap and eDirectory
+		#
 		attribute {
-			identifier = 'frClientIdentifier'
-			secret = 'frClientSecret'
-#			shortname = 'frClientShortname'
-#			nas_type = 'frClientType'
-#			virtual_server = 'frClientVirtualServer'
-#			require_message_authenticator = 'frClientRequireMa'
+			identifier = 'radiusClientIdentifier'
+			secret = 'radiusClientSecret'
+#			shortname = 'radiusClientShortname'
+#			nas_type = 'radiusClientType'
+#			virtual_server = 'radiusClientVirtualServer'
+#			require_message_authenticator = 'radiusClientRequireMa'
 		}
 	}
 
@@ -240,7 +264,7 @@ ldap {
 	#
 	#  LDAP modification items are in the format:
 	# 	<ldap attr> <op> <value>
-	# 
+	#
 	#  Where:
 	#  	<ldap attr>:	The LDAP attribute to add modify or delete.
 	#  	<op>: 		One of the assignment operators:
@@ -248,26 +272,26 @@ ldap {
 	#			Note: '=' is *not* supported.
 	#  	<value>:	The value to add modify or delete.
 	#
-	#  WARNING: If using the ':=' operator with a multivalued LDAP 
+	#  WARNING: If using the ':=' operator with a multi-valued LDAP
 	#  attribute, all instances of the attribute will be removed and
 	#  replaced with a single attribute.
-	# 
+	#
 	accounting {
 		reference = "%{tolower:type.%{Acct-Status-Type}}"
-		
+
 		type {
 			start {
 				update {
 					description := "Online at %S"
 				}
 			}
-			
+
 			interim-update {
 				update {
 					description := "Last seen at %S"
 				}
 			}
-			
+
 			stop {
 				update {
 					description := "Offline at %S"
@@ -275,7 +299,7 @@ ldap {
 			}
 		}
 	}
-	
+
 	#
 	#  Post-Auth can modify LDAP objects too
 	#
@@ -287,7 +311,7 @@ ldap {
 
 	#  LDAP connection-specific options.
 	#
-	#  These options set timeouts, keepalives, etc. for the connections.
+	#  These options set timeouts, keep-alives, etc. for the connections.
 	#
 	options {
 		#
@@ -346,7 +370,7 @@ ldap {
 		# Set this to 'yes' to use TLS encrypted connections
 		# to the LDAP database by using the StartTLS extended
 		# operation.
-		#			
+		#
 		# The StartTLS operation is supposed to be
 		# used with normal ldap connections instead of
 		# using ldaps (port 636) connections
@@ -361,7 +385,7 @@ ldap {
 
 		#  Certificate Verification requirements.  Can be:
 		#    "never" (don't even bother trying)
-		#    "allow" (try, but don't fail if the cerificate
+		#    "allow" (try, but don't fail if the certificate
 		#		can't be verified)
 		#    "demand" (fail if the certificate doesn't verify.)
 		#
