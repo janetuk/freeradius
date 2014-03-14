@@ -9,7 +9,8 @@
 REALM *tr_query_realm(const char *q_realm,
 		      const char  *q_community,
 		      const char *q_rprealm,
-		      const char *q_trustrouter);
+		      const char *q_trustrouter,
+		      unsigned int q_trport);
 
 int tr_init(void);
 
