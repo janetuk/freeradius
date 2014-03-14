@@ -31,15 +31,15 @@ RCSID("$Id$")
 #define  REALM_FORMAT_SUFFIX   1
 
 typedef struct realm_config_t {
-	int	format;
-	char       *formatstring;
-	char       *delim;
-	bool	ignore_default;
-	bool	ignore_null;
-  char	     *default_community;
-  char       *rp_realm;
-  char       *trust_router;
-  unsigned int tr_port;
+  int		format;
+  char		*formatstring;
+  char		*delim;
+  bool		ignore_default;
+  bool		ignore_null;
+  char		*default_community;
+  char		*rp_realm;
+  char		*trust_router;
+  unsigned int	tr_port;
 } realm_config_t;
 
 static CONF_PARSER module_config[] = {
@@ -58,7 +58,7 @@ static CONF_PARSER module_config[] = {
   { "trust_router", PW_TYPE_STRING_PTR,
     offsetof(realm_config_t,trust_router), NULL, "none" },
   { "tr_port", PW_TYPE_INTEGER,
-    offsetof(realm_config_t,tr_port), NULL, "none" },
+    offsetof(realm_config_t,tr_port), NULL, (TID_PORT) },
   { NULL, -1, 0, NULL, NULL }    /* end the list */
 };
 
