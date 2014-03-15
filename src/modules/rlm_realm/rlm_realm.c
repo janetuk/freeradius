@@ -42,6 +42,8 @@ typedef struct realm_config_t {
   unsigned int	tr_port;
 } realm_config_t;
 
+#define stringify(s) #s
+
 static CONF_PARSER module_config[] = {
   { "format", PW_TYPE_STRING_PTR,
     offsetof(realm_config_t,formatstring), NULL, "suffix" },
@@ -59,6 +61,7 @@ static CONF_PARSER module_config[] = {
     offsetof(realm_config_t,trust_router), NULL, "none" },
   { "tr_port", PW_TYPE_INTEGER,
     offsetof(realm_config_t,tr_port), NULL, "12309" },
+  //    offsetof(realm_config_t,tr_port), NULL, (stringify(TID_PORT)) },
   { NULL, -1, 0, NULL, NULL }    /* end the list */
 };
 
