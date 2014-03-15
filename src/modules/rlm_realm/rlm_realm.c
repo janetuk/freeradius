@@ -58,7 +58,7 @@ static CONF_PARSER module_config[] = {
   { "trust_router", PW_TYPE_STRING_PTR,
     offsetof(realm_config_t,trust_router), NULL, "none" },
   { "tr_port", PW_TYPE_INTEGER,
-    offsetof(realm_config_t,tr_port), NULL, (TID_PORT) },
+    offsetof(realm_config_t,tr_port), NULL, "12309" },
   { NULL, -1, 0, NULL, NULL }    /* end the list */
 };
 
@@ -172,6 +172,7 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 	 */
 	realm = realm_find(realmname);
        	if (!realm) 
+	  RDEBUG2("Querying realm %s using trust_router %s:%u", realmname, inst->trust_router, inst->tr_port);
 	  realm = tr_query_realm(realmname, inst->default_community, inst->rp_realm, inst->trust_router, inst->tr_port);
 	if (!realm) {
 		RDEBUG2("No such realm \"%s\"",
