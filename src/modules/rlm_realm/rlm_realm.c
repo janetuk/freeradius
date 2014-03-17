@@ -175,7 +175,6 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 	 */
 	realm = realm_find(realmname);
        	if (!realm) 
-	  RDEBUG2("Querying realm %s using trust_router %s:%u", realmname, inst->trust_router, inst->tr_port);
 	  realm = tr_query_realm(realmname, inst->default_community, inst->rp_realm, inst->trust_router, inst->tr_port);
 	if (!realm) {
 		RDEBUG2("No such realm \"%s\"",
