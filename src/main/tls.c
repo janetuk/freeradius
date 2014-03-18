@@ -109,7 +109,7 @@ static unsigned int psk_server_callback(SSL *ssl, const char *identity,
 						request, "%{psksql:select hex(key) from psk_keys where keyid = '%{control:tls-psk-identity}';}",
 						NULL, NULL);
 			if (hex_len >0)
-			  return fr_hex2bin(psk_buffer, psk, hex_len);
+			  return fr_hex2bin(psk, psk_buffer, hex_len);
 		}
 	}
 		if (strcmp(identity, conf->psk_identity) != 0) {

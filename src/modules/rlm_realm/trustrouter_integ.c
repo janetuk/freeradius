@@ -213,6 +213,7 @@ REALM *tr_query_realm(const char *q_realm,
   memset (cookie, 0, sizeof(struct resp_opaque));
 
   /* Set-up TID connection */
+  printf("Openning TIDC connection to %s:%u", q_trustrouter, q_trport);
   if (-1 == (conn = tidc_open_connection(global_tidc, (char *)q_trustrouter, q_trport, &gssctx))) {
     /* Handle error */
     printf("Error in tidc_open_connection.\n");
