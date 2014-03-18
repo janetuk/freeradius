@@ -1,8 +1,17 @@
-freeradius (3.0.1+moonshot1-0) UNRELEASED; urgency=low
+freeradius (3.0.1+moonshot1-1) unstable; urgency=low
 
+  [ Sam Hartman ]
   * New upstream
 
- -- Sam Hartman <hartmans@debian.org>  Thu, 13 Mar 2014 15:07:49 -0400
+  [ Margaret Wasserman ]
+  * Upgrade to freeradius 3.0.1 plus patches to handle crash on incoming
+    radsec packets.  
+  * Allow configuration of trust_router port number in 
+    mods-available/realm.
+  * Packages produce significantly verbose timing output when freeradius
+    is run with -fxx.
+
+ -- Margaret Wasserman <margaret@moonshot-proxy>  Tue, 18 Mar 2014 17:48:52 -0400
 
 freeradius (3.0.0~rc0+git+moonshot1-6) unstable; urgency=low
 
