@@ -1,7 +1,7 @@
 Summary: High-performance and highly configurable free RADIUS server
 Name: freeradius
-Version: 3.0.1
-Release: moonshot4%{?dist}
+Version: 3.0.3
+Release: 1%{?dist}
 License: GPLv2+ and LGPLv2+
 Group: System Environment/Daemons
 URL: http://www.freeradius.org/
@@ -13,10 +13,10 @@ URL: http://www.freeradius.org/
 %global HAVE_EC_CRYPTO 0
 %endif
 
-%global dist_base freeradius-server
+%global dist_base freeradius-server-%{version}
 
-
-Source0: freeradius-server.tar.gz
+#Source0: ftp://ftp.freeradius.org/pub/radius/%{dist_base}.tar.bz2
+Source0: %{dist_base}.tar.bz2
 Source100: freeradius-radiusd-init
 Source102: freeradius-logrotate
 Source103: freeradius-pam-conf
@@ -24,20 +24,13 @@ Source104: freeradius-tmpfiles.conf
 
 Patch1: freeradius-redhat-config.patch
 Patch2: freeradius-postgres-sql.patch
-Patch3: freeradius-ippool-tr.patch
-Patch4: freeradius-imacros.patch
-Patch5: freeradius-mysql-schema.patch
-Patch6: freeradius-perl.patch
-Patch7: freeradius-rlm_pap-overflow.patch
-# These patches are temporary - fixing SQLite V2 API and attr_filter issues
-Patch8: freeradius-rlm_sql_sqlite-v2api.patch
-Patch9: freeradius-rlm_attr_filter-fix.patch
 
 %global docdir %{?_pkgdocdir}%{!?_pkgdocdir:%{_docdir}/%{name}-%{version}}
 %define initddir %{?_initddir:%{_initddir}}%{!?_initddir:%{_initrddir}}
 
 BuildRequires: autoconf
 BuildRequires: gdbm-devel
+BuildRequires: chrpath
 BuildRequires: openssl
 BuildRequires: openssl-devel
 BuildRequires: pam-devel
@@ -48,7 +41,6 @@ BuildRequires: readline-devel
 BuildRequires: libpcap-devel
 BuildRequires: libtalloc-devel
 BuildRequires: pcre-devel
-BuildRequires: trust_router-devel >= 1.2
 
 %if ! 0%{?rhel}
 BuildRequires: libyubikey-devel
@@ -56,14 +48,12 @@ BuildRequires: tncfhh-devel
 BuildRequires: ykclient-devel
 %endif
 
-Requires: openssl trust_router
+Requires: openssl
 Requires(pre): shadow-utils glibc-common
 Requires(post): /sbin/chkconfig
 Requires(preun): /sbin/chkconfig
 
 %description
-FreeRADIUS + Moonshot extensions
-
 The FreeRADIUS Server Project is a high performance and highly configurable
 GPL'd free RADIUS server. The server is similar in some respects to
 Livingston's 2.0 server.  While FreeRADIUS started as a variant of the
@@ -191,13 +181,6 @@ This plugin provides the unixODBC support for the FreeRADIUS server project.
 # mistakenly includes the backup files, especially problematic for raddb config files.
 %patch1 -p1
 %patch2 -p1
-%patch3 -p1
-%patch4 -p1
-%patch5 -p1
-%patch6 -p1
-%patch7 -p1
-%patch8 -p1
-%patch9 -p1
 
 %build
 # Force compile/link options, extra security for network facing daemon
@@ -219,8 +202,7 @@ This plugin provides the unixODBC support for the FreeRADIUS server project.
         --without-rlm_sql_iodbc \
         --without-rlm_sql_firebird \
         --without-rlm_sql_db2 \
-        --without-rlm_sql_oracle \
-        --without-rlm_example
+        --without-rlm_sql_oracle 
 
 make
 
@@ -260,11 +242,14 @@ rm -f $RPM_BUILD_ROOT/usr/sbin/rc.radiusd
 rm -rf $RPM_BUILD_ROOT/%{_libdir}/freeradius/*.a
 rm -rf $RPM_BUILD_ROOT/%{_libdir}/freeradius/*.la
 
+chrpath --delete $RPM_BUILD_ROOT/%{_libdir}/freeradius/rlm_sql_unixodbc.so
+chrpath --delete $RPM_BUILD_ROOT/%{_libdir}/freeradius/rlm_sql_postgresql.so
+
 rm -rf $RPM_BUILD_ROOT/etc/raddb/mods-config/sql/main/mssql
 
 rm -rf $RPM_BUILD_ROOT/etc/raddb/mods-config/sql/ippool/oracle
+rm -rf $RPM_BUILD_ROOT/etc/raddb/mods-config/sql/ippool-dhcp/oracle
 rm -rf $RPM_BUILD_ROOT/etc/raddb/mods-config/sql/main/oracle
-
 
 # remove unsupported config files
 rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/experimental.conf
@@ -347,6 +332,7 @@ exit 0
 %dir %attr(755,root,radiusd) /etc/raddb
 %defattr(-,root,radiusd)
 /etc/raddb/README.rst
+/etc/raddb/panic.gdb
 %attr(644,root,radiusd) %config(noreplace) /etc/raddb/dictionary
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/clients.conf
 
@@ -390,6 +376,9 @@ exit 0
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/ippool-dhcp
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main
 
+%dir %attr(750,root,radiusd) /etc/raddb/mods-config/unbound
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/unbound/default.conf
+
 # sites-available
 %dir %attr(750,root,radiusd) /etc/raddb/sites-available
 /etc/raddb/sites-available/README
@@ -401,7 +390,6 @@ exit 0
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/example
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/inner-tunnel
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/dhcp
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/chbind
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/check-eap-tls
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/status
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/dhcp.relay
@@ -477,6 +465,8 @@ exit 0
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/sqlippool
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/sradutmp
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/unix
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/unpack
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/unbound
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/utf8
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/wimax
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/yubikey
@@ -512,6 +502,7 @@ exit 0
 %config(missingok) /etc/raddb/mods-enabled/soh
 %config(missingok) /etc/raddb/mods-enabled/sradutmp
 %config(missingok) /etc/raddb/mods-enabled/unix
+%config(missingok) /etc/raddb/mods-enabled/unpack
 %config(missingok) /etc/raddb/mods-enabled/utf8
 
 # policy
@@ -578,7 +569,6 @@ exit 0
 %{_libdir}/freeradius/rlm_expiration.so
 %{_libdir}/freeradius/rlm_expr.so
 %{_libdir}/freeradius/rlm_files.so
-%{_libdir}/freeradius/rlm_idn.so
 %{_libdir}/freeradius/rlm_ippool.so
 %{_libdir}/freeradius/rlm_linelog.so
 %{_libdir}/freeradius/rlm_logintime.so
@@ -590,17 +580,16 @@ exit 0
 %{_libdir}/freeradius/rlm_preprocess.so
 %{_libdir}/freeradius/rlm_radutmp.so
 %{_libdir}/freeradius/rlm_realm.so
-%{_libdir}/freeradius/rlm_rest.so
 %{_libdir}/freeradius/rlm_replicate.so
-%{_libdir}/freeradius/rlm_smsotp.so
+%{_libdir}/freeradius/rlm_rest.so
 %{_libdir}/freeradius/rlm_soh.so
 %{_libdir}/freeradius/rlm_sometimes.so
 %{_libdir}/freeradius/rlm_sql.so
 %{_libdir}/freeradius/rlm_sqlcounter.so
-%{_libdir}/freeradius/rlm_sqlhpwippool.so
 %{_libdir}/freeradius/rlm_sqlippool.so
 %{_libdir}/freeradius/rlm_sql_null.so
 %{_libdir}/freeradius/rlm_unix.so
+%{_libdir}/freeradius/rlm_unpack.so
 %{_libdir}/freeradius/rlm_utf8.so
 %{_libdir}/freeradius/rlm_wimax.so
 %{_libdir}/freeradius/rlm_yubikey.so
@@ -648,7 +637,7 @@ exit 0
 %doc %{_mandir}/man1/radzap.1.gz
 %doc %{_mandir}/man1/smbencrypt.1.gz
 %doc %{_mandir}/man5/checkrad.5.gz
-%doc %{_mandir}/man8/radconf2xml.8.gz
+#%doc %{_mandir}/man8/radconf2xml.8.gz
 %doc %{_mandir}/man8/radcrypt.8.gz
 %doc %{_mandir}/man8/radsniff.8.gz
 %doc %{_mandir}/man8/radsqlrelay.8.gz
@@ -752,6 +741,7 @@ exit 0
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/ippool/sqlite/schema.sql
 
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/ippool-dhcp/sqlite
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/ippool-dhcp/sqlite/schema.sql
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/ippool-dhcp/sqlite/queries.conf
 
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main/sqlite
@@ -768,13 +758,16 @@ exit 0
 %{_libdir}/freeradius/rlm_sql_unixodbc.so
 
 %changelog
-* Thu Mar 13 2014 Stefan Paetow <stefan.paetow@diamond.ac.uk> - 3.0.1-5
-- Inclusion of a patch to fix a comparison bug in rlm_attr_filter
+* Fri Mar 21 2014 Stefan Paetow <stefan.paetow@diamond.ac.uk> - 3.0.2-1
+- Upgrade to upstream 3.0.2 release, full config compatible with 3.0.0.
+  This is a roll-up of all upstream bugs fixes found in 3.0.0-3.0.1
+  See upstream ChangeLog for details (in freeradius-doc subpackage)
 
 * Tue Mar  4 2014 Stefan Paetow <stefan.paetow@diamond.ac.uk> - 3.0.1-4
 - Inclusion of a SQLite 3 patch to unbreak SQLite support in FreeRADIUS 3.0.1
+
+* Tue Mar  4 2014 Stefan Paetow <stefan.paetow@diamond.ac.uk> - 3.0.1-4
 - Backported to CentOS 6.4
-- Integration of Moonshot Trust Router v1.0.1 with FreeRADIUS
 
 * Mon Feb 24 2014 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.1-4
 - Fix CVE-2014-2015 "freeradius: stack-based buffer overflow flaw in rlm_pap
