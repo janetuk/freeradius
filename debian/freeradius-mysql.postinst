@@ -20,9 +20,9 @@ case "$1" in
         done
 
         if [ -x "`which invoke-rc.d 2>/dev/null`" ]; then
-          invoke-rc.d freeradius force-reload
+          invoke-rc.d freeradius force-reload || true
         else
-          /etc/init.d/freeradius force-reload
+          /etc/init.d/freeradius force-reload || true
         fi
 	;;
 esac
