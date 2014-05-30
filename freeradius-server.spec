@@ -13,7 +13,7 @@ URL: http://www.freeradius.org/
 %global HAVE_EC_CRYPTO 0
 %endif
 
-%global dist_base freeradius-server-%{version}
+%global dist_base freeradius-server
 
 #Source0: ftp://ftp.freeradius.org/pub/radius/%{dist_base}.tar.bz2
 Source0: %{dist_base}.tar.bz2
