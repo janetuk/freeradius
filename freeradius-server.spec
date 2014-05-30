@@ -1,6 +1,6 @@
 Summary: High-performance and highly configurable free RADIUS server
 Name: freeradius
-Version: 3.0.3
+Version: 3.0.1
 Release: 1%{?dist}
 License: GPLv2+ and LGPLv2+
 Group: System Environment/Daemons
@@ -332,7 +332,6 @@ exit 0
 %dir %attr(755,root,radiusd) /etc/raddb
 %defattr(-,root,radiusd)
 /etc/raddb/README.rst
-/etc/raddb/panic.gdb
 %attr(644,root,radiusd) %config(noreplace) /etc/raddb/dictionary
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/clients.conf
 
@@ -376,8 +375,6 @@ exit 0
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/ippool-dhcp
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main
 
-%dir %attr(750,root,radiusd) /etc/raddb/mods-config/unbound
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/unbound/default.conf
 
 # sites-available
 %dir %attr(750,root,radiusd) /etc/raddb/sites-available
@@ -465,8 +462,6 @@ exit 0
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/sqlippool
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/sradutmp
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/unix
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/unpack
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/unbound
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/utf8
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/wimax
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/yubikey
@@ -502,7 +497,6 @@ exit 0
 %config(missingok) /etc/raddb/mods-enabled/soh
 %config(missingok) /etc/raddb/mods-enabled/sradutmp
 %config(missingok) /etc/raddb/mods-enabled/unix
-%config(missingok) /etc/raddb/mods-enabled/unpack
 %config(missingok) /etc/raddb/mods-enabled/utf8
 
 # policy
@@ -581,7 +575,6 @@ exit 0
 %{_libdir}/freeradius/rlm_radutmp.so
 %{_libdir}/freeradius/rlm_realm.so
 %{_libdir}/freeradius/rlm_replicate.so
-%{_libdir}/freeradius/rlm_rest.so
 %{_libdir}/freeradius/rlm_soh.so
 %{_libdir}/freeradius/rlm_sometimes.so
 %{_libdir}/freeradius/rlm_sql.so
@@ -589,7 +582,6 @@ exit 0
 %{_libdir}/freeradius/rlm_sqlippool.so
 %{_libdir}/freeradius/rlm_sql_null.so
 %{_libdir}/freeradius/rlm_unix.so
-%{_libdir}/freeradius/rlm_unpack.so
 %{_libdir}/freeradius/rlm_utf8.so
 %{_libdir}/freeradius/rlm_wimax.so
 %{_libdir}/freeradius/rlm_yubikey.so
