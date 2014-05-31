@@ -380,6 +380,7 @@ exit 0
 %dir %attr(750,root,radiusd) /etc/raddb/sites-available
 /etc/raddb/sites-available/README
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/control-socket
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/chbind
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/decoupled-accounting
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/robust-proxy-accounting
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/soh
@@ -611,6 +612,7 @@ exit 0
 %doc %{_mandir}/man8/raddebug.8.gz
 %doc %{_mandir}/man8/radiusd.8.gz
 %doc %{_mandir}/man8/radmin.8.gz
+%doc %{_mandir}/man8/radconf2xml.8.gz
 %doc %{_mandir}/man8/radrelay.8.gz
 
 %files doc
