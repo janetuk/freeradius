@@ -78,6 +78,11 @@ void debug_pair_list(UNUSED VALUE_PAIR *vp)
 {
 	return;
 }
+int rad_virtual_server(REQUEST UNUSED *request)
+{
+  /*We're not the server so we cannot do this*/
+  abort();
+}
 
 static void NEVER_RETURNS usage(void)
 {
@@ -1641,5 +1646,8 @@ main(int argc, char *argv[])
 		fflush(stdout);
 	}
 }
+
+
+  
 #endif
 
