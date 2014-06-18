@@ -13,10 +13,10 @@
 /** Decrypt a Yubikey OTP AES block
  *
  * @param inst Module configuration.
- * @param otp string to decrypt.
+ * @param passcode string to decrypt.
  * @return one of the RLM_RCODE_* constants.
  */
-rlm_rcode_t rlm_yubikey_decrypt(rlm_yubikey_t *inst, REQUEST *request, VALUE_PAIR *otp)
+rlm_rcode_t rlm_yubikey_decrypt(rlm_yubikey_t *inst, REQUEST *request, char const *passcode)
 {
 	uint32_t counter;
 	yubikey_token_st token;
@@ -43,7 +43,7 @@ rlm_rcode_t rlm_yubikey_decrypt(rlm_yubikey_t *inst, REQUEST *request, VALUE_PAI
 		return RLM_MODULE_INVALID;
 	}
 
-	yubikey_parse(otp->vp_octets + inst->id_len, key->vp_octets, &token);
+	yubikey_parse((uint8_t const *) passcode + inst->id_len, key->vp_octets, &token);
 
 	/*
 	 *	Apparently this just uses byte offsets...
@@ -55,7 +55,7 @@ rlm_rcode_t rlm_yubikey_decrypt(rlm_yubikey_t *inst, REQUEST *request, VALUE_PAI
 
 	RDEBUG("Token data decrypted successfully");
 
-	if (request->options && request->radlog) {
+	if (request->log.lvl && request->log.func) {
 		(void) fr_bin2hex((char *) &private_id, (uint8_t*) &token.uid, YUBIKEY_UID_SIZE);
 		RDEBUG2("Private ID	: 0x%s", private_id);
 		RDEBUG2("Session counter   : %u", yubikey_counter(token.ctr));

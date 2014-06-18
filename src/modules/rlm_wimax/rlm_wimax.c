@@ -44,8 +44,7 @@ typedef struct rlm_wimax_t {
  *	buffer over-flows.
  */
 static const CONF_PARSER module_config[] = {
-  { "delete_mppe_keys", PW_TYPE_BOOLEAN,
-    offsetof(rlm_wimax_t,delete_mppe_keys), NULL,   "no" },
+  { "delete_mppe_keys", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_wimax_t, delete_mppe_keys), "no" },
 
   { NULL, -1, 0, NULL, NULL }		/* end the list */
 };
@@ -56,7 +55,7 @@ static const CONF_PARSER module_config[] = {
  *	from the database. The authentication code only needs to check
  *	the password, the rest is done here.
  */
-static rlm_rcode_t mod_authorize(UNUSED void *instance, UNUSED REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, UNUSED REQUEST *request)
 {
 	VALUE_PAIR *vp;
 
@@ -88,16 +87,17 @@ static rlm_rcode_t mod_authorize(UNUSED void *instance, UNUSED REQUEST *request)
 
 		DEBUG2("rlm_wimax: Fixing WiMAX binary Calling-Station-Id to %s",
 		       vp->vp_strvalue);
+		return RLM_MODULE_OK;
 	}
 
-	return RLM_MODULE_OK;
+	return RLM_MODULE_NOOP;
 }
 
 
 /*
  *	Massage the request before recording it or proxying it
  */
-static rlm_rcode_t mod_preacct(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_preacct(void *instance, REQUEST *request)
 {
 	return mod_authorize(instance, request);
 }
@@ -105,7 +105,7 @@ static rlm_rcode_t mod_preacct(void *instance, REQUEST *request)
 /*
  *	Write accounting information to this modules database.
  */
-static rlm_rcode_t mod_accounting(UNUSED void *instance, UNUSED REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_accounting(UNUSED void *instance, UNUSED REQUEST *request)
 {
 	return RLM_MODULE_OK;
 }
@@ -113,7 +113,7 @@ static rlm_rcode_t mod_accounting(UNUSED void *instance, UNUSED REQUEST *request
 /*
  *	Generate the keys after the user has been authenticated.
  */
-static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *request)
 {
 	rlm_wimax_t *inst = instance;
 	VALUE_PAIR *msk, *emsk, *vp;
@@ -128,7 +128,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 	msk = pairfind(request->reply->vps, 1129, 0, TAG_ANY);
 	emsk = pairfind(request->reply->vps, 1130, 0, TAG_ANY);
 	if (!msk || !emsk) {
-		RDEBUG("No EAP-MSK or EAP-EMSK.  Cannot create WiMAX keys.");
+		RDEBUG("No EAP-MSK or EAP-EMSK.  Cannot create WiMAX keys");
 		return RLM_MODULE_NOOP;
 	}
 
@@ -213,8 +213,8 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 	mn_nai = pairfind(request->packet->vps, 1900, 0, TAG_ANY);
 	if (!mn_nai) mn_nai = pairfind(request->reply->vps, 1900, 0, TAG_ANY);
 	if (!mn_nai) {
-		RWDEBUG("WiMAX-MN-NAI was not found in the request or in the reply.");
-		RWDEBUG("We cannot calculate MN-HA keys.");
+		RWDEBUG("WiMAX-MN-NAI was not found in the request or in the reply");
+		RWDEBUG("We cannot calculate MN-HA keys");
 	}
 
 	/*
@@ -223,7 +223,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 	vp = NULL;
 	if (mn_nai) vp = pairfind(request->reply->vps, 23, VENDORPEC_WIMAX, TAG_ANY);
 	if (!vp) {
-		RWDEBUG("WiMAX-IP-Technology not found in reply.");
+		RWDEBUG("WiMAX-IP-Technology not found in reply");
 		RWDEBUG("Not calculating MN-HA keys");
 	}
 
@@ -254,7 +254,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 		 */
 		vp = pairfind(request->reply->vps, 10, VENDORPEC_WIMAX, TAG_ANY);
 		if (!vp) {
-			vp = radius_paircreate(request, &request->reply->vps,
+			vp = radius_paircreate(request->reply, &request->reply->vps,
 					       10, VENDORPEC_WIMAX);
 		}
 		if (!vp) {
@@ -268,7 +268,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 		 */
 		vp = pairfind(request->reply->vps, 11, VENDORPEC_WIMAX, TAG_ANY);
 		if (!vp) {
-			vp = radius_paircreate(request, &request->reply->vps,
+			vp = radius_paircreate(request->reply, &request->reply->vps,
 					       11, VENDORPEC_WIMAX);
 		}
 		if (!vp) {
@@ -304,7 +304,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 		 */
 		vp = pairfind(request->reply->vps, 10, VENDORPEC_WIMAX, TAG_ANY);
 		if (!vp) {
-			vp = radius_paircreate(request, &request->reply->vps,
+			vp = radius_paircreate(request->reply, &request->reply->vps,
 					       10, VENDORPEC_WIMAX);
 		}
 		if (!vp) {
@@ -318,7 +318,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 		 */
 		vp = pairfind(request->reply->vps, 11, VENDORPEC_WIMAX, TAG_ANY);
 		if (!vp) {
-			vp = radius_paircreate(request, &request->reply->vps,
+			vp = radius_paircreate(request->reply, &request->reply->vps,
 					       11, VENDORPEC_WIMAX);
 		}
 		if (!vp) {
@@ -354,7 +354,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 		 */
 		vp = pairfind(request->reply->vps, 12, VENDORPEC_WIMAX, TAG_ANY);
 		if (!vp) {
-			vp = radius_paircreate(request, &request->reply->vps,
+			vp = radius_paircreate(request->reply, &request->reply->vps,
 					       12, VENDORPEC_WIMAX);
 		}
 		if (!vp) {
@@ -368,7 +368,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 		 */
 		vp = pairfind(request->reply->vps, 13, VENDORPEC_WIMAX, TAG_ANY);
 		if (!vp) {
-			vp = radius_paircreate(request, &request->reply->vps,
+			vp = radius_paircreate(request->reply, &request->reply->vps,
 					       13, VENDORPEC_WIMAX);
 		}
 		if (!vp) {
@@ -405,7 +405,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 	if (fa_rk) {
 		vp = pairfind(request->reply->vps, 61, VENDORPEC_WIMAX, TAG_ANY);
 		if (!vp) {
-			vp = radius_paircreate(request, &request->reply->vps,
+			vp = radius_paircreate(request->reply, &request->reply->vps,
 					       61, VENDORPEC_WIMAX);
 		}
 		if (!vp) {
@@ -422,7 +422,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 	 */
 	vp = pairfind(request->packet->vps, 20, VENDORPEC_WIMAX, TAG_ANY);
 	if (vp) {
-		RDEBUG("Client requested MN-HA key: Should use SPI to look up key from storage.");
+		RDEBUG("Client requested MN-HA key: Should use SPI to look up key from storage");
 		if (!mn_nai) {
 			RWDEBUG("MN-NAI was not found!");
 		}
@@ -440,7 +440,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 		 */
 		vp = pairfind(request->packet->vps, 58, VENDORPEC_WIMAX, TAG_ANY);
 		if (vp && (vp->vp_integer == 1)) {
-			RDEBUG("Client requested HA-RK: Should use IP to look it up from storage.");
+			RDEBUG("Client requested HA-RK: Should use IP to look it up from storage");
 		}
 	}
 

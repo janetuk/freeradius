@@ -226,21 +226,21 @@ int eap_basic_compose(RADIUS_PACKET *packet, eap_packet_t *reply)
 	if (!packet->code) switch(reply->code) {
 	case PW_EAP_RESPONSE:
 	case PW_EAP_SUCCESS:
-		packet->code = PW_AUTHENTICATION_ACK;
+		packet->code = PW_CODE_AUTHENTICATION_ACK;
 		rcode = RLM_MODULE_HANDLED;
 		break;
 	case PW_EAP_FAILURE:
-		packet->code = PW_AUTHENTICATION_REJECT;
+		packet->code = PW_CODE_AUTHENTICATION_REJECT;
 		rcode = RLM_MODULE_REJECT;
 		break;
 	case PW_EAP_REQUEST:
-		packet->code = PW_ACCESS_CHALLENGE;
+		packet->code = PW_CODE_ACCESS_CHALLENGE;
 		rcode = RLM_MODULE_HANDLED;
 		break;
 	default:
 		/* Should never enter here */
 		ERROR("rlm_eap: reply code %d is unknown, Rejecting the request.", reply->code);
-		packet->code = PW_AUTHENTICATION_REJECT;
+		packet->code = PW_CODE_AUTHENTICATION_REJECT;
 		break;
 	}
 
@@ -265,7 +265,7 @@ VALUE_PAIR *eap_packet2vp(RADIUS_PACKET *packet, eap_packet_raw_t const *eap)
 
 	ptr = (uint8_t const *) eap;
 
-	paircursor(&out, &head);
+	fr_cursor_init(&out, &head);
 	do {
 		size = total;
 		if (size > 253) size = 253;
@@ -277,7 +277,7 @@ VALUE_PAIR *eap_packet2vp(RADIUS_PACKET *packet, eap_packet_raw_t const *eap)
 		}
 		pairmemcpy(vp, ptr, size);
 
-		pairinsert(&out, vp);
+		fr_cursor_insert(&out, vp);
 
 		ptr += size;
 		total -= size;
@@ -316,7 +316,7 @@ eap_packet_raw_t *eap_vp2packet(TALLOC_CTX *ctx, VALUE_PAIR *vps)
 	 *	Sanity check the length before doing anything.
 	 */
 	if (first->length < 4) {
-		DEBUG("rlm_eap: EAP packet is too short.");
+		DEBUG("rlm_eap: EAP packet is too short");
 		return NULL;
 	}
 
@@ -331,7 +331,7 @@ eap_packet_raw_t *eap_vp2packet(TALLOC_CTX *ctx, VALUE_PAIR *vps)
 	 *	Take out even more weird things.
 	 */
 	if (len < 4) {
-		DEBUG("rlm_eap: EAP packet has invalid length.");
+		DEBUG("rlm_eap: EAP packet has invalid length");
 		return NULL;
 	}
 
@@ -339,8 +339,8 @@ eap_packet_raw_t *eap_vp2packet(TALLOC_CTX *ctx, VALUE_PAIR *vps)
 	 *	Sanity check the length, BEFORE allocating  memory.
 	 */
 	total_len = 0;
-	paircursor(&cursor, &first);
-	while ((i = pairfindnext(&cursor, PW_EAP_MESSAGE, 0, TAG_ANY))) {
+	fr_cursor_init(&cursor, &first);
+	while ((i = fr_cursor_next_by_num(&cursor, PW_EAP_MESSAGE, 0, TAG_ANY))) {
 		total_len += i->length;
 
 		if (total_len > len) {
@@ -371,8 +371,8 @@ eap_packet_raw_t *eap_vp2packet(TALLOC_CTX *ctx, VALUE_PAIR *vps)
 	ptr = (unsigned char *)eap_packet;
 
 	/* RADIUS ensures order of attrs, so just concatenate all */
-	pairfirst(&cursor);
-	while ((i = pairfindnext(&cursor, PW_EAP_MESSAGE, 0, TAG_ANY))) {
+	fr_cursor_first(&cursor);
+	while ((i = fr_cursor_next_by_num(&cursor, PW_EAP_MESSAGE, 0, TAG_ANY))) {
 		memcpy(ptr, i->vp_strvalue, i->length);
 		ptr += i->length;
 	}

@@ -28,7 +28,6 @@ RCSID("$Id$")
 #include	<freeradius-devel/rad_assert.h>
 
 #include	<fcntl.h>
-#include	<limits.h>
 
 #include "config.h"
 
@@ -42,38 +41,30 @@ static char const porttypes[] = "ASITX";
  */
 typedef struct nas_port {
 	uint32_t		nasaddr;
-	unsigned int	port;
+	uint16_t		port;
 	off_t			offset;
 	struct nas_port 	*next;
 } NAS_PORT;
 
 typedef struct rlm_radutmp_t {
 	NAS_PORT	*nas_port_list;
-	char		*filename;
-	char		*username;
+	char const	*filename;
+	char const	*username;
 	bool		case_sensitive;
 	bool		check_nas;
-	int		permission;
+	uint32_t	permission;
 	bool		caller_id_ok;
 } rlm_radutmp_t;
 
 static const CONF_PARSER module_config[] = {
-	{ "filename", PW_TYPE_FILE_OUTPUT | PW_TYPE_REQUIRED,
-	  offsetof(rlm_radutmp_t,filename), NULL,  RADUTMP },
-	{ "username", PW_TYPE_STRING_PTR | PW_TYPE_REQUIRED,
-	  offsetof(rlm_radutmp_t,username), NULL,  "%{User-Name}"},
-	{ "case_sensitive", PW_TYPE_BOOLEAN,
-	  offsetof(rlm_radutmp_t,case_sensitive), NULL,  "yes"},
-	{ "check_with_nas", PW_TYPE_BOOLEAN,
-	  offsetof(rlm_radutmp_t,check_nas), NULL,  "yes"},
-	{ "perm",     PW_TYPE_INTEGER | PW_TYPE_DEPRECATED,
-	  offsetof(rlm_radutmp_t,permission), NULL,  NULL },
-	{ "permissions",     PW_TYPE_INTEGER,
-	  offsetof(rlm_radutmp_t,permission), NULL,  "0644" },
-	{ "callerid", PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED,
-	  offsetof(rlm_radutmp_t,caller_id_ok), NULL, NULL },
-	{ "caller_id", PW_TYPE_BOOLEAN,
-	  offsetof(rlm_radutmp_t,caller_id_ok), NULL, "no" },
+	{ "filename", FR_CONF_OFFSET(PW_TYPE_FILE_OUTPUT | PW_TYPE_REQUIRED, rlm_radutmp_t, filename), RADUTMP  },
+	{ "username", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED, rlm_radutmp_t, username), "%{User-Name}" },
+	{ "case_sensitive", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_radutmp_t, case_sensitive), "yes" },
+	{ "check_with_nas", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_radutmp_t, check_nas), "yes" },
+	{ "perm", FR_CONF_OFFSET(PW_TYPE_INTEGER | PW_TYPE_DEPRECATED, rlm_radutmp_t, permission), NULL },
+	{ "permissions", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_radutmp_t, permission), "0644" },
+	{ "callerid", FR_CONF_OFFSET(PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, rlm_radutmp_t, caller_id_ok), NULL },
+	{ "caller_id", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_radutmp_t, caller_id_ok), "no" },
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
 
@@ -91,7 +82,7 @@ static rlm_rcode_t radutmp_zap(REQUEST *request, char const *filename, uint32_t 
 
 	fd = open(filename, O_RDWR);
 	if (fd < 0) {
-		REDEBUG("Error accessing file %s: %s", filename, strerror(errno));
+		REDEBUG("Error accessing file %s: %s", filename, fr_syserror(errno));
 		return RLM_MODULE_FAIL;
 	}
 
@@ -99,7 +90,7 @@ static rlm_rcode_t radutmp_zap(REQUEST *request, char const *filename, uint32_t 
 	*	Lock the utmp file, prefer lockf() over flock().
 	*/
 	if (rad_lockfd(fd, LOCK_LEN) < 0) {
-		REDEBUG("Failed to acquire lock on file %s: %s", filename, strerror(errno));
+		REDEBUG("Failed to acquire lock on file %s: %s", filename, fr_syserror(errno));
 		close(fd);
 		return RLM_MODULE_FAIL;
 	}
@@ -122,7 +113,7 @@ static rlm_rcode_t radutmp_zap(REQUEST *request, char const *filename, uint32_t 
 		u.time = t;
 
 		if (write(fd, &u, sizeof(u)) < 0) {
-			REDEBUG("Failed writing: %s", strerror(errno));
+			REDEBUG("Failed writing: %s", fr_syserror(errno));
 
 			close(fd);
 			return RLM_MODULE_FAIL;
@@ -136,7 +127,7 @@ static rlm_rcode_t radutmp_zap(REQUEST *request, char const *filename, uint32_t 
 /*
  *	Lookup a NAS_PORT in the nas_port_list
  */
-static NAS_PORT *nas_port_find(NAS_PORT *nas_port_list, uint32_t nasaddr, unsigned int port)
+static NAS_PORT *nas_port_find(NAS_PORT *nas_port_list, uint32_t nasaddr, uint16_t port)
 {
 	NAS_PORT	*cl;
 
@@ -153,7 +144,7 @@ static NAS_PORT *nas_port_find(NAS_PORT *nas_port_list, uint32_t nasaddr, unsign
 /*
  *	Store logins in the RADIUS utmp file.
  */
-static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *request)
 {
 	rlm_rcode_t	rcode = RLM_MODULE_OK;
 	struct radutmp	ut, u;
@@ -163,7 +154,7 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 	int		protocol = -1;
 	time_t		t;
 	int		fd = -1;
-	int		port_seen = 0;
+	bool		port_seen = false;
 	int		off;
 	rlm_radutmp_t	*inst = instance;
 	char		ip_name[32]; /* 255.255.255.255 */
@@ -183,7 +174,7 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 	 *	Which type is this.
 	 */
 	if ((vp = pairfind(request->packet->vps, PW_ACCT_STATUS_TYPE, 0, TAG_ANY)) == NULL) {
-		RDEBUG("No Accounting-Status-Type record.");
+		RDEBUG("No Accounting-Status-Type record");
 		return RLM_MODULE_NOOP;
 	}
 	status = vp->vp_integer;
@@ -215,7 +206,7 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 		if (check1 == 0 || check2 == 0) {
 			break;
 		}
-		INFO("rlm_radutmp: converting reboot records.");
+		INFO("rlm_radutmp: converting reboot records");
 		if (status == PW_STATUS_STOP)
 			status = PW_STATUS_ACCOUNTING_OFF;
 		if (status == PW_STATUS_START)
@@ -230,9 +221,9 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 	/*
 	 *	First, find the interesting attributes.
 	 */
-	for (vp = paircursor(&cursor, &request->packet->vps);
+	for (vp = fr_cursor_init(&cursor, &request->packet->vps);
 	     vp;
-	     vp = pairnext(&cursor)) {
+	     vp = fr_cursor_next(&cursor)) {
 		if (!vp->da->vendor) switch (vp->da->attr) {
 			case PW_LOGIN_IP_HOST:
 			case PW_FRAMED_IP_ADDRESS:
@@ -246,7 +237,7 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 				break;
 			case PW_NAS_PORT:
 				ut.nas_port = vp->vp_integer;
-				port_seen = 1;
+				port_seen = true;
 				break;
 			case PW_ACCT_DELAY_TIME:
 				ut.delay = vp->vp_integer;
@@ -390,7 +381,7 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 	 */
 	fd = open(filename, O_RDWR|O_CREAT, inst->permission);
 	if (fd < 0) {
-		REDEBUG("Error accessing file %s: %s", filename, strerror(errno));
+		REDEBUG("Error accessing file %s: %s", filename, fr_syserror(errno));
 		rcode = RLM_MODULE_FAIL;
 
 		goto finish;
@@ -399,13 +390,21 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 	/*
 	 *	Lock the utmp file, prefer lockf() over flock().
 	 */
-	rad_lockfd(fd, LOCK_LEN);
+	if (rad_lockfd(fd, LOCK_LEN) < 0) {
+		REDEBUG("Error acquiring lock on %s: %s", filename, fr_syserror(errno));
+		rcode = RLM_MODULE_FAIL;
+
+		goto finish;
+	}
 
 	/*
 	 *	Find the entry for this NAS / portno combination.
 	 */
 	if ((cache = nas_port_find(inst->nas_port_list, ut.nas_address, ut.nas_port)) != NULL) {
-		lseek(fd, (off_t)cache->offset, SEEK_SET);
+		if (lseek(fd, (off_t)cache->offset, SEEK_SET) < 0) {
+			rcode = RLM_MODULE_FAIL;
+			goto finish;
+		}
 	}
 
 	r = 0;
@@ -497,7 +496,7 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 
 		ut.type = P_LOGIN;
 		if (write(fd, &ut, sizeof(u)) < 0) {
-			REDEBUG("Failed writing: %s", strerror(errno));
+			REDEBUG("Failed writing: %s", fr_syserror(errno));
 
 			rcode = RLM_MODULE_FAIL;
 			goto finish;
@@ -514,7 +513,7 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 			u.time = ut.time;
 			u.delay = ut.delay;
 			if (write(fd, &u, sizeof(u)) < 0) {
-				REDEBUG("Failed writing: %s", strerror(errno));
+				REDEBUG("Failed writing: %s", fr_syserror(errno));
 
 				rcode = RLM_MODULE_FAIL;
 				goto finish;
@@ -547,7 +546,7 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
  *	max. number of logins, do a second pass and validate all
  *	logins by querying the terminal server (using eg. SNMP).
  */
-static rlm_rcode_t mod_checksimul(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_checksimul(void *instance, REQUEST *request)
 {
 	rlm_rcode_t	rcode = RLM_MODULE_OK;
 	struct radutmp	u;
@@ -581,7 +580,7 @@ static rlm_rcode_t mod_checksimul(void *instance, REQUEST *request)
 		/*
 		 *	Error accessing the file.
 		 */
-		ERROR("rlm_radumtp: Error accessing file %s: %s", expanded, strerror(errno));
+		ERROR("rlm_radumtp: Error accessing file %s: %s", expanded, fr_syserror(errno));
 
 		rcode = RLM_MODULE_FAIL;
 
@@ -661,6 +660,8 @@ static rlm_rcode_t mod_checksimul(void *instance, REQUEST *request)
 			char session_id[sizeof(u.session_id) + 1];
 			char utmp_login[sizeof(u.login) + 1];
 
+			/* Guarantee string is NULL terminated */
+			u.session_id[sizeof(u.session_id) - 1] = '\0';
 			strlcpy(session_id, u.session_id, sizeof(session_id));
 
 			/*
@@ -736,7 +737,7 @@ static rlm_rcode_t mod_checksimul(void *instance, REQUEST *request)
 module_t rlm_radutmp = {
 	RLM_MODULE_INIT,
 	"radutmp",
-	RLM_TYPE_THREAD_UNSAFE | RLM_TYPE_CHECK_CONFIG_SAFE | RLM_TYPE_HUP_SAFE,   	/* type */
+	RLM_TYPE_THREAD_UNSAFE | RLM_TYPE_HUP_SAFE,   	/* type */
 	sizeof(rlm_radutmp_t),
 	module_config,
 	NULL,			       /* instantiation */

@@ -66,11 +66,10 @@ RCSID("$Id$")
 /*
  *	For configuration file stuff.
  */
-char const *radius_dir = RADDBDIR;
 char const *progname = "radmin";
 char const *radmin_version = "radmin version " RADIUSD_VERSION_STRING
 #ifdef RADIUSD_VERSION_COMMIT
-" (git #" RADIUSD_VERSION_COMMIT ")"
+" (git #" STRINGIFY(RADIUSD_VERSION_COMMIT) ")"
 #endif
 ", built on " __DATE__ " at " __TIME__;
 
@@ -81,12 +80,12 @@ char const *radmin_version = "radmin version " RADIUSD_VERSION_STRING
  *	have a "libfreeradius-server", or "libfreeradius-util".
  */
 log_debug_t debug_flag = 0;
-struct main_config_t mainconfig;
+struct main_config_t main_config;
 
 bool check_config = false;
 
 static FILE *outputfp = NULL;
-static int echo = false;
+static bool echo = false;
 static char const *secret = "testing123";
 
 #include <sys/wait.h>
@@ -107,6 +106,7 @@ static void NEVER_RETURNS usage(int status)
 	FILE *output = status ? stderr : stdout;
 	fprintf(output, "Usage: %s [ args ]\n", progname);
 	fprintf(output, "  -d raddb_dir    Configuration files are in \"raddbdir/*\".\n");
+	fprintf(stderr, "  -D <dictdir>    Set main dictionary directory (defaults to " DICTDIR ").\n");
 	fprintf(output, "  -e command      Execute 'command' and then exit.\n");
 	fprintf(output, "  -E              Echo commands as they are being executed.\n");
 	fprintf(output, "  -f socket_file  Open socket_file directly, without reading radius.conf\n");
@@ -135,7 +135,7 @@ static int fr_domain_socket(char const *path)
 
 	if ((sockfd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0) {
 		fprintf(stderr, "%s: Failed creating socket: %s\n",
-			progname, strerror(errno));
+			progname, fr_syserror(errno));
 		return -1;
 	}
 
@@ -149,7 +149,7 @@ static int fr_domain_socket(char const *path)
 
 		close(sockfd);
 		fprintf(stderr, "%s: Failed connecting to %s: %s\n",
-			progname, path, strerror(errno));
+			progname, path, fr_syserror(errno));
 
 		/*
 		 *	The file doesn't exist.  Tell the user how to
@@ -169,7 +169,7 @@ static int fr_domain_socket(char const *path)
 
 		if ((flags = fcntl(sockfd, F_GETFL, NULL)) < 0)  {
 			fprintf(stderr, "%s: Failure getting socket flags: %s",
-				progname, strerror(errno));
+				progname, fr_syserror(errno));
 			close(sockfd);
 			return -1;
 		}
@@ -177,7 +177,7 @@ static int fr_domain_socket(char const *path)
 		flags |= O_NONBLOCK;
 		if( fcntl(sockfd, F_SETFL, flags) < 0) {
 			fprintf(stderr, "%s: Failure setting socket flags: %s",
-				progname, strerror(errno));
+				progname, fr_syserror(errno));
 			close(sockfd);
 			return -1;
 		}
@@ -189,7 +189,8 @@ static int fr_domain_socket(char const *path)
 
 static int client_socket(char const *server)
 {
-	int sockfd, port;
+	int sockfd;
+	uint16_t port;
 	fr_ipaddr_t ipaddr;
 	char *p, buffer[1024];
 
@@ -203,16 +204,16 @@ static int client_socket(char const *server)
 		*p = '\0';
 	}
 
-	if (ip_hton(buffer, AF_INET, &ipaddr) < 0) {
+	if (ip_hton(&ipaddr, AF_INET, buffer, false) < 0) {
 		fprintf(stderr, "%s: Failed looking up host %s: %s\n",
-			progname, buffer, strerror(errno));
+			progname, buffer, fr_syserror(errno));
 		exit(1);
 	}
 
 	sockfd = fr_tcp_client_socket(NULL, &ipaddr, port);
 	if (sockfd < 0) {
 		fprintf(stderr, "%s: Failed opening socket %s: %s\n",
-			progname, server, strerror(errno));
+			progname, server, fr_syserror(errno));
 		exit(1);
 	}
 
@@ -240,7 +241,7 @@ static void do_challenge(int sockfd)
 			if (errno == EINTR) continue;
 
 			fprintf(stderr, "%s: Failed reading data: %s\n",
-				progname, strerror(errno));
+				progname, fr_syserror(errno));
 			exit(1);
 		}
 		total += r;
@@ -252,7 +253,7 @@ static void do_challenge(int sockfd)
 
 	if (write(sockfd, challenge, sizeof(challenge)) < 0) {
 		fprintf(stderr, "%s: Failed writing challenge data: %s\n",
-			progname, strerror(errno));
+			progname, fr_syserror(errno));
 	}
 }
 
@@ -292,7 +293,7 @@ static ssize_t run_command(int sockfd, char const *command,
 			if (errno == EINTR) continue;
 
 			fprintf(stderr, "%s: Failed selecting: %s\n",
-				progname, strerror(errno));
+				progname, fr_syserror(errno));
 			exit(1);
 		}
 
@@ -320,7 +321,7 @@ static ssize_t run_command(int sockfd, char const *command,
 			}
 
 			fprintf(stderr, "%s: Error reading socket: %s\n",
-				progname, strerror(errno));
+				progname, fr_syserror(errno));
 			exit(1);
 		}
 		if (len == 0) return 0;	/* clean exit */
@@ -357,33 +358,45 @@ static ssize_t run_command(int sockfd, char const *command,
 
 int main(int argc, char **argv)
 {
-	int argval, quiet = 0;
-	int done_license = 0;
-	int sockfd;
-	uint32_t magic, needed;
-	char *line = NULL;
-	ssize_t len, size;
-	char const *file = NULL;
-	char const *name = "radiusd";
-	char *p, buffer[65536];
-	char const *input_file = NULL;
-	FILE *inputfp = stdin;
-	char const *output_file = NULL;
-	char const *server = NULL;
+	int		argval;
+	bool		quiet = false;
+	bool		done_license = false;
+	int		sockfd;
+	uint32_t	magic, needed;
+	char		*line = NULL;
+	ssize_t		len, size;
+	char const	*file = NULL;
+	char const	*name = "radiusd";
+	char		*p, buffer[65536];
+	char const	*input_file = NULL;
+	FILE		*inputfp = stdin;
+	char const	*output_file = NULL;
+	char const	*server = NULL;
+
+	char const	*radius_dir = RADIUS_DIR;
+	char const	*dict_dir = DICTDIR;
 
 	char *commands[MAX_COMMANDS];
 	int num_commands = -1;
+
+#ifndef NDEBUG
+	if (fr_fault_setup(getenv("PANIC_ACTION"), argv[0]) < 0) {
+		fr_perror("radmin");
+		exit(EXIT_FAILURE);
+	}
+#endif
 
 	talloc_set_log_stderr();
 
 	outputfp = stdout;	/* stdout is not a constant value... */
 
-	if ((progname = strrchr(argv[0], FR_DIR_SEP)) == NULL)
+	if ((progname = strrchr(argv[0], FR_DIR_SEP)) == NULL) {
 		progname = argv[0];
-	else
+	} else {
 		progname++;
+	}
 
-	while ((argval = getopt(argc, argv, "d:hi:e:Ef:n:o:qs:S")) != EOF) {
+	while ((argval = getopt(argc, argv, "d:D:hi:e:Ef:n:o:qs:S")) != EOF) {
 		switch(argval) {
 		case 'd':
 			if (file) {
@@ -395,6 +408,10 @@ int main(int argc, char **argv)
 				exit(1);
 			}
 			radius_dir = optarg;
+			break;
+
+		case 'D':
+			dict_dir = optarg;
 			break;
 
 		case 'e':
@@ -425,7 +442,7 @@ int main(int argc, char **argv)
 			if (strcmp(optarg, "-") != 0) {
 				input_file = optarg;
 			}
-			quiet = 1;
+			quiet = true;
 			break;
 
 		case 'n':
@@ -436,11 +453,11 @@ int main(int argc, char **argv)
 			if (strcmp(optarg, "-") != 0) {
 				output_file = optarg;
 			}
-			quiet = 1;
+			quiet = true;
 			break;
 
 		case 'q':
-			quiet = 1;
+			quiet = true;
 			break;
 
 		case 's':
@@ -458,14 +475,35 @@ int main(int argc, char **argv)
 		}
 	}
 
+	/*
+	 *	Mismatch between the binary and the libraries it depends on
+	 */
+	if (fr_check_lib_magic(RADIUSD_MAGIC_NUMBER) < 0) {
+		fr_perror("radmin");
+		exit(1);
+	}
+
 	if (radius_dir) {
 		int rcode;
 		CONF_SECTION *cs, *subcs;
 
 		file = NULL;	/* MUST read it from the conffile now */
 
-		snprintf(buffer, sizeof(buffer), "%s/%s.conf",
-			 radius_dir, name);
+		snprintf(buffer, sizeof(buffer), "%s/%s.conf", radius_dir, name);
+
+		/*
+		 *	Need to read in the dictionaries, else we may get
+		 *	validation errors when we try and parse the config.
+		 */
+		if (dict_init(dict_dir, RADIUS_DICTIONARY) < 0) {
+			fr_perror("radmin");
+			exit(64);
+		}
+
+		if (dict_read(radius_dir, RADIUS_DICTIONARY) == -1) {
+			fr_perror("radmin");
+			exit(64);
+		}
 
 		cs = cf_file_read(buffer);
 		if (!cs) {
@@ -488,9 +526,7 @@ int main(int argc, char **argv)
 			/*
 			 *	Now find the socket name (sigh)
 			 */
-			rcode = cf_item_parse(subcs, "socket",
-					      PW_TYPE_STRING_PTR,
-					      &file, NULL);
+			rcode = cf_item_parse(subcs, "socket", FR_ITEM_POINTER(PW_TYPE_STRING, &file), NULL);
 			if (rcode < 0) {
 				fprintf(stderr, "%s: Failed parsing listen section\n", progname);
 				exit(1);
@@ -512,7 +548,7 @@ int main(int argc, char **argv)
 	if (input_file) {
 		inputfp = fopen(input_file, "r");
 		if (!inputfp) {
-			fprintf(stderr, "%s: Failed opening %s: %s\n", progname, input_file, strerror(errno));
+			fprintf(stderr, "%s: Failed opening %s: %s\n", progname, input_file, fr_syserror(errno));
 			exit(1);
 		}
 	}
@@ -520,15 +556,21 @@ int main(int argc, char **argv)
 	if (output_file) {
 		outputfp = fopen(output_file, "w");
 		if (!outputfp) {
-			fprintf(stderr, "%s: Failed creating %s: %s\n", progname, output_file, strerror(errno));
+			fprintf(stderr, "%s: Failed creating %s: %s\n", progname, output_file, fr_syserror(errno));
 			exit(1);
 		}
+	}
+
+	if (!file && !server) {
+		fprintf(stderr, "%s: Must use one of '-d' or '-f' or '-s'\n",
+			progname);
+		exit(1);
 	}
 
 	/*
 	 *	Check if stdin is a TTY only if input is from stdin
 	 */
-	if (input_file && !quiet && !isatty(STDIN_FILENO)) quiet = 1;
+	if (input_file && !quiet && !isatty(STDIN_FILENO)) quiet = true;
 
 #ifdef USE_READLINE
 	if (!quiet) {
@@ -559,7 +601,7 @@ int main(int argc, char **argv)
 		len = read(sockfd, buffer + size, 8 - size);
 		if (len < 0) {
 			fprintf(stderr, "%s: Error reading initial data from socket: %s\n",
-				progname, strerror(errno));
+				progname, fr_syserror(errno));
 			exit(1);
 		}
 	}
@@ -616,7 +658,7 @@ int main(int argc, char **argv)
 		printf("You may redistribute copies of FreeRADIUS under the terms of the\n");
 		printf("GNU General Public License v2.\n");
 
-		done_license = 1;
+		done_license = true;
 	}
 
 	/*

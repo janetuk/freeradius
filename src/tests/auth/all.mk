@@ -7,7 +7,7 @@
 #  The list is unordered.  The order is added in the next step by looking
 #  at precursors.
 #
-AUTH_FILES := $(filter-out %.conf %.md %.attrs %.mk %~,$(subst $(DIR)/,,$(wildcard $(DIR)/*)))
+AUTH_FILES := $(filter-out %.conf %.md %.attrs %.mk %~ %.rej,$(subst $(DIR)/,,$(wildcard $(DIR)/*)))
 
 #
 #  Create the output directory
@@ -38,8 +38,11 @@ $(BUILD_DIR)/tests/auth/depends.mk: $(addprefix $(DIR)/,$(AUTH_FILES)) | $(BUILD
 	@rm -f $@
 	@for x in $^; do \
 		y=`grep 'PRE: ' $$x | sed 's/.*://;s/  / /g;s, , $(BUILD_DIR)/tests/auth/,g'`; \
-		echo "$$x: $$y" >> $@; \
-		echo "" >> $@; \
+		if [ "$$y" != "" ]; then \
+			z=`echo $$x | sed 's,src/,$(BUILD_DIR)/',`; \
+			echo "$$z: $$y" >> $@; \
+			echo "" >> $@; \
+		fi \
 	done
 #
 #  These ones get copied over from the default input
@@ -81,7 +84,7 @@ AUTH_LIBS	:= $(addsuffix .la,$(addprefix rlm_,$(AUTH_MODULES)))
 #
 $(BUILD_DIR)/tests/auth/%: $(DIR)/% $(BUILD_DIR)/tests/auth/%.attrs $(TESTBINDIR)/unittest | $(BUILD_DIR)/tests/auth $(AUTH_RADDB) $(AUTH_LIBS) build.raddb
 	@echo UNIT-TEST $(notdir $@)
-	@if ! TESTDIR=$(notdir $@) $(TESTBIN)/unittest -D share -d src/tests/auth/ -i $@.attrs -f $@.attrs -xx > $@.log 2>&1; then \
+	@if ! TESTDIR=$(notdir $@) $(TESTBIN)/unittest -D share -d src/tests/auth/ -i $@.attrs -f $@.attrs -xxx > $@.log 2>&1; then \
 		if ! grep ERROR $< 2>&1 > /dev/null; then \
 			cat $@.log; \
 			echo "# $@.log"; \

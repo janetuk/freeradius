@@ -301,7 +301,7 @@ otp_read(otp_fd_t *fdp, char *buf, size_t len)
 				continue;
 			} else {
 				ERROR("rlm_otp: %s: read from otpd: %s",
-		     		       __func__, strerror(errno));
+				       __func__, fr_syserror(errno));
 				otp_putfd(fdp, 1);
 
 				return -1;
@@ -323,21 +323,21 @@ otp_read(otp_fd_t *fdp, char *buf, size_t len)
 
 /*
  *	Full write with logging, and close on failure.
- *	Returns 0 on success, errno on failure.
+ *	Returns number of bytes written on success, errno on failure.
  */
 static int otp_write(otp_fd_t *fdp, char const *buf, size_t len)
 {
 	size_t nleft = len;
 	ssize_t nwrote;
 
-  	while (nleft) {
+	while (nleft) {
 		nwrote = write(fdp->fd, &buf[len - nleft], nleft);
 		if (nwrote == -1) {
 			if (errno == EINTR) {
 				continue;
 			} else {
 				ERROR("rlm_otp: %s: write to otpd: %s",
-				       __func__, strerror(errno));
+				       __func__, fr_syserror(errno));
 
 				otp_putfd(fdp, 1);
 				return errno;
@@ -348,7 +348,7 @@ static int otp_write(otp_fd_t *fdp, char const *buf, size_t len)
 		nleft -= nwrote;
 	}
 
-	return 0;
+	return len - nleft;
 }
 
 /* connect to otpd and return fd */
@@ -373,7 +373,7 @@ static int otp_connect(char const *path)
 	fd = socket(PF_UNIX, SOCK_STREAM, 0);
 	if (fd == -1) {
 		ERROR("rlm_otp: %s: socket: %s", __func__,
-		       strerror(errno));
+		       fr_syserror(errno));
 
 		return -1;
 	}
@@ -381,7 +381,7 @@ static int otp_connect(char const *path)
 	      sizeof(sa.sun_family) + sp_len) == -1) {
 
 		ERROR("rlm_otp: %s: connect(%s): %s",
-		       __func__, path, strerror(errno));
+		       __func__, path, fr_syserror(errno));
 
 		(void) close(fd);
 

@@ -56,8 +56,8 @@ static int digest_fix(REQUEST *request)
 		return RLM_MODULE_NOOP;
 	}
 
-	paircursor(&cursor, &first);
-	while ((i = pairfindnext(&cursor, PW_DIGEST_ATTRIBUTES, 0, TAG_ANY))) {
+	fr_cursor_init(&cursor, &first);
+	while ((i = fr_cursor_next_by_num(&cursor, PW_DIGEST_ATTRIBUTES, 0, TAG_ANY))) {
 		int length = i->length;
 		int attrlen;
 		uint8_t const *p = i->vp_octets;
@@ -100,9 +100,9 @@ static int digest_fix(REQUEST *request)
 	/*
 	 *	Convert them to something sane.
 	 */
-	RDEBUG("Digest-Attributes look OK.  Converting them to something more useful.");
-	pairfirst(&cursor);
-	while ((i = pairfindnext(&cursor, PW_DIGEST_ATTRIBUTES, 0, TAG_ANY))) {
+	RDEBUG("Digest-Attributes look OK.  Converting them to something more useful");
+	fr_cursor_first(&cursor);
+	while ((i = fr_cursor_next_by_num(&cursor, PW_DIGEST_ATTRIBUTES, 0, TAG_ANY))) {
 		int length = i->length;
 		int attrlen;
 		uint8_t const *p = &i->vp_octets[0];
@@ -145,7 +145,7 @@ static int digest_fix(REQUEST *request)
 			 *
 			 *	Didn't they know that VSA's exist?
 			 */
-			sub = radius_paircreate(request, &request->packet->vps,
+			sub = radius_paircreate(request->packet, &request->packet->vps,
 						PW_DIGEST_REALM - 1 + p[0], 0);
 			sub->length = attrlen - 2;
 			sub->vp_strvalue = q = talloc_array(sub, char, sub->length + 1);
@@ -169,7 +169,7 @@ static int digest_fix(REQUEST *request)
 	return RLM_MODULE_OK;
 }
 
-static rlm_rcode_t mod_authorize(UNUSED void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, REQUEST *request)
 {
 	rlm_rcode_t rcode;
 
@@ -197,7 +197,7 @@ static rlm_rcode_t mod_authorize(UNUSED void *instance, REQUEST *request)
 /*
  *	Perform all of the wondrous variants of digest authentication.
  */
-static rlm_rcode_t mod_authenticate(UNUSED void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(UNUSED void *instance, REQUEST *request)
 {
 	int i;
 	size_t a1_len, a2_len, kd_len;
@@ -215,14 +215,14 @@ static rlm_rcode_t mod_authenticate(UNUSED void *instance, REQUEST *request)
 	passwd = pairfind(request->config_items, PW_DIGEST_HA1, 0, TAG_ANY);
 	if (passwd) {
 		if (passwd->length != 32) {
-			RAUTH("Digest-HA1 has invalid length, authentication failed.");
+			RAUTH("Digest-HA1 has invalid length, authentication failed");
 			return RLM_MODULE_INVALID;
 		}
 	} else {
 		passwd = pairfind(request->config_items, PW_CLEARTEXT_PASSWORD, 0, TAG_ANY);
 	}
 	if (!passwd) {
-		RAUTH("Cleartext-Password or Digest-HA1 is required for authentication.");
+		RAUTH("Cleartext-Password or Digest-HA1 is required for authentication");
 		return RLM_MODULE_INVALID;
 	}
 
@@ -596,7 +596,7 @@ static rlm_rcode_t mod_authenticate(UNUSED void *instance, REQUEST *request)
 module_t rlm_digest = {
 	RLM_MODULE_INIT,
 	"digest",
-	RLM_TYPE_CHECK_CONFIG_SAFE,   	/* type */
+	0,   	/* type */
 	0,
 	NULL,				/* CONF_PARSER */
 	NULL,				/* instantiation */

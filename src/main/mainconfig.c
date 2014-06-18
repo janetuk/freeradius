@@ -29,20 +29,12 @@ RCSID("$Id$")
 
 #include <sys/stat.h>
 
-#ifdef HAVE_SYS_RESOURCE_H
-#include <sys/resource.h>
-#endif
-
 #ifdef HAVE_PWD_H
 #include <pwd.h>
 #endif
 
 #ifdef HAVE_GRP_H
 #include <grp.h>
-#endif
-
-#ifdef HAVE_SYS_PRCTL_H
-#include <sys/prctl.h>
 #endif
 
 #ifdef HAVE_SYSLOG_H
@@ -57,9 +49,9 @@ RCSID("$Id$")
 #include <fcntl.h>
 #endif
 
-struct main_config_t mainconfig;
+struct main_config_t main_config;
 char *debug_condition = NULL;
-extern int log_dates_utc;
+extern bool log_dates_utc;
 
 typedef struct cached_config_t {
 	struct cached_config_t *next;
@@ -91,20 +83,23 @@ static char const *radlog_dest = NULL;
  */
 static char const	*localstatedir = NULL;
 static char const	*prefix = NULL;
-static char		my_name;
+static char const	*my_name = NULL;
 static char const	*sbindir = NULL;
 static char const	*run_dir = NULL;
-static char		*syslog_facility = NULL;
+static char const	*syslog_facility = NULL;
 static bool		do_colourise = false;
+
+static char const	*radius_dir = NULL;	//!< Path to raddb directory
 
 
 /*
  *  Security configuration for the server.
  */
 static const CONF_PARSER security_config[] = {
-	{ "max_attributes",  PW_TYPE_INTEGER, 0, &fr_max_attributes, STRINGIFY(0) },
-	{ "reject_delay",  PW_TYPE_INTEGER, 0, &mainconfig.reject_delay, STRINGIFY(0) },
-	{ "status_server", PW_TYPE_BOOLEAN, 0, &mainconfig.status_server, "no"},
+	{ "max_attributes",  FR_CONF_POINTER(PW_TYPE_INTEGER, &fr_max_attributes), STRINGIFY(0) },
+	{ "reject_delay",  FR_CONF_POINTER(PW_TYPE_INTEGER, &main_config.reject_delay), STRINGIFY(0) },
+	{ "status_server", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &main_config.status_server), "no"},
+	{ "allow_vulnerable_openssl", FR_CONF_POINTER(PW_TYPE_STRING, &main_config.allow_vulnerable_openssl), "no"},
 	{ NULL, -1, 0, NULL, NULL }
 };
 
@@ -113,33 +108,35 @@ static const CONF_PARSER security_config[] = {
  *	Logging configuration for the server.
  */
 static const CONF_PARSER logdest_config[] = {
-	{ "destination",  PW_TYPE_STRING_PTR, 0, &radlog_dest, "files" },
-	{ "syslog_facility",  PW_TYPE_STRING_PTR, 0, &syslog_facility, STRINGIFY(0) },
+	{ "destination",  FR_CONF_POINTER(PW_TYPE_STRING, &radlog_dest), "files" },
+	{ "syslog_facility",  FR_CONF_POINTER(PW_TYPE_STRING, &syslog_facility), STRINGIFY(0) },
 
-	{ "file", PW_TYPE_STRING_PTR, 0, &mainconfig.log_file, "${logdir}/radius.log" },
-	{ "requests", PW_TYPE_STRING_PTR, 0, &default_log.file, NULL },
+	{ "file",  FR_CONF_POINTER(PW_TYPE_STRING, &main_config.log_file), "${logdir}/radius.log" },
+	{ "requests",  FR_CONF_POINTER(PW_TYPE_STRING, &default_log.file), NULL },
 	{ NULL, -1, 0, NULL, NULL }
 };
 
 
 static const CONF_PARSER serverdest_config[] = {
-	{ "log", PW_TYPE_SUBSECTION, 0, NULL, (void const *) logdest_config },
-	{ "log_file", PW_TYPE_STRING_PTR, 0, &mainconfig.log_file, NULL },
-	{ "log_destination", PW_TYPE_STRING_PTR, 0, &radlog_dest, NULL },
-	{ "use_utc", PW_TYPE_BOOLEAN, 0, &log_dates_utc, NULL },
+	{ "log",  FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) logdest_config },
+	{ "log_file",  FR_CONF_POINTER(PW_TYPE_STRING, &main_config.log_file), NULL },
+	{ "log_destination", FR_CONF_POINTER(PW_TYPE_STRING, &radlog_dest), NULL },
+	{ "use_utc", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &log_dates_utc), NULL },
 	{ NULL, -1, 0, NULL, NULL }
 };
 
 
 static const CONF_PARSER log_config_nodest[] = {
-	{ "stripped_names", PW_TYPE_BOOLEAN, 0, &log_stripped_names,"no" },
-	{ "auth", PW_TYPE_BOOLEAN, 0, &mainconfig.log_auth, "no" },
-	{ "auth_badpass", PW_TYPE_BOOLEAN, 0, &mainconfig.log_auth_badpass, "no" },
-	{ "auth_goodpass", PW_TYPE_BOOLEAN, 0, &mainconfig.log_auth_goodpass, "no" },
-	{ "msg_badpass", PW_TYPE_STRING_PTR, 0, &mainconfig.auth_badpass_msg, NULL},
-	{ "msg_goodpass", PW_TYPE_STRING_PTR, 0, &mainconfig.auth_goodpass_msg, NULL},
-	{ "colourise", PW_TYPE_BOOLEAN, 0, &do_colourise, NULL },
-	{ "use_utc", PW_TYPE_BOOLEAN, 0, &log_dates_utc, NULL },
+	{ "stripped_names", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &log_stripped_names),"no" },
+	{ "auth", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &main_config.log_auth), "no" },
+	{ "auth_badpass", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &main_config.log_auth_badpass), "no" },
+	{ "auth_goodpass", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &main_config.log_auth_goodpass), "no" },
+	{ "msg_badpass", FR_CONF_POINTER(PW_TYPE_STRING, &main_config.auth_badpass_msg), NULL},
+	{ "msg_goodpass", FR_CONF_POINTER(PW_TYPE_STRING, &main_config.auth_goodpass_msg), NULL},
+	{ "colourise",FR_CONF_POINTER(PW_TYPE_BOOLEAN, &do_colourise), NULL },
+	{ "use_utc", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &log_dates_utc), NULL },
+	{ "msg_denied", FR_CONF_POINTER(PW_TYPE_STRING, &main_config.denied_msg),
+	  "You are already logged in - access denied" },
 
 	{ NULL, -1, 0, NULL, NULL }
 };
@@ -156,30 +153,28 @@ static const CONF_PARSER server_config[] = {
 	 *	hard-coded defines for the locations of the various
 	 *	files.
 	 */
-	{ "name",	       PW_TYPE_STRING_PTR, 0, &my_name,	  "radiusd"},
-	{ "prefix",	     PW_TYPE_STRING_PTR, 0, &prefix,	    "/usr/local"},
-	{ "localstatedir",      PW_TYPE_STRING_PTR, 0, &localstatedir,     "${prefix}/var"},
-	{ "sbindir",	    PW_TYPE_STRING_PTR, 0, &sbindir,	    "${prefix}/sbin"},
-	{ "logdir",	     PW_TYPE_STRING_PTR, 0, &radlog_dir,	"${localstatedir}/log"},
-	{ "run_dir",	    PW_TYPE_STRING_PTR, 0, &run_dir,	   "${localstatedir}/run/${name}"},
-	{ "libdir",	     PW_TYPE_STRING_PTR, 0, &radlib_dir,	"${prefix}/lib"},
-	{ "radacctdir",	 PW_TYPE_STRING_PTR, 0, &radacct_dir,       "${logdir}/radacct" },
-	{ "hostname_lookups",   PW_TYPE_BOOLEAN,    0, &fr_dns_lookups,      "no" },
-	{ "max_request_time", PW_TYPE_INTEGER, 0, &mainconfig.max_request_time, STRINGIFY(MAX_REQUEST_TIME) },
-	{ "cleanup_delay", PW_TYPE_INTEGER, 0, &mainconfig.cleanup_delay, STRINGIFY(CLEANUP_DELAY) },
-	{ "max_requests", PW_TYPE_INTEGER, 0, &mainconfig.max_requests, STRINGIFY(MAX_REQUESTS) },
-#ifdef DELETE_BLOCKED_REQUESTS
-	{ "delete_blocked_requests", PW_TYPE_INTEGER, 0, &mainconfig.kill_unresponsive_children, STRINGIFY(false) },
-#endif
-	{ "pidfile", PW_TYPE_STRING_PTR, 0, &mainconfig.pid_file, "${run_dir}/radiusd.pid"},
-	{ "checkrad", PW_TYPE_STRING_PTR, 0, &mainconfig.checkrad, "${sbindir}/checkrad" },
+	{ "name", FR_CONF_POINTER(PW_TYPE_STRING, &my_name), "radiusd"},
+	{ "prefix", FR_CONF_POINTER(PW_TYPE_STRING, &prefix), "/usr/local"},
+	{ "localstatedir", FR_CONF_POINTER(PW_TYPE_STRING, &localstatedir), "${prefix}/var"},
+	{ "sbindir", FR_CONF_POINTER(PW_TYPE_STRING, &sbindir), "${prefix}/sbin"},
+	{ "logdir", FR_CONF_POINTER(PW_TYPE_STRING, &radlog_dir), "${localstatedir}/log"},
+	{ "run_dir", FR_CONF_POINTER(PW_TYPE_STRING, &run_dir), "${localstatedir}/run/${name}"},
+	{ "libdir", FR_CONF_POINTER(PW_TYPE_STRING, &radlib_dir), "${prefix}/lib"},
+	{ "radacctdir", FR_CONF_POINTER(PW_TYPE_STRING, &radacct_dir), "${logdir}/radacct" },
+	{ "panic_action", FR_CONF_POINTER(PW_TYPE_STRING, &main_config.panic_action), NULL},
+	{ "hostname_lookups", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &fr_dns_lookups), "no" },
+	{ "max_request_time", FR_CONF_POINTER(PW_TYPE_INTEGER, &main_config.max_request_time), STRINGIFY(MAX_REQUEST_TIME) },
+	{ "cleanup_delay", FR_CONF_POINTER(PW_TYPE_INTEGER, &main_config.cleanup_delay), STRINGIFY(CLEANUP_DELAY) },
+	{ "max_requests", FR_CONF_POINTER(PW_TYPE_INTEGER, &main_config.max_requests), STRINGIFY(MAX_REQUESTS) },
+	{ "pidfile", FR_CONF_POINTER(PW_TYPE_STRING, &main_config.pid_file), "${run_dir}/radiusd.pid"},
+	{ "checkrad", FR_CONF_POINTER(PW_TYPE_STRING, &main_config.checkrad), "${sbindir}/checkrad" },
 
-	{ "debug_level", PW_TYPE_INTEGER, 0, &mainconfig.debug_level, "0"},
+	{ "debug_level", FR_CONF_POINTER(PW_TYPE_INTEGER, &main_config.debug_level), "0"},
 
 #ifdef WITH_PROXY
-	{ "proxy_requests", PW_TYPE_BOOLEAN, 0, &mainconfig.proxy_requests, "yes" },
+	{ "proxy_requests", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &main_config.proxy_requests), "yes" },
 #endif
-	{ "log", PW_TYPE_SUBSECTION, 0, NULL, (void const *) log_config_nodest },
+	{ "log", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) log_config_nodest },
 
 	/*
 	 *	People with old configs will have these.  They are listed
@@ -189,39 +184,39 @@ static const CONF_PARSER server_config[] = {
 	 *	DON'T exist in radiusd.conf, then the previously parsed
 	 *	values for "log { foo = bar}" will be used.
 	 */
-	{ "log_auth", PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, 0, &mainconfig.log_auth, NULL },
-	{ "log_auth_badpass", PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, 0, &mainconfig.log_auth_badpass, NULL },
-	{ "log_auth_goodpass", PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, 0, &mainconfig.log_auth_goodpass, NULL },
-	{ "log_stripped_names", PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, 0, &log_stripped_names, NULL },
+	{ "log_auth", FR_CONF_POINTER(PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, &main_config.log_auth), NULL },
+	{ "log_auth_badpass", FR_CONF_POINTER(PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, &main_config.log_auth_badpass), NULL },
+	{ "log_auth_goodpass", FR_CONF_POINTER(PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, &main_config.log_auth_goodpass), NULL },
+	{ "log_stripped_names", FR_CONF_POINTER(PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, &log_stripped_names), NULL },
 
-	{  "security", PW_TYPE_SUBSECTION, 0, NULL, (void const *) security_config },
+	{  "security", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) security_config },
 
 	{ NULL, -1, 0, NULL, NULL }
 };
 
 static const CONF_PARSER bootstrap_security_config[] = {
 #ifdef HAVE_SETUID
-	{ "user",  PW_TYPE_STRING_PTR, 0, &uid_name, NULL },
-	{ "group",  PW_TYPE_STRING_PTR, 0, &gid_name, NULL },
+	{ "user",  FR_CONF_POINTER(PW_TYPE_STRING, &uid_name), NULL },
+	{ "group", FR_CONF_POINTER(PW_TYPE_STRING, &gid_name), NULL },
 #endif
-	{ "chroot",  PW_TYPE_STRING_PTR, 0, &chroot_dir, NULL },
-	{ "allow_core_dumps", PW_TYPE_BOOLEAN, 0, &allow_core_dumps, "no" },
+	{ "chroot",  FR_CONF_POINTER(PW_TYPE_STRING, &chroot_dir), NULL },
+	{ "allow_core_dumps", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &allow_core_dumps), "no" },
 
 	{ NULL, -1, 0, NULL, NULL }
 };
 
 static const CONF_PARSER bootstrap_config[] = {
-	{  "security", PW_TYPE_SUBSECTION, 0, NULL, (void const *) bootstrap_security_config },
+	{  "security", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) bootstrap_security_config },
 
 	/*
 	 *	For backwards compatibility.
 	 */
 #ifdef HAVE_SETUID
-	{ "user",  PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED, 0, &uid_name, NULL },
-	{ "group",  PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED, 0, &gid_name, NULL },
+	{ "user",  FR_CONF_POINTER(PW_TYPE_STRING | PW_TYPE_DEPRECATED, &uid_name), NULL },
+	{ "group",  FR_CONF_POINTER(PW_TYPE_STRING | PW_TYPE_DEPRECATED, &gid_name), NULL },
 #endif
-	{ "chroot",  PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED, 0, &chroot_dir, NULL },
-	{ "allow_core_dumps", PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, 0, &allow_core_dumps, NULL },
+	{ "chroot",  FR_CONF_POINTER(PW_TYPE_STRING | PW_TYPE_DEPRECATED, &chroot_dir), NULL },
+	{ "allow_core_dumps", FR_CONF_POINTER(PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, &allow_core_dumps), NULL },
 
 	{ NULL, -1, 0, NULL, NULL }
 };
@@ -341,7 +336,7 @@ static ssize_t xlat_client(UNUSED void *instance, REQUEST *request, char const *
 
 	if (!fmt || !out || (outlen < 1)) return 0;
 
-	if (!request || !request->client) {
+	if (!request->client) {
 		RWDEBUG("No client associated with this request");
 		*out = '\0';
 		return 0;
@@ -384,7 +379,7 @@ static ssize_t xlat_getclient(UNUSED void *instance, REQUEST *request, char cons
 	}
 
 	strlcpy(buffer, p, (q + 1) - p);
-	if (ip_ptonx(buffer, &ip) <= 0) {
+	if (fr_pton(&ip, buffer, 0, false) <= 0) {
 		REDEBUG("\"%s\" is not a valid IPv4 or IPv6 address", buffer);
 		goto error;
 	}
@@ -417,58 +412,10 @@ static ssize_t xlat_getclient(UNUSED void *instance, REQUEST *request, char cons
 	return -1;
 }
 
-#ifdef HAVE_SYS_RESOURCE_H
-static struct rlimit core_limits;
-#endif
-
-static void fr_set_dumpable(void)
-{
-	/*
-	 *	If configured, turn core dumps off.
-	 */
-	if (!allow_core_dumps) {
-#ifdef HAVE_SYS_RESOURCE_H
-		struct rlimit no_core;
-
-
-		no_core.rlim_cur = 0;
-		no_core.rlim_max = 0;
-
-		if (setrlimit(RLIMIT_CORE, &no_core) < 0) {
-			ERROR("Failed disabling core dumps: %s",
-			       strerror(errno));
-		}
-#endif
-		return;
-	}
-
-	/*
-	 *	Set or re-set the dumpable flag.
-	 */
-#ifdef HAVE_SYS_PRCTL_H
-#ifdef PR_SET_DUMPABLE
-	if (prctl(PR_SET_DUMPABLE, 1) < 0) {
-		ERROR("Cannot re-enable core dumps: prctl(PR_SET_DUMPABLE) failed: '%s'",
-		       strerror(errno));
-	}
-#endif
-#endif
-
-	/*
-	 *	Reset the core dump limits to their original value.
-	 */
-#ifdef HAVE_SYS_RESOURCE_H
-	if (setrlimit(RLIMIT_CORE, &core_limits) < 0) {
-		ERROR("Cannot update core dump limit: %s",
-		       strerror(errno));
-	}
-#endif
-}
-
 #ifdef HAVE_SETUID
-static int doing_setuid = false;
+static bool doing_setuid = false;
 
-#if defined(HAVE_SETRESUID) && defined (HAVE_GETRESUID)
+#  if defined(HAVE_SETRESUID) && defined (HAVE_GETRESUID)
 void fr_suid_up(void)
 {
 	uid_t ruid, euid, suid;
@@ -495,7 +442,7 @@ void fr_suid_down(void)
 
 	if (setresuid(-1, server_uid, geteuid()) < 0) {
 		fprintf(stderr, "%s: Failed switching to uid %s: %s\n",
-			progname, uid_name, strerror(errno));
+			progname, uid_name, fr_syserror(errno));
 		fr_exit_now(1);
 	}
 
@@ -505,7 +452,7 @@ void fr_suid_down(void)
 		fr_exit_now(1);
 	}
 
-	fr_set_dumpable();
+	fr_set_dumpable(allow_core_dumps);
 }
 
 void fr_suid_down_permanent(void)
@@ -514,7 +461,7 @@ void fr_suid_down_permanent(void)
 
 	if (setresuid(server_uid, server_uid, server_uid) < 0) {
 		ERROR("Failed in permanent switch to uid %s: %s",
-		       uid_name, strerror(errno));
+		       uid_name, fr_syserror(errno));
 		fr_exit_now(1);
 	}
 
@@ -523,43 +470,45 @@ void fr_suid_down_permanent(void)
 		fr_exit_now(1);
 	}
 
-	fr_set_dumpable();
+	fr_set_dumpable(allow_core_dumps);
 }
-#else
+#  else
 /*
  *	Much less secure...
  */
 void fr_suid_up(void)
 {
 }
+
 void fr_suid_down(void)
 {
 	if (!uid_name) return;
 
 	if (setuid(server_uid) < 0) {
 		fprintf(stderr, "%s: Failed switching to uid %s: %s\n",
-			progname, uid_name, strerror(errno));
+			progname, uid_name, fr_syserror(errno));
 		fr_exit(1);
 	}
 
-	fr_set_dumpable();
+	fr_set_dumpable(allow_core_dumps);
 }
+
 void fr_suid_down_permanent(void)
 {
-	fr_set_dumpable();
+	fr_set_dumpable(allow_core_dumps);
 }
-#endif /* HAVE_SETRESUID && HAVE_GETRESUID */
+#  endif /* HAVE_SETRESUID && HAVE_GETRESUID */
 #else  /* HAVE_SETUID */
 void fr_suid_up(void)
 {
 }
 void fr_suid_down(void)
 {
-	fr_set_dumpable();
+	fr_set_dumpable(allow_core_dumps);
 }
 void fr_suid_down_permanent(void)
 {
-	fr_set_dumpable();
+	fr_set_dumpable(allow_core_dumps);
 }
 #endif /* HAVE_SETUID */
 
@@ -572,17 +521,15 @@ void fr_suid_down_permanent(void)
  */
 static int switch_users(CONF_SECTION *cs)
 {
-#ifdef HAVE_SYS_RESOURCE_H
 	/*
 	 *	Get the current maximum for core files.  Do this
 	 *	before anything else so as to ensure it's properly
 	 *	initialized.
 	 */
-	if (getrlimit(RLIMIT_CORE, &core_limits) < 0) {
-		ERROR("Failed to get current core limit:  %s", strerror(errno));
+	if (fr_set_dumpable_init() < 0) {
+		fr_perror("radiusd");
 		return 0;
 	}
-#endif
 
 	/*
 	 *	Don't do chroot/setuid/setgid if we're in debugging
@@ -604,7 +551,7 @@ static int switch_users(CONF_SECTION *cs)
 		gr = getgrnam(gid_name);
 		if (gr == NULL) {
 			fprintf(stderr, "%s: Cannot get ID for group %s: %s\n",
-				progname, gid_name, strerror(errno));
+				progname, gid_name, fr_syserror(errno));
 			return 0;
 		}
 		server_gid = gr->gr_gid;
@@ -621,7 +568,7 @@ static int switch_users(CONF_SECTION *cs)
 		pw = getpwnam(uid_name);
 		if (pw == NULL) {
 			fprintf(stderr, "%s: Cannot get passwd entry for user %s: %s\n",
-				progname, uid_name, strerror(errno));
+				progname, uid_name, fr_syserror(errno));
 			return 0;
 		}
 
@@ -633,7 +580,7 @@ static int switch_users(CONF_SECTION *cs)
 #ifdef HAVE_INITGROUPS
 			if (initgroups(uid_name, server_gid) < 0) {
 				fprintf(stderr, "%s: Cannot initialize supplementary group list for user %s: %s\n",
-					progname, uid_name, strerror(errno));
+					progname, uid_name, fr_syserror(errno));
 				return 0;
 			}
 #endif
@@ -646,7 +593,7 @@ static int switch_users(CONF_SECTION *cs)
 	if (chroot_dir) {
 		if (chroot(chroot_dir) < 0) {
 			fprintf(stderr, "%s: Failed to perform chroot %s: %s",
-				progname, chroot_dir, strerror(errno));
+				progname, chroot_dir, fr_syserror(errno));
 			return 0;
 		}
 
@@ -671,7 +618,7 @@ static int switch_users(CONF_SECTION *cs)
 	/*  Set GID.  */
 	if (gid_name && (setgid(server_gid) < 0)) {
 		fprintf(stderr, "%s: Failed setting group to %s: %s",
-			progname, gid_name, strerror(errno));
+			progname, gid_name, fr_syserror(errno));
 		return 0;
 	}
 #endif
@@ -685,18 +632,18 @@ static int switch_users(CONF_SECTION *cs)
 	 *	specified on the command-line.
 	 */
 	if (uid_name || gid_name) {
-		if ((default_log.dest == L_DST_FILES) &&
+		if ((default_log.dst == L_DST_FILES) &&
 		    (default_log.fd < 0)) {
-			default_log.fd = open(mainconfig.log_file,
+			default_log.fd = open(main_config.log_file,
 					      O_WRONLY | O_APPEND | O_CREAT, 0640);
 			if (default_log.fd < 0) {
-				fprintf(stderr, "radiusd: Failed to open log file %s: %s\n", mainconfig.log_file, strerror(errno));
+				fprintf(stderr, "radiusd: Failed to open log file %s: %s\n", main_config.log_file, fr_syserror(errno));
 				return 0;
 			}
 
-			if (chown(mainconfig.log_file, server_uid, server_gid) < 0) {
+			if (chown(main_config.log_file, server_uid, server_gid) < 0) {
 				fprintf(stderr, "%s: Cannot change ownership of log file %s: %s\n",
-					progname, mainconfig.log_file, strerror(errno));
+					progname, main_config.log_file, fr_syserror(errno));
 				return 0;
 			}
 		}
@@ -713,23 +660,50 @@ static int switch_users(CONF_SECTION *cs)
 	 *	This also clears the dumpable flag if core dumps
 	 *	aren't allowed.
 	 */
-	fr_set_dumpable();
+	if (fr_set_dumpable(allow_core_dumps) < 0) {
+		ERROR("%s", fr_strerror());
+	}
 
 	if (allow_core_dumps) {
-		INFO("Core dumps are enabled.");
+		INFO("Core dumps are enabled");
 	}
 
 	return 1;
 }
 #endif	/* HAVE_SETUID */
 
+/** Set the global radius config directory.
+ *
+ * @param ctx Where to allocate the memory for the path string.
+ * @param path to config dir root e.g. /usr/local/etc/raddb
+ */
+void set_radius_dir(TALLOC_CTX *ctx, char const *path)
+{
+	if (radius_dir) {
+		char *p;
+
+		memcpy(&p, &radius_dir, sizeof(p));
+		talloc_free(p);
+		radius_dir = NULL;
+	}
+	if (path) radius_dir = talloc_strdup(ctx, path);
+}
+
+/** Get the global radius config directory.
+ *
+ * @return the global radius config directory.
+ */
+char const *get_radius_dir(void)
+{
+	return radius_dir;
+}
 
 /*
  *	Read config files.
  *
  *	This function can ONLY be called from the main server process.
  */
-int read_mainconfig(int reload)
+int main_config_init(void)
 {
 	char const *p = NULL;
 	CONF_SECTION *cs;
@@ -737,14 +711,9 @@ int read_mainconfig(int reload)
 	cached_config_t *cc;
 	char buffer[1024];
 
-	if (reload != 0) {
-		ERROR("Reload is not implemented");
-		return -1;
-	}
-
 	if (stat(radius_dir, &statbuf) < 0) {
 		ERROR("Errors reading %s: %s",
-		       radius_dir, strerror(errno));
+		       radius_dir, fr_syserror(errno));
 		return -1;
 	}
 
@@ -765,18 +734,61 @@ int read_mainconfig(int reload)
 #endif
 	INFO("Starting - reading configuration files ...");
 
-	/* Initialize the dictionary */
-	if (!mainconfig.dictionary_dir) mainconfig.dictionary_dir = radius_dir;
-	DEBUG2("including dictionary file %s/%s", mainconfig.dictionary_dir, RADIUS_DICTIONARY);
-	if (dict_init(mainconfig.dictionary_dir, RADIUS_DICTIONARY) != 0) {
+	/*
+	 *	We need to load the dictionaries before reading the
+	 *	configuration files.  This is because of the
+	 *	pre-compilation in conffile.c.  That should probably
+	 *	be fixed to be done as a second stage.
+	 */
+	if (!main_config.dictionary_dir) {
+		main_config.dictionary_dir = DICTDIR;
+	}
+
+	/*
+	 *	Read the distribution dictionaries first, then
+	 *	the ones in raddb.
+	 */
+	DEBUG2("including dictionary file %s/%s", main_config.dictionary_dir, RADIUS_DICTIONARY);
+	if (dict_init(main_config.dictionary_dir, RADIUS_DICTIONARY) != 0) {
 		ERROR("Errors reading dictionary: %s",
-				fr_strerror());
+		      fr_strerror());
 		return -1;
 	}
 
+#define DICT_READ_OPTIONAL(_d, _n) \
+do {\
+	switch (dict_read(_d, _n)) {\
+	case -1:\
+		ERROR("Errors reading %s/%s: %s", _d, _n, fr_strerror());\
+		return -1;\
+	case 0:\
+		DEBUG2("including dictionary file %s/%s", _d,_n);\
+		break;\
+	default:\
+		break;\
+	}\
+} while (0)
+
+	/*
+	 *	Try to load protocol-specific dictionaries.  It's OK
+	 *	if they don't exist.
+	 */
+#ifdef WITH_DHCP
+	DICT_READ_OPTIONAL(main_config.dictionary_dir, "dictionary.dhcp");
+#endif
+
+#ifdef WITH_VMPS
+	DICT_READ_OPTIONAL(main_config.dictionary_dir, "dictionary.vqp");
+#endif
+
+	/*
+	 *	It's OK if this one doesn't exist.
+	 */
+	DICT_READ_OPTIONAL(radius_dir, RADIUS_DICTIONARY);
+
 	/* Read the configuration file */
 	snprintf(buffer, sizeof(buffer), "%.200s/%.50s.conf",
-		 radius_dir, mainconfig.name);
+		 radius_dir, main_config.name);
 	if ((cs = cf_file_read(buffer)) == NULL) {
 		ERROR("Errors reading or parsing %s", buffer);
 		return -1;
@@ -786,7 +798,7 @@ int read_mainconfig(int reload)
 	 *	If there was no log destination set on the command line,
 	 *	set it now.
 	 */
-	if (default_log.dest == L_DST_NULL) {
+	if (default_log.dst == L_DST_NULL) {
 		if (cf_section_parse(cs, NULL, serverdest_config) < 0) {
 			fprintf(stderr, "radiusd: Error: Failed to parse log{} section.\n");
 			cf_file_free(cs);
@@ -799,16 +811,16 @@ int read_mainconfig(int reload)
 			return -1;
 		}
 
-		default_log.dest = fr_str2int(log_str2dst, radlog_dest,
+		default_log.dst = fr_str2int(log_str2dst, radlog_dest,
 					      L_DST_NUM_DEST);
-		if (default_log.dest == L_DST_NUM_DEST) {
+		if (default_log.dst == L_DST_NUM_DEST) {
 			fprintf(stderr, "radiusd: Error: Unknown log_destination %s\n",
 				radlog_dest);
 			cf_file_free(cs);
 			return -1;
 		}
 
-		if (default_log.dest == L_DST_SYSLOG) {
+		if (default_log.dst == L_DST_SYSLOG) {
 			/*
 			 *	Make sure syslog_facility isn't NULL
 			 *	before using it
@@ -818,8 +830,8 @@ int read_mainconfig(int reload)
 				cf_file_free(cs);
 				return -1;
 			}
-			mainconfig.syslog_facility = fr_str2int(syslog_str2fac, syslog_facility, -1);
-			if (mainconfig.syslog_facility < 0) {
+			main_config.syslog_facility = fr_str2int(syslog_str2fac, syslog_facility, -1);
+			if (main_config.syslog_facility < 0) {
 				fprintf(stderr, "radiusd: Error: Unknown syslog_facility %s\n",
 					syslog_facility);
 				cf_file_free(cs);
@@ -831,11 +843,11 @@ int read_mainconfig(int reload)
 			 *	Call openlog only once, when the
 			 *	program starts.
 			 */
-			openlog(progname, LOG_PID, mainconfig.syslog_facility);
+			openlog(progname, LOG_PID, main_config.syslog_facility);
 #endif
 
-		} else if (default_log.dest == L_DST_FILES) {
-			if (!mainconfig.log_file) {
+		} else if (default_log.dst == L_DST_FILES) {
+			if (!main_config.log_file) {
 				fprintf(stderr, "radiusd: Error: Specified \"files\" as a log destination, but no log filename was given!\n");
 				cf_file_free(cs);
 				return -1;
@@ -855,12 +867,12 @@ int read_mainconfig(int reload)
 	 *	did switch uid/gid, then the code in switch_users()
 	 *	took care of setting the file permissions correctly.
 	 */
-	if ((default_log.dest == L_DST_FILES) &&
+	if ((default_log.dst == L_DST_FILES) &&
 	    (default_log.fd < 0)) {
-		default_log.fd = open(mainconfig.log_file,
+		default_log.fd = open(main_config.log_file,
 					    O_WRONLY | O_APPEND | O_CREAT, 0640);
 		if (default_log.fd < 0) {
-			fprintf(stderr, "radiusd: Failed to open log file %s: %s\n", mainconfig.log_file, strerror(errno));
+			fprintf(stderr, "radiusd: Failed to open log file %s: %s\n", main_config.log_file, fr_syserror(errno));
 			cf_file_free(cs);
 			return -1;
 		}
@@ -885,9 +897,27 @@ int read_mainconfig(int reload)
 		default_log.colourise = false;
 	}
 
-	if (mainconfig.max_request_time == 0) mainconfig.max_request_time = 100;
-	if (mainconfig.reject_delay > 5) mainconfig.reject_delay = 5;
-	if (mainconfig.cleanup_delay > 5) mainconfig.cleanup_delay =5;
+	/*
+	 *	Starting the server, WITHOUT "-x" on the
+	 *	command-line: use whatever is in the config
+	 *	file.
+	 */
+	if (debug_flag == 0) {
+		debug_flag = main_config.debug_level;
+	}
+	fr_debug_flag = debug_flag;
+
+	FR_INTEGER_COND_CHECK("max_request_time", main_config.max_request_time, (main_config.max_request_time != 0), 100);
+	FR_INTEGER_BOUND_CHECK("reject_delay", main_config.reject_delay, <=, 10);
+	FR_INTEGER_BOUND_CHECK("cleanup_delay", main_config.cleanup_delay, <=, 10);
+
+	/*
+	 * Set default initial request processing delay to 1/3 of a second.
+	 * Will be updated by the lowest response window across all home servers,
+	 * if it is less than this.
+	 */
+	main_config.init_delay.tv_sec = 0;
+	main_config.init_delay.tv_usec = 1000000 / 3;
 
 	/*
 	 *	Free the old configuration items, and replace them
@@ -896,15 +926,15 @@ int read_mainconfig(int reload)
 	 *	Note that where possible, we do atomic switch-overs,
 	 *	to ensure that the pointers are always valid.
 	 */
-	rad_assert(mainconfig.config == NULL);
-	root_config = mainconfig.config = cs;
+	rad_assert(main_config.config == NULL);
+	root_config = main_config.config = cs;
 
-	DEBUG2("%s: #### Loading Realms and Home Servers ####", mainconfig.name);
+	DEBUG2("%s: #### Loading Realms and Home Servers ####", main_config.name);
 	if (!realms_init(cs)) {
 		return -1;
 	}
 
-	DEBUG2("%s: #### Loading Clients ####", mainconfig.name);
+	DEBUG2("%s: #### Loading Clients ####", main_config.name);
 	if (!clients_parse_section(cs, false)) {
 		return -1;
 	}
@@ -917,16 +947,6 @@ int read_mainconfig(int reload)
 	xlat_register("getclient", xlat_getclient, NULL, NULL);
 
 	/*
-	 *	Starting the server, WITHOUT "-x" on the
-	 *	command-line: use whatever is in the config
-	 *	file.
-	 */
-	if (debug_flag == 0) {
-		debug_flag = mainconfig.debug_level;
-	}
-	fr_debug_flag = debug_flag;
-
-	/*
 	 *  Go update our behaviour, based on the configuration
 	 *  changes.
 	 */
@@ -935,30 +955,25 @@ int read_mainconfig(int reload)
 	 *	Sanity check the configuration for internal
 	 *	consistency.
 	 */
-	if (mainconfig.reject_delay > mainconfig.cleanup_delay) {
-		mainconfig.reject_delay = mainconfig.cleanup_delay;
-	}
-	if (mainconfig.reject_delay < 0) mainconfig.reject_delay = 0;
-
-	/*  Reload the modules.  */
-	if (setup_modules(reload, mainconfig.config) < 0) {
-		return -1;
-	}
+	FR_INTEGER_BOUND_CHECK("reject_delay", main_config.reject_delay, <=, main_config.cleanup_delay);
 
 	if (chroot_dir) {
 		if (chdir(radlog_dir) < 0) {
 			ERROR("Failed to 'chdir %s' after chroot: %s",
-			       radlog_dir, strerror(errno));
+			       radlog_dir, fr_syserror(errno));
 			return -1;
 		}
 	}
 
-	cc = rad_malloc(sizeof(*cc));
-	memset(cc, 0, sizeof(*cc));
+	cc = talloc_zero(NULL, cached_config_t);
+	if (!cc) return -1;
 
-	cc->cs = cs;
+	cc->cs = talloc_steal(cc ,cs);
 	rad_assert(cs_cache == NULL);
 	cs_cache = cc;
+
+	/* Clear any unprocessed configuration errors */
+	(void) fr_strerror();
 
 	return 0;
 }
@@ -966,10 +981,8 @@ int read_mainconfig(int reload)
 /*
  *	Free the configuration.  Called only when the server is exiting.
  */
-int free_mainconfig(void)
+int main_config_free(void)
 {
-	cached_config_t *cc, *next;
-
 	virtual_servers_free(0);
 
 	/*
@@ -978,17 +991,12 @@ int free_mainconfig(void)
 	 */
 	clients_free(NULL);
 	realms_free();
-	listen_free(&mainconfig.listen);
+	listen_free(&main_config.listen);
 
 	/*
-	 *	Free all of the cached configurations.
+	 *	Frees current config and any previous configs.
 	 */
-	for (cc = cs_cache; cc != NULL; cc = next) {
-		next = cc->next;
-		cf_file_free(cc->cs);
-		free(cc);
-	}
-
+	TALLOC_FREE(cs_cache);
 	dict_free();
 
 	return 0;
@@ -998,9 +1006,9 @@ void hup_logfile(void)
 {
 		int fd, old_fd;
 
-		if (default_log.dest != L_DST_FILES) return;
+		if (default_log.dst != L_DST_FILES) return;
 
- 		fd = open(mainconfig.log_file,
+		fd = open(main_config.log_file,
 			  O_WRONLY | O_APPEND | O_CREAT, 0640);
 		if (fd >= 0) {
 			/*
@@ -1017,7 +1025,7 @@ void hup_logfile(void)
 		}
 }
 
-void hup_mainconfig(void)
+void main_config_hup(void)
 {
 	cached_config_t *cc;
 	CONF_SECTION *cs;
@@ -1027,14 +1035,17 @@ void hup_mainconfig(void)
 
 	/* Read the configuration file */
 	snprintf(buffer, sizeof(buffer), "%.200s/%.50s.conf",
-		 radius_dir, mainconfig.name);
+		 radius_dir, main_config.name);
 	if ((cs = cf_file_read(buffer)) == NULL) {
 		ERROR("Failed to re-read or parse %s", buffer);
 		return;
 	}
 
-	cc = rad_malloc(sizeof(*cc));
-	memset(cc, 0, sizeof(*cc));
+	cc = talloc_zero(cs_cache, cached_config_t);
+	if (!cc) {
+		ERROR("Out of memory");
+		return;
+	}
 
 	/*
 	 *	Save the current configuration.  Note that we do NOT
@@ -1046,7 +1057,7 @@ void hup_mainconfig(void)
 	 *	configurations.
 	 */
 	cc->created = time(NULL);
-	cc->cs = cs;
+	cc->cs = talloc_steal(cc, cs);
 	cc->next = cs_cache;
 	cs_cache = cc;
 
@@ -1064,12 +1075,12 @@ void hup_mainconfig(void)
 	/*
 	 *	Prefer the new module configuration.
 	 */
-	module_hup(cf_section_sub_find(cs, "modules"));
+	modules_hup(cf_section_sub_find(cs, "modules"));
 
 	/*
 	 *	Load new servers BEFORE freeing old ones.
 	 */
 	virtual_servers_load(cs);
 
-	virtual_servers_free(cc->created - mainconfig.max_request_time * 4);
+	virtual_servers_free(cc->created - main_config.max_request_time * 4);
 }

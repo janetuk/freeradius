@@ -22,12 +22,17 @@
  * @copyright 2002  Alan DeKok <aland@ox.org>
  */
 RCSID("$Id$")
+USES_APPLE_DEPRECATED_API
 
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/md5.h>
 #include <freeradius-devel/sha1.h>
 #include <freeradius-devel/base64.h>
 #include <freeradius-devel/modules.h>
+
+#ifdef HAVE_OPENSSL_EVP_H
+#  include <openssl/evp.h>
+#endif
 
 #include <ctype.h>
 
@@ -38,13 +43,11 @@ RCSID("$Id$")
  */
 typedef struct rlm_expr_t {
 	char const *xlat_name;
-	char *allowed_chars;
+	char const *allowed_chars;
 } rlm_expr_t;
 
 static const CONF_PARSER module_config[] = {
-	{"safe_characters", PW_TYPE_STRING_PTR,
-	 offsetof(rlm_expr_t, allowed_chars), NULL,
-	"@abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_: /"},
+	{ "safe_characters", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_expr_t, allowed_chars), "@abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_: /" },
 	{NULL, -1, 0, NULL, NULL}
 };
 
@@ -85,6 +88,12 @@ static expr_map_t map[] =
  */
 static char randstr_punc[] = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
 static char randstr_salt[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmopqrstuvwxyz/.";
+
+/*
+ *	Characters humans rarely confuse. Reduces char set considerably
+ *	should only be used for things such as one time passwords.
+ */
+static char randstr_otp[] = "469ACGHJKLMNPQRUVWXYabdfhijkprstuvwxyz";
 
 static int get_number(REQUEST *request, char const **string, int64_t *answer)
 {
@@ -204,9 +213,9 @@ static int get_number(REQUEST *request, char const **string, int64_t *answer)
 		case TOKEN_DIVIDE:
 			if (x == 0) {
 				result = 0; /* we don't have NaN for integers */
-				break;
+			} else {
+				result /= x;
 			}
-			result /= x;
 			break;
 
 		case TOKEN_REMAINDER:
@@ -280,8 +289,7 @@ static ssize_t expr_xlat(UNUSED void *instance, REQUEST *request, char const *fm
 	return strlen(out);
 }
 
-/**
- *  @brief Generate a random integer value
+/** Generate a random integer value
  *
  */
 static ssize_t rand_xlat(UNUSED void *instance, UNUSED REQUEST *request, char const *fmt,
@@ -307,8 +315,7 @@ static ssize_t rand_xlat(UNUSED void *instance, UNUSED REQUEST *request, char co
 	return strlen(out);
 }
 
-/**
- *  @brief Generate a string of random chars
+/** Generate a string of random chars
  *
  *  Build strings of random chars, useful for generating tokens and passcodes
  *  Format similar to String::Random.
@@ -328,75 +335,98 @@ static ssize_t randstr_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 	while (*p && (--freespace > 0)) {
 		result = fr_rand();
 		switch (*p) {
-			/*
-			 *  Lowercase letters
-			 */
-			case 'c':
-				*out++ = 'a' + (result % 26);
+		/*
+		 *  Lowercase letters
+		 */
+		case 'c':
+			*out++ = 'a' + (result % 26);
+			break;
+
+		/*
+		 *  Uppercase letters
+		 */
+		case 'C':
+			*out++ = 'A' + (result % 26);
+			break;
+
+		/*
+		 *  Numbers
+		 */
+		case 'n':
+			*out++ = '0' + (result % 10);
+			break;
+
+		/*
+		 *  Alpha numeric
+		 */
+		case 'a':
+			*out++ = randstr_salt[result % (sizeof(randstr_salt) - 3)];
+			break;
+
+		/*
+		 *  Punctuation
+		 */
+		case '!':
+			*out++ = randstr_punc[result % (sizeof(randstr_punc) - 1)];
+			break;
+
+		/*
+		 *  Alpa numeric + punctuation
+		 */
+		case '.':
+			*out++ = '!' + (result % 95);
+			break;
+
+		/*
+		 *  Alpha numeric + salt chars './'
+		 */
+		case 's':
+			*out++ = randstr_salt[result % (sizeof(randstr_salt) - 1)];
+			break;
+
+		/*
+		 *  Chars suitable for One Time Password tokens.
+		 *  Alpha numeric with easily confused char pairs removed.
+		 */
+		case 'o':
+			*out++ = randstr_otp[result % (sizeof(randstr_otp) - 1)];
+			break;
+
+		/*
+		 *  Binary data as hexits (we don't really support
+		 *  non printable chars).
+		 */
+		case 'h':
+			if (freespace < 2) {
 				break;
+			}
 
-			/*
-			 *  Uppercase letters
-			 */
-			case 'C':
-				*out++ = 'A' + (result % 26);
+			snprintf(out, 3, "%02x", result % 256);
+
+			/* Already decremented */
+			freespace -= 1;
+			out += 2;
+			break;
+
+		/*
+		 *  Binary data with uppercase hexits
+		 */
+		case 'H':
+			if (freespace < 2) {
 				break;
+			}
 
-			/*
-			 *  Numbers
-			 */
-			case 'n':
-				*out++ = '0' + (result % 10);
-				break;
+			snprintf(out, 3, "%02X", result % 256);
 
-			/*
-			 *  Alpha numeric
-			 */
-			case 'a':
-				*out++ = randstr_salt[result % (sizeof(randstr_salt) - 3)];
-				break;
+			/* Already decremented */
+			freespace -= 1;
+			out += 2;
+			break;
 
-			/*
-			 *  Punctuation
-			 */
-			case '!':
-				*out++ = randstr_punc[result % (sizeof(randstr_punc) - 1)];
-				break;
+		default:
+			ERROR("rlm_expr: invalid character class '%c'", *p);
 
-			/*
-			 *  Alpa numeric + punctuation
-			 */
-			case '.':
-				*out++ = '!' + (result % 95);
-				break;
-
-			/*
-			 *  Alpha numeric + salt chars './'
-			 */
-			case 's':
-				*out++ = randstr_salt[result % (sizeof(randstr_salt) - 1)];
-				break;
-
-			/*
-			 *  Binary data as hexits (we don't really support
-			 *  non printable chars).
-			 */
-			case 'h':
-				if (freespace < 2) {
-					break;
-				}
-
-				snprintf(out, 3, "%02x", result % 256);
-
-				/* Already decremented */
-				freespace -= 1;
-				out += 2;
-				break;
-
-			default:
-				ERROR("rlm_expr: invalid character class '%c'", *p);
-
-				return -1;
+			return -1;
 		}
 
 		p++;
@@ -407,8 +437,7 @@ static ssize_t randstr_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 	return outlen - freespace;
 }
 
-/**
- * @brief URLencode special characters
+/** URLencode special characters
  *
  * Example: "%{urlquote:http://example.org/}" == "http%3A%47%47example.org%47"
  */
@@ -428,21 +457,21 @@ static ssize_t urlquote_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 		}
 
 		switch (*p) {
-			case '-':
-			case '_':
-			case '.':
-			case '~':
-				*out++ = *p++;
+		case '-':
+		case '_':
+		case '.':
+		case '~':
+			*out++ = *p++;
+			break;
+		default:
+			if (freespace < 3)
 				break;
-			default:
-				if (freespace < 3)
-					break;
 
-				snprintf(out, 4, "%%%02x", *p++); /* %xx */
+			snprintf(out, 4, "%%%02x", *p++); /* %xx */
 
-				/* Already decremented */
-				freespace -= 2;
-				out += 3;
+			/* Already decremented */
+			freespace -= 2;
+			out += 3;
 		}
 	}
 
@@ -451,8 +480,7 @@ static ssize_t urlquote_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 	return outlen - freespace;
 }
 
-/**
- * @brief Equivalent to the old safe_characters functionality in rlm_sql
+/** Equivalent to the old safe_characters functionality in rlm_sql
  *
  * @verbatim Example: "%{escape:<img>foo.jpg</img>}" == "=60img=62foo.jpg=60/img=62" @endverbatim
  */
@@ -491,8 +519,7 @@ static ssize_t escape_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 	return outlen - freespace;
 }
 
-/**
- * @brief Convert a string to lowercase
+/** Convert a string to lowercase
  *
  * Example "%{tolower:Bar}" == "bar"
  *
@@ -517,8 +544,7 @@ static ssize_t lc_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 	return strlen(out);
 }
 
-/**
- * @brief Convert a string to uppercase
+/** Convert a string to uppercase
  *
  * Example: "%{toupper:Foo}" == "FOO"
  *
@@ -543,16 +569,16 @@ static ssize_t uc_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 	return strlen(out);
 }
 
-/**
- * @brief Calculate the MD5 hash of a string.
+/** Calculate the MD5 hash of a string or attribute.
  *
  * Example: "%{md5:foo}" == "acbd18db4cc2f85cedef654fccc4a4d8"
  */
 static ssize_t md5_xlat(UNUSED void *instance, UNUSED REQUEST *request,
-		        char const *fmt, char *out, size_t outlen)
+			char const *fmt, char *out, size_t outlen)
 {
 	uint8_t digest[16];
-	int i, len;
+	ssize_t i, len, inlen;
+	uint8_t const *p;
 	FR_MD5_CTX ctx;
 
 	/*
@@ -563,8 +589,13 @@ static ssize_t md5_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 		return 0;
 	}
 
+	inlen = xlat_fmt_to_ref(&p, request, fmt);
+	if (inlen < 0) {
+		return -1;
+	}
+
 	fr_MD5Init(&ctx);
-	fr_MD5Update(&ctx, (const void *) fmt, strlen(fmt));
+	fr_MD5Update(&ctx, p, inlen);
 	fr_MD5Final(digest, &ctx);
 
 	/*
@@ -581,71 +612,135 @@ static ssize_t md5_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 	return strlen(out);
 }
 
-/**
- * @brief Calculate the SHA1 hash of a string.
+/** Calculate the SHA1 hash of a string or attribute.
  *
  * Example: "%{sha1:foo}" == "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33"
  */
 static ssize_t sha1_xlat(UNUSED void *instance, UNUSED REQUEST *request,
-                         char const *fmt, char *out, size_t outlen)
+			 char const *fmt, char *out, size_t outlen)
 {
-        uint8_t digest[20];
-        int i, len;
-        fr_SHA1_CTX ctx;
+	uint8_t digest[20];
+	ssize_t i, len, inlen;
+	uint8_t const *p;
+	fr_SHA1_CTX ctx;
 
-        /*
-         *      We need room for at least one octet of output.
-         */
-        if (outlen < 3) {
-                *out = '\0';
-                return 0;
-        }
+	/*
+	 *      We need room for at least one octet of output.
+	 */
+	if (outlen < 3) {
+		*out = '\0';
+		return 0;
+	}
 
-        fr_SHA1Init(&ctx);
-        fr_SHA1Update(&ctx, (const void *) fmt, strlen(fmt));
-        fr_SHA1Final(digest, &ctx);
+	inlen = xlat_fmt_to_ref(&p, request, fmt);
+	if (inlen < 0) {
+		return -1;
+	}
 
-        /*
-         *      Each digest octet takes two hex digits, plus one for
-         *      the terminating NUL. SHA1 is 160 bits (20 bytes)
-         */
-        len = (outlen / 2) - 1;
-        if (len > 20) len = 20;
+	fr_SHA1Init(&ctx);
+	fr_SHA1Update(&ctx, p, inlen);
+	fr_SHA1Final(digest, &ctx);
 
-        for (i = 0; i < len; i++) {
-                snprintf(out + i * 2, 3, "%02x", digest[i]);
-        }
+	/*
+	 *      Each digest octet takes two hex digits, plus one for
+	 *      the terminating NUL. SHA1 is 160 bits (20 bytes)
+	 */
+	len = (outlen / 2) - 1;
+	if (len > 20) len = 20;
 
-        return strlen(out);
+	for (i = 0; i < len; i++) {
+		snprintf(out + i * 2, 3, "%02x", digest[i]);
+	}
+
+	return strlen(out);
 }
 
-/**
- * @brief Encode string as base64
+/** Calculate any digest supported by OpenSSL EVP_MD
  *
- * Example: "%{tobase64:foo}" == "Zm9v"
+ * Example: "%{sha256:foo}" == "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33"
+ */
+#ifdef HAVE_OPENSSL_EVP_H
+static ssize_t evp_md_xlat(UNUSED void *instance, UNUSED REQUEST *request,
+			   char const *fmt, char *out, size_t outlen, EVP_MD const *md)
+{
+	uint8_t digest[EVP_MAX_MD_SIZE];
+	unsigned int digestlen, i, len;
+	ssize_t inlen;
+	uint8_t const *p;
+
+	EVP_MD_CTX *ctx;
+
+	/*
+	 *      We need room for at least one octet of output.
+	 */
+	if (outlen < 3) {
+		*out = '\0';
+		return 0;
+	}
+
+	inlen = xlat_fmt_to_ref(&p, request, fmt);
+	if (inlen < 0) {
+		return -1;
+	}
+
+	ctx = EVP_MD_CTX_create();
+	EVP_DigestInit_ex(ctx, md, NULL);
+	EVP_DigestUpdate(ctx, p, inlen);
+	EVP_DigestFinal_ex(ctx, digest, &digestlen);
+	EVP_MD_CTX_destroy(ctx);
+
+	/*
+	 *      Each digest octet takes two hex digits, plus one for
+	 *      the terminating NUL.
+	 */
+	len = (outlen / 2) - 1;
+	if (len > digestlen) len = digestlen;
+
+	for (i = 0; i < len; i++) {
+		snprintf(out + i * 2, 3, "%02x", digest[i]);
+	}
+	return strlen(out);
+}
+
+#  define EVP_MD_XLAT(_md) \
+static ssize_t _md##_xlat(UNUSED void *instance, UNUSED REQUEST *request, char const *fmt, char *out, size_t outlen)\
+{\
+	return evp_md_xlat(instance, request, fmt, out, outlen, EVP_##_md());\
+}
+
+EVP_MD_XLAT(sha256);
+EVP_MD_XLAT(sha512);
+#endif
+
+/** Encode string or attribute as base64
+ *
+ * Example: "%{base64:foo}" == "Zm9v"
  */
 static ssize_t base64_xlat(UNUSED void *instance, UNUSED REQUEST *request,
 			   char const *fmt, char *out, size_t outlen)
 {
-	ssize_t len;
+	ssize_t inlen;
+	uint8_t const *p;
 
-	len = strlen(fmt);
+	inlen = xlat_fmt_to_ref(&p, request, fmt);
+	if (inlen < 0) {
+		return -1;
+	}
 
 	/*
 	 *  We can accurately calculate the length of the output string
 	 *  if it's larger than outlen, the output would be useless so abort.
 	 */
-	if ((len < 0) || ((FR_BASE64_ENC_LENGTH(len) + 1) > (ssize_t) outlen)) {
-		REDEBUG("xlat failed.");
+	if ((inlen < 0) || ((FR_BASE64_ENC_LENGTH(inlen) + 1) > (ssize_t) outlen)) {
+		REDEBUG("xlat failed");
 		*out = '\0';
 		return -1;
 	}
 
-	return fr_base64_encode((const uint8_t *) fmt, len, out, outlen);
+	return fr_base64_encode(out, outlen, p, inlen);
 }
 
-/**
- * @brief Convert base64 to hex
+/** Convert base64 to hex
  *
  * Example: "%{base64tohex:Zm9v}" == "666f6f"
  */
@@ -659,7 +754,7 @@ static ssize_t base64_to_hex_xlat(UNUSED void *instance, UNUSED REQUEST *request
 
 	*out = '\0';
 
-	declen = fr_base64_decode(fmt, len, decbuf, sizeof(decbuf));
+	declen = fr_base64_decode(decbuf, sizeof(decbuf), fmt, len);
 	if (declen < 0) {
 		REDEBUG("Base64 string invalid");
 		return -1;
@@ -668,6 +763,7 @@ static ssize_t base64_to_hex_xlat(UNUSED void *instance, UNUSED REQUEST *request
 	if ((size_t)((declen * 2) + 1) > outlen) {
 		REDEBUG("Base64 conversion failed, output buffer exhausted, needed %zd bytes, have %zd bytes",
 			(declen * 2) + 1, outlen);
+		return -1;
 	}
 
 	return fr_bin2hex(out, decbuf, declen);
@@ -706,7 +802,11 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	xlat_register("toupper", uc_xlat, NULL, inst);
 	xlat_register("md5", md5_xlat, NULL, inst);
 	xlat_register("sha1", sha1_xlat, NULL, inst);
-	xlat_register("tobase64", base64_xlat, NULL, inst);
+#ifdef HAVE_OPENSSL_EVP_H
+	xlat_register("sha256", sha256_xlat, NULL, inst);
+	xlat_register("sha512", sha512_xlat, NULL, inst);
+#endif
+	xlat_register("base64", base64_xlat, NULL, inst);
 	xlat_register("base64tohex", base64_to_hex_xlat, NULL, inst);
 
 	/*
@@ -728,7 +828,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 module_t rlm_expr = {
 	RLM_MODULE_INIT,
 	"expr",				/* Name */
-	RLM_TYPE_CHECK_CONFIG_SAFE,   	/* type */
+	0,   	/* type */
 	sizeof(rlm_expr_t),
 	module_config,
 	mod_instantiate,		/* instantiation */

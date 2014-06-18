@@ -2,11 +2,36 @@
 # Version:	$Id$
 #
 
-HEADERS	= conf.h conffile.h detail.h event.h features.h hash.h heap.h \
-	libradius.h md4.h md5.h missing.h modcall.h modules.h \
-	packet.h rad_assert.h radius.h radiusd.h radpaths.h \
-	radutmp.h realms.h sha1.h stats.h sysutmp.h token.h \
-	udpfromto.h base64.h map.h
+HEADERS	= \
+	attributes.h \
+	build.h \
+	conf.h \
+	conffile.h \
+	detail.h \
+	event.h \
+	features.h \
+	hash.h \
+	heap.h \
+	libradius.h \
+	md4.h \
+	md5.h \
+	missing.h \
+	modcall.h \
+	modules.h \
+	packet.h \
+	rad_assert.h \
+	radius.h \
+	radiusd.h \
+	radpaths.h \
+	radutmp.h \
+	realms.h \
+	sha1.h \
+	stats.h \
+	sysutmp.h \
+	token.h \
+	udpfromto.h \
+	base64.h \
+	map.h
 
 #
 #  Build dynamic headers by substituting various values from autoconf.h, these
@@ -15,7 +40,7 @@ HEADERS	= conf.h conffile.h detail.h event.h features.h hash.h heap.h \
 #
 
 HEADERS_DY = src/include/features.h src/include/missing.h src/include/tls.h \
-	src/include/radpaths.h
+	src/include/radpaths.h src/include/attributes.h
 
 src/include/autoconf.sed: src/include/autoconf.h
 	@grep ^#define $< | sed 's,/\*\*/,1,;' | awk '{print "\
@@ -23,6 +48,12 @@ src/include/autoconf.sed: src/include/autoconf.h
 	s,#[[:blank:]]*ifndef[[:blank:]]*" $$2 ",#if !"$$3 ",g;\
 	s,defined(" $$2 ")," $$3 ",g;\
 	s," $$2 ","$$3 ",g;"}' > $@
+
+src/include/radius.h: | src/include/attributes.h
+
+src/include/attributes.h: share/dictionary.freeradius.internal
+	@$(ECHO) HEADER $@
+	@grep ^ATTRIBUTE $<  | awk '{print "PW_"$$2 " " $$3}' | tr 'a-z' 'A-Z' | tr -- - _ | sed 's/^/#define /' > $@
 
 src/freeradius-devel/features.h: src/include/features.h src/freeradius-devel
 

@@ -538,7 +538,7 @@ static void parse_xlat(char const *input, char *output, size_t outlen)
 {
 	ssize_t slen;
 	char const *error = NULL;
-	char *fmt = talloc_strdup(NULL, input);
+	char *fmt = talloc_typed_strdup(NULL, input);
 	xlat_exp_t *head;
 
 	slen = xlat_tokenize(fmt, fmt, &head, &error);
@@ -569,7 +569,6 @@ static void process_file(const char *root_dir, char const *filename)
 
 	if (strcmp(filename, "-") == 0) {
 		fp = stdin;
-		filename = "<stdin>";
 		directory[0] = '\0';
 
 	} else {
@@ -582,9 +581,11 @@ static void process_file(const char *root_dir, char const *filename)
 		fp = fopen(directory, "r");
 		if (!fp) {
 			fprintf(stderr, "Error opening %s: %s\n",
-				directory, strerror(errno));
+				directory, fr_syserror(errno));
 			exit(1);
 		}
+
+		filename = directory;
 	}
 
 	lineno = 0;
@@ -619,6 +620,8 @@ static void process_file(const char *root_dir, char const *filename)
 		while (isspace((int) *p)) p++;
 		if (!*p) continue;
 
+		DEBUG2("%s[%d]: %s\n", filename, lineno, buffer);
+
 		strlcpy(input, p, sizeof(input));
 
 		if (strncmp(p, "raw ", 4) == 0) {
@@ -635,9 +638,17 @@ static void process_file(const char *root_dir, char const *filename)
 				continue;
 			}
 
+			if (outlen > sizeof(data)) outlen = sizeof(data);
+
+			if (outlen >= (sizeof(output) / 2)) {
+				outlen = (sizeof(output) / 2) - 1;
+			}
+
 			data_len = outlen;
 			for (i = 0; i < outlen; i++) {
-				snprintf(output + 3*i, sizeof(output),
+				if (sizeof(output) < (3*i)) break;
+
+				snprintf(output + 3*i, sizeof(output) - (3*i) - 1,
 					 "%02x ", data[i]);
 			}
 			outlen = strlen(output);
@@ -647,8 +658,8 @@ static void process_file(const char *root_dir, char const *filename)
 
 		if (strncmp(p, "data ", 5) == 0) {
 			if (strcmp(p + 5, output) != 0) {
-				fprintf(stderr, "Mismatch in line %d of %s, expected: %s\n",
-					lineno, directory, output);
+				fprintf(stderr, "Mismatch in line %d of %s, got: %s expected: %s\n",
+					lineno, directory, output, p + 5);
 				exit(1);
 			}
 			continue;
@@ -734,9 +745,9 @@ static void process_file(const char *root_dir, char const *filename)
 			if (head) {
 				vp_cursor_t cursor;
 				p = output;
-				for (vp = paircursor(&cursor, &head);
+				for (vp = fr_cursor_init(&cursor, &head);
 				     vp;
-				     vp = pairnext(&cursor)) {
+				     vp = fr_cursor_next(&cursor)) {
 					vp_prints(p, sizeof(output) - (p - output), vp);
 					p += strlen(p);
 
@@ -752,6 +763,18 @@ static void process_file(const char *root_dir, char const *filename)
 			} else { /* zero-length attribute */
 				*output = '\0';
 			}
+			continue;
+		}
+
+		if (strncmp(p, "attribute ", 10) == 0) {
+			p += 10;
+
+			if (userparse(NULL, p, &head) != T_EOL) {
+				strlcpy(output, fr_strerror(), sizeof(output));
+				continue;
+			}
+
+			vp_prints(output, sizeof(output), head);
 			continue;
 		}
 
@@ -795,14 +818,25 @@ static void process_file(const char *root_dir, char const *filename)
 int main(int argc, char *argv[])
 {
 	int c;
-	int report = false;
+	bool report = false;
 	char const *radius_dir = RADDBDIR;
+	char const *dict_dir = DICTDIR;
 
-	while ((c = getopt(argc, argv, "d:xM")) != EOF) switch(c) {
+#ifndef NDEBUG
+	if (fr_fault_setup(getenv("PANIC_ACTION"), argv[0]) < 0) {
+		fr_perror("radattr");
+		exit(EXIT_FAILURE);
+	}
+#endif
+
+	while ((c = getopt(argc, argv, "d:D:xM")) != EOF) switch(c) {
 		case 'd':
 			radius_dir = optarg;
 			break;
-	  	case 'x':
+		case 'D':
+			dict_dir = optarg;
+			break;
+		case 'x':
 			fr_debug_flag++;
 			debug_flag = fr_debug_flag;
 			break;
@@ -816,12 +850,20 @@ int main(int argc, char *argv[])
 	argc -= (optind - 1);
 	argv += (optind - 1);
 
-	if (report) {
-		talloc_enable_null_tracking();
+	/*
+	 *	Mismatch between the binary and the libraries it depends on
+	 */
+	if (fr_check_lib_magic(RADIUSD_MAGIC_NUMBER) < 0) {
+		fr_perror("radattr");
+		return 1;
 	}
-	talloc_set_log_fn(log_talloc);
 
-	if (dict_init(radius_dir, RADIUS_DICTIONARY) < 0) {
+	if (dict_init(dict_dir, RADIUS_DICTIONARY) < 0) {
+		fr_perror("radattr");
+		return 1;
+	}
+
+	if (dict_read(radius_dir, RADIUS_DICTIONARY) == -1) {
 		fr_perror("radattr");
 		return 1;
 	}
@@ -840,7 +882,7 @@ int main(int argc, char *argv[])
 
 	if (report) {
 		dict_free();
-		log_talloc_report(NULL);
+		fr_log_talloc_report(NULL);
 	}
 
 	return 0;

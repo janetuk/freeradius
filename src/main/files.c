@@ -75,7 +75,7 @@ int pairlist_read(TALLOC_CTX *ctx, char const *file, PAIR_LIST **list, int compl
 		if (!complain)
 			return -1;
 		ERROR("Couldn't open %s for reading: %s",
-				file, strerror(errno));
+				file, fr_syserror(errno));
 		return -1;
 	}
 
@@ -118,7 +118,7 @@ parse_again:
 			}
 
 			ptr = buffer;
-			getword(&ptr, entry, sizeof(entry));
+			getword(&ptr, entry, sizeof(entry), false);
 
 			/*
 			 *	Include another file if we see
@@ -146,11 +146,9 @@ parse_again:
 						p = newfile + strlen(newfile);
 						*p = FR_DIR_SEP;
 					}
-					getword(&ptr, p + 1,
-						sizeof(newfile) - 1 - (p - newfile));
+					getword(&ptr, p + 1, sizeof(newfile) - 1 - (p - newfile), false);
 				} else {
-					getword(&ptr, newfile,
-						sizeof(newfile));
+					getword(&ptr, newfile, sizeof(newfile), false);
 				}
 
 				t = NULL;
@@ -158,7 +156,7 @@ parse_again:
 				if (pairlist_read(ctx, newfile, &t, 0) != 0) {
 					pairlist_free(&pl);
 					ERROR("%s[%d]: Could not open included file %s: %s",
-					       file, lineno, newfile, strerror(errno));
+					       file, lineno, newfile, fr_syserror(errno));
 					fclose(fp);
 					return -1;
 				}
@@ -230,7 +228,7 @@ parse_again:
 				check_tmp = NULL;
 				reply_tmp = NULL;
 
-				t->name = talloc_strdup(t, entry);
+				t->name = talloc_typed_strdup(t, entry);
 
 				*last = t;
 				last = &(t->next);

@@ -43,12 +43,12 @@ static int success = 0;
 static int retries = 3;
 static float timeout = 5;
 
-static int server_port = 0;
+static uint16_t server_port = 0;
 static int packet_code = 0;
 static fr_ipaddr_t server_ipaddr;
 
 static fr_ipaddr_t client_ipaddr;
-static int client_port = 0;
+static uint16_t client_port = 0;
 
 static int sockfd;
 
@@ -63,7 +63,7 @@ static RADIUS_PACKET *reply = NULL;
 
 char const *dhcpclient_version = "dhcpclient version " RADIUSD_VERSION_STRING
 #ifdef RADIUSD_VERSION_COMMIT
-" (git #" RADIUSD_VERSION_COMMIT ")"
+" (git #" STRINGIFY(RADIUSD_VERSION_COMMIT) ")"
 #endif
 ", built on " __DATE__ " at " __TIME__;
 
@@ -91,7 +91,7 @@ static int request_init(char const *filename)
 	FILE *fp;
 	vp_cursor_t cursor;
 	VALUE_PAIR *vp;
-	int filedone = 0;
+	bool filedone = false;
 
 	/*
 	 *	Determine where to read the VP's from.
@@ -100,7 +100,7 @@ static int request_init(char const *filename)
 		fp = fopen(filename, "r");
 		if (!fp) {
 			fprintf(stderr, "dhcpclient: Error opening %s: %s\n",
-				filename, strerror(errno));
+				filename, fr_syserror(errno));
 			return 0;
 		}
 	} else {
@@ -112,8 +112,8 @@ static int request_init(char const *filename)
 	/*
 	 *	Read the VP's.
 	 */
-	request->vps = readvp2(NULL, fp, &filedone, "dhcpclient:");
-	if (!request->vps) {
+	if (readvp2(&request->vps, NULL, fp, &filedone) < 0) {
+		fr_perror("dhcpclient");
 		rad_free(&request);
 		if (fp != stdin) fclose(fp);
 		return 1;
@@ -122,7 +122,7 @@ static int request_init(char const *filename)
 	/*
 	 *	Fix / set various options
 	 */
-	for (vp = paircursor(&cursor, &request->vps); vp; vp = pairnext(&cursor)) {
+	for (vp = fr_cursor_init(&cursor, &request->vps); vp; vp = fr_cursor_next(&cursor)) {
 		switch (vp->da->attr) {
 		default:
 			break;
@@ -340,8 +340,8 @@ int main(int argc, char **argv)
 			portname = NULL;
 		}
 
-		if (ip_hton(hostname, AF_INET, &server_ipaddr) < 0) {
-			fprintf(stderr, "dhcpclient: Failed to find IP address for host %s: %s\n", hostname, strerror(errno));
+		if (ip_hton(&server_ipaddr, AF_INET, hostname, false) < 0) {
+			fprintf(stderr, "dhcpclient: Failed to find IP address for host %s: %s\n", hostname, fr_syserror(errno));
 			exit(1);
 		}
 
@@ -425,7 +425,7 @@ int main(int argc, char **argv)
 
 	if (fr_dhcp_send(request) < 0) {
 		fprintf(stderr, "dhcpclient: failed sending: %s\n",
-			strerror(errno));
+			fr_syserror(errno));
 		exit(1);
 	}
 

@@ -47,44 +47,43 @@
 #define RLM_NETVIM_MAX_ROWS 1000000
 #define RLM_NETVIM_TMP_PREFIX "auth-tmp-"
 
-static char const rcsid[] = "$Id$";
+#define MAX_QUERY_LEN 4096
+
+RCSID("$Id$");
 
 typedef struct rlm_sqlhpwippool_t {
-	char const *myname;	 	//!< Name of this instance
+	char const *myname;	 		//!< Name of this instance
 	rlm_sql_t *sqlinst;
 	rlm_sql_module_t *db;
 #ifdef HAVE_PTHREAD_D
-	pthread_mutex_t mutex;		//!< Used "with" sync_after
+	pthread_mutex_t mutex;			//!< Used "with" sync_after
 #endif
-	int	sincesync;		//!< req. done so far since last free IP sync.
+	uint32_t	sincesync;		//!< req. done so far since last free IP sync.
 
 	/* from config */
-	char	*sql_module_instance;	//!< rlm_sql instance to use.
-	char	*db_name;		//!< Netvim database.
-	bool	no_free_fail;		//!< Fail if no free IP addresses found.
-	int	free_after;	      	//!< How many seconds an IP should not be used after freeing.
-	int	sync_after;		//!< How often to sync with radacct.
+	char const	*sql_module_instance;	//!< rlm_sql instance to use.
+	char const	*db_name;		//!< Netvim database.
+	bool		no_free_fail;		//!< Fail if no free IP addresses found.
+	uint32_t	free_after;	      	//!< How many seconds an IP should not be used after freeing.
+	uint32_t	sync_after;		//!< How often to sync with radacct.
 } rlm_sqlhpwippool_t;
 
 /* char *name, int type,
  * size_t offset, void *data, char *dflt */
 static CONF_PARSER module_config[] = {
-	{ "sql_module_instance",       PW_TYPE_STRING_PTR,
-	  offsetof(rlm_sqlhpwippool_t, sql_module_instance),       NULL, "sql" },
-	{ "db_name",	    PW_TYPE_STRING_PTR,
-	  offsetof(rlm_sqlhpwippool_t, db_name),	    NULL, "netvim" },
-	{ "no_free_fail",	 PW_TYPE_BOOLEAN,
-	  offsetof(rlm_sqlhpwippool_t, no_free_fail),	 NULL, "yes" },
-	{ "free_after",	  PW_TYPE_INTEGER,
-	  offsetof(rlm_sqlhpwippool_t, free_after),	  NULL, "300" },
-	{ "sync_after",	  PW_TYPE_INTEGER,
-	  offsetof(rlm_sqlhpwippool_t, sync_after),	  NULL, "25" },
+	{ "sql_module_instance", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sqlhpwippool_t, sql_module_instance), "sql" },
+	{ "db_name", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sqlhpwippool_t, db_name), "netvim" },
+	{ "no_free_fail", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_sqlhpwippool_t, no_free_fail), "yes" },
+	{ "free_after", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_sqlhpwippool_t, free_after), "300" },
+	{ "sync_after", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_sqlhpwippool_t, sync_after), "25" },
 	{ NULL, -1, 0, NULL, NULL } /* end */
 };
 
+int nvp_log(unsigned int line, rlm_sqlhpwippool_t *data, int lvl, char const *fmt, ...) CC_HINT(format (printf, 4, 5));
+
+DIAG_OFF(format-nonliteral)
 /* wrapper around radlog which adds prefix with module and instance name */
-static int nvp_log(unsigned int line, rlm_sqlhpwippool_t *data, int lvl,
-		   char const *fmt, ...)
+int nvp_log(unsigned int line, rlm_sqlhpwippool_t *data, int lvl, char const *fmt, ...)
 {
 	va_list ap;
 	int r;
@@ -100,8 +99,8 @@ static int nvp_log(unsigned int line, rlm_sqlhpwippool_t *data, int lvl,
 
 	return r;
 }
+
 /* handy SQL query tool */
-DIAG_OFF(format-nonliteral)
 static int nvp_vquery(unsigned int line, rlm_sqlhpwippool_t *data,
 		      rlm_sql_handle_t *sqlsock, char const *fmt, va_list ap)
 {
@@ -187,15 +186,15 @@ static int nvp_freeclosed(rlm_sqlhpwippool_t *data, rlm_sql_handle_t *sqlsock)
 {
 	if (!nvp_query(__LINE__, data, sqlsock,
 	    "UPDATE `%s`.`ips`, `radacct` "
-	    	"SET "
-	    		"`ips`.`rsv_until` = `radacct`.`acctstoptime` + INTERVAL %u SECOND "
-	    	"WHERE "
-	    		"`radacct`.`acctstoptime` IS NOT NULL AND "   /* session is closed */
-	    		"("				    /* address is being used */
-	    			"`ips`.`pid` IS NOT NULL AND "
-	    			"(`rsv_until` = 0 OR `rsv_until` > NOW())"
-	    		") AND "
-	    		"`radacct`.`acctuniqueid` = `ips`.`rsv_by`",
+		"SET "
+			"`ips`.`rsv_until` = `radacct`.`acctstoptime` + INTERVAL %u SECOND "
+		"WHERE "
+			"`radacct`.`acctstoptime` IS NOT NULL AND "   /* session is closed */
+			"("				    /* address is being used */
+				"`ips`.`pid` IS NOT NULL AND "
+				"(`rsv_until` = 0 OR `rsv_until` > NOW())"
+			") AND "
+			"`radacct`.`acctuniqueid` = `ips`.`rsv_by`",
 	    data->db_name, data->free_after)) {
 		return 0;
 	}
@@ -209,16 +208,16 @@ static int nvp_syncfree(rlm_sqlhpwippool_t *data, rlm_sql_handle_t *sqlsock)
 {
 	if (!nvp_query(__LINE__, data, sqlsock,
 	    "UPDATE `%s`.`ip_pools` "
-	    	"SET `ip_pools`.`free` = "
-	    		"(SELECT COUNT(*) "
-	    			"FROM `%1$s`.`ips` "
-	    			"WHERE "
-	    				"`ips`.`ip` BETWEEN "
-	    					"`ip_pools`.`ip_start` AND `ip_pools`.`ip_stop` AND "
-	    				"("
-	    					"`ips`.`pid` IS NULL OR "
-	    					"(`ips`.`rsv_until` > 0 AND `ips`.`rsv_until` < NOW())"
-	    				"))",
+		"SET `ip_pools`.`free` = "
+			"(SELECT COUNT(*) "
+				"FROM `%1$s`.`ips` "
+				"WHERE "
+					"`ips`.`ip` BETWEEN "
+						"`ip_pools`.`ip_start` AND `ip_pools`.`ip_stop` AND "
+					"("
+						"`ips`.`pid` IS NULL OR "
+						"(`ips`.`rsv_until` > 0 AND `ips`.`rsv_until` < NOW())"
+					"))",
 	    data->db_name)) {
 		return 0;
 	}
@@ -249,19 +248,19 @@ static int nvp_cleanup(rlm_sqlhpwippool_t *data)
 	/* add sessions opened in the meantime */
 	if (!nvp_query(__LINE__, data, sqlsock,
 	    "UPDATE `%s`.`ips`, `radacct` "
-	    	"SET "
-	    		"`ips`.`pid` = 0, "
-	    		"`ips`.`rsv_by` = `radacct`.`acctuniqueid`, "
-	    		"`ips`.`rsv_since` = `radacct`.`acctstarttime`, "
-	    		"`ips`.`rsv_until` = 0 "
-	    	"WHERE "
-	    		"`radacct`.`acctstoptime` IS NULL AND "     /* session is opened */
-	    		"`ips`.`ip` = INET_ATON(`radacct`.`framedipaddress`) AND "
-	    		"("
-	    			"`ips`.`pid` IS NULL OR "
+		"SET "
+			"`ips`.`pid` = 0, "
+			"`ips`.`rsv_by` = `radacct`.`acctuniqueid`, "
+			"`ips`.`rsv_since` = `radacct`.`acctstarttime`, "
+			"`ips`.`rsv_until` = 0 "
+		"WHERE "
+			"`radacct`.`acctstoptime` IS NULL AND "     /* session is opened */
+			"`ips`.`ip` = INET_ATON(`radacct`.`framedipaddress`) AND "
+			"("
+				"`ips`.`pid` IS NULL OR "
 /*	    			"(`ips`.`rsv_until` > 0 AND `ips.`rsv_until` < NOW()) " */
-	    			"`ips`.`rsv_until` != 0"   /* no acct pkt received yet */
-	    		")",
+				"`ips`.`rsv_until` != 0"   /* no acct pkt received yet */
+			")",
 	    data->db_name)) {
 		sql_release_socket(data->sqlinst, sqlsock);
 		return 0;
@@ -320,7 +319,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 }
 
 /* assign new IP address, if required */
-static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *request)
 {
 	VALUE_PAIR *vp;
 	char const *pname;       /* name of requested IP pool */
@@ -426,17 +425,17 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 		/* find the most specific group which NAS belongs to */
 		switch (nvp_select(__LINE__, inst, sqlsock,
 		       "SELECT `host_groups`.`gid` "
-		       	"FROM "
-		       		"`%s`.`host_groups`, "
-		       		"`%1$s`.`gid_ip`, "
-		       		"`%1$s`.`ids` "
-		       	"WHERE "
-		       		"`host_groups`.`gid` = `ids`.`id` AND "
-		       		"`ids`.`enabled` = 1 AND "
-		       		"`host_groups`.`gid` = `gid_ip`.`gid` AND "
-		       		"%lu BETWEEN `gid_ip`.`ip_start` AND `gid_ip`.`ip_stop` "
-		       	"ORDER BY (`gid_ip`.`ip_stop` - `gid_ip`.`ip_start`) ASC "
-		       	"LIMIT %lu, 1",
+			"FROM "
+				"`%s`.`host_groups`, "
+				"`%1$s`.`gid_ip`, "
+				"`%1$s`.`ids` "
+			"WHERE "
+				"`host_groups`.`gid` = `ids`.`id` AND "
+				"`ids`.`enabled` = 1 AND "
+				"`host_groups`.`gid` = `gid_ip`.`gid` AND "
+				"%lu BETWEEN `gid_ip`.`ip_start` AND `gid_ip`.`ip_stop` "
+			"ORDER BY (`gid_ip`.`ip_stop` - `gid_ip`.`ip_start`) ASC "
+			"LIMIT %lu, 1",
 		       inst->db_name, nasip, s_gid)) {
 			case -1:
 				nvp_log(__LINE__, inst, L_ERR,
@@ -467,7 +466,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 					"FROM "
 						"`%s`.`ip_pools`, "
 						"`%1$s`.`ids`, "
-					 	"`%1$s`.`pool_names` "
+						"`%1$s`.`pool_names` "
 					"WHERE "
 						"`ip_pools`.`gid` = %lu AND "
 						"`ids`.`id` = `ip_pools`.`pid` AND "
@@ -482,7 +481,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 				case -1:
 					nvp_log(__LINE__, inst, L_DBG,
 						"mod_post_auth(): couldn't find "
-						"any more matching pools for gid = %u",
+						"any more matching pools for gid = %lu",
 						gid);
 					goto end_prio;	       /* select next gid */
 				case 0:
@@ -545,19 +544,19 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 				/* reserve an IP address */
 				if (!nvp_query(__LINE__, inst, sqlsock,
 				    "UPDATE `%s`.`ips` "
-				    	"SET "
-				    		"`pid` = %lu, "
-				    		"`rsv_since` = NOW(), "
-				    		"`rsv_by` = '" RLM_NETVIM_TMP_PREFIX "%lu', "
-				    		"`rsv_until` = NOW() + INTERVAL %d SECOND "
-				    	"WHERE "
-				    		"`ip` BETWEEN %lu AND %lu AND "
-				    		"("
-				    			"`pid` IS NULL OR "
-				    			"(`rsv_until` > 0 AND `rsv_until` < NOW())"
-				    		") "
-				    	"ORDER BY RAND() "
-				    	"LIMIT 1",
+					"SET "
+						"`pid` = %lu, "
+						"`rsv_since` = NOW(), "
+						"`rsv_by` = '" RLM_NETVIM_TMP_PREFIX "%lu', "
+						"`rsv_until` = NOW() + INTERVAL %d SECOND "
+					"WHERE "
+						"`ip` BETWEEN %lu AND %lu AND "
+						"("
+							"`pid` IS NULL OR "
+							"(`rsv_until` > 0 AND `rsv_until` < NOW())"
+						") "
+					"ORDER BY RAND() "
+					"LIMIT 1",
 				    inst->db_name, pid, connid, inst->free_after, ip_start, ip_stop)) {
 					sql_release_socket(inst->sqlinst, sqlsock);
 					return RLM_MODULE_FAIL;
@@ -588,11 +587,11 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 				/* update free IPs count */
 				if (!nvp_query(__LINE__, inst, sqlsock,
 				    "UPDATE `%s`.`ip_pools` "
-				    	"SET "
-				    		"`free` = `free` - 1 "
-				    	"WHERE "
-				    		"`pid` = %lu "
-			    	"LIMIT 1",
+					"SET "
+						"`free` = `free` - 1 "
+					"WHERE "
+						"`pid` = %lu "
+				"LIMIT 1",
 				    inst->db_name, pid)) {
 					sql_release_socket(inst->sqlinst, sqlsock);
 					return RLM_MODULE_FAIL;
@@ -630,7 +629,7 @@ end_gid:
 	}
 
 	/* add IP address to reply packet */
-	vp = radius_paircreate(request, &request->reply->vps,
+	vp = radius_paircreate(request->reply, &request->reply->vps,
 			       PW_FRAMED_IP_ADDRESS, 0);
 	vp->vp_ipaddr = ip.s_addr;
 
@@ -639,7 +638,7 @@ end_gid:
 	return RLM_MODULE_OK;
 }
 
-static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *request)
 {
 	VALUE_PAIR *vp;
 	rlm_sql_handle_t *sqlsock;
@@ -703,10 +702,10 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 
 			if (!nvp_query(__LINE__, inst, sqlsock,
 			    "UPDATE `%s`.`ips` "
-			    	"SET "
-			    		"`rsv_until` = 0, "
-			    		"`rsv_by` = '%s' "
-			    	"WHERE `ip` = %lu",
+				"SET "
+					"`rsv_until` = 0, "
+					"`rsv_by` = '%s' "
+				"WHERE `ip` = %lu",
 			    inst->db_name, sessid, framedip)) {
 				sql_release_socket(inst->sqlinst, sqlsock);
 				return RLM_MODULE_FAIL;
@@ -717,12 +716,12 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 		case PW_STATUS_STOP:
 			if (!nvp_query(__LINE__, inst, sqlsock,
 			    "UPDATE `%s`.`ips`, `%1$s`.`ip_pools` "
-			    	"SET "
-			    		"`ips`.`rsv_until` = NOW() + INTERVAL %u SECOND, "
-			    		"`ip_pools`.`free` = `ip_pools`.`free` + 1 "
-			    	"WHERE "
-			    		"`ips`.`rsv_by` = '%s' AND "
-			    		"`ips`.`ip` BETWEEN `ip_pools`.`ip_start` AND `ip_pools`.`ip_stop`",
+				"SET "
+					"`ips`.`rsv_until` = NOW() + INTERVAL %u SECOND, "
+					"`ip_pools`.`free` = `ip_pools`.`free` + 1 "
+				"WHERE "
+					"`ips`.`rsv_by` = '%s' AND "
+					"`ips`.`ip` BETWEEN `ip_pools`.`ip_start` AND `ip_pools`.`ip_stop`",
 			    inst->db_name, inst->free_after, sessid)) {
 				sql_release_socket(inst->sqlinst, sqlsock);
 				return RLM_MODULE_FAIL;
@@ -744,10 +743,10 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 
 			if (!nvp_query(__LINE__, inst, sqlsock,
 			    "UPDATE `%s`.`ips`, `radacct` "
-			    	"SET `ips`.`rsv_until` = NOW() + INTERVAL %u SECOND "
-			    	"WHERE "
-			    		"`radacct`.`nasipaddress` = '%s' AND "
-			    		"`ips`.`rsv_by` = `radacct`.`acctuniqueid`",
+				"SET `ips`.`rsv_until` = NOW() + INTERVAL %u SECOND "
+				"WHERE "
+					"`radacct`.`nasipaddress` = '%s' AND "
+					"`ips`.`rsv_by` = `radacct`.`acctuniqueid`",
 			    inst->db_name, inst->free_after, nasipstr)) {
 				sql_release_socket(inst->sqlinst, sqlsock);
 				return RLM_MODULE_FAIL;

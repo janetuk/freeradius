@@ -57,7 +57,7 @@ static int replicate_packet(UNUSED void *instance, REQUEST *request, pair_lists_
 	int rcode = RLM_MODULE_NOOP;
 	VALUE_PAIR *vp, **vps;
 	vp_cursor_t cursor;
-	home_server *home;
+	home_server_t *home;
 	REALM *realm;
 	home_pool_t *pool;
 	RADIUS_PACKET *packet = NULL;
@@ -66,8 +66,8 @@ static int replicate_packet(UNUSED void *instance, REQUEST *request, pair_lists_
 	 *	Send as many packets as necessary to different
 	 *	destinations.
 	 */
-	paircursor(&cursor, &request->config_items);
-	while ((vp = pairfindnext(&cursor, PW_REPLICATE_TO_REALM, 0, TAG_ANY))) {
+	fr_cursor_init(&cursor, &request->config_items);
+	while ((vp = fr_cursor_next_by_num(&cursor, PW_REPLICATE_TO_REALM, 0, TAG_ANY))) {
 		realm = realm_find2(vp->vp_strvalue);
 		if (!realm) {
 			REDEBUG2("Cannot Replicate to unknown realm \"%s\"", vp->vp_strvalue);
@@ -83,20 +83,20 @@ static int replicate_packet(UNUSED void *instance, REQUEST *request, pair_lists_
 			cleanup(packet);
 			return RLM_MODULE_FAIL;
 
-		case PW_AUTHENTICATION_REQUEST:
+		case PW_CODE_AUTHENTICATION_REQUEST:
 			pool = realm->auth_pool;
 			break;
 
 #ifdef WITH_ACCOUNTING
 
-		case PW_ACCOUNTING_REQUEST:
+		case PW_CODE_ACCOUNTING_REQUEST:
 			pool = realm->acct_pool;
 			break;
 #endif
 
 #ifdef WITH_COA
-		case PW_COA_REQUEST:
-		case PW_DISCONNECT_REQUEST:
+		case PW_CODE_COA_REQUEST:
+		case PW_CODE_DISCONNECT_REQUEST:
 			pool = realm->acct_pool;
 			break;
 #endif
@@ -156,11 +156,11 @@ static int replicate_packet(UNUSED void *instance, REQUEST *request, pair_lists_
 			 *	For CHAP, create the CHAP-Challenge if
 			 *	it doesn't exist.
 			 */
-			if ((code == PW_AUTHENTICATION_REQUEST) &&
+			if ((code == PW_CODE_AUTHENTICATION_REQUEST) &&
 			    (pairfind(request->packet->vps, PW_CHAP_PASSWORD, 0, TAG_ANY) != NULL) &&
 			    (pairfind(request->packet->vps, PW_CHAP_CHALLENGE, 0, TAG_ANY) == NULL)) {
 				uint8_t *p;
-				vp = radius_paircreate(request, &packet->vps, PW_CHAP_CHALLENGE, 0);
+				vp = radius_paircreate(packet, &packet->vps, PW_CHAP_CHALLENGE, 0);
 				vp->length = AUTH_VECTOR_LEN;
 				vp->vp_octets = p = talloc_array(vp, uint8_t, vp->length);
 				memcpy(p, request->packet->vector, AUTH_VECTOR_LEN);
@@ -219,40 +219,25 @@ static rlm_rcode_t replicate_packet(UNUSED void *instance,
 }
 #endif
 
-static rlm_rcode_t mod_authorize(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *request)
 {
 	return replicate_packet(instance, request, PAIR_LIST_REQUEST, request->packet->code);
 }
 
-static rlm_rcode_t mod_preaccounting(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_preaccounting(void *instance, REQUEST *request)
 {
 	return replicate_packet(instance, request, PAIR_LIST_REQUEST, request->packet->code);
-}
-
-static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
-{
-	return replicate_packet(instance, request, PAIR_LIST_REPLY, request->reply->code);
 }
 
 #ifdef WITH_PROXY
-static rlm_rcode_t mod_pre_proxy(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_pre_proxy(void *instance, REQUEST *request)
 {
 	return replicate_packet(instance, request, PAIR_LIST_PROXY_REQUEST, request->proxy->code);
 }
-
-static rlm_rcode_t mod_post_proxy(void *instance, REQUEST *request)
-{
-	return replicate_packet(instance, request, PAIR_LIST_PROXY_REPLY, request->proxy_reply->code);
-}
 #endif
 
-static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
-{
-	return replicate_packet(instance, request, PAIR_LIST_REPLY, request->reply->code);
-}
-
 #ifdef WITH_COA
-static rlm_rcode_t mod_recv_coa(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_recv_coa(void *instance, REQUEST *request)
 {
 	return replicate_packet(instance, request, PAIR_LIST_REQUEST, request->packet->code);
 }
@@ -279,15 +264,15 @@ module_t rlm_replicate = {
 		NULL,			/* authentication */
 		mod_authorize,		/* authorization */
 		mod_preaccounting,	/* preaccounting */
-		mod_accounting,		/* accounting */
+		NULL,			/* accounting */
 		NULL,			/* checksimul */
 #ifdef WITH_PROXY
 		mod_pre_proxy,		/* pre-proxy */
-		mod_post_proxy,		/* post-proxy */
+		NULL,			/* post-proxy */
 #else
 		NULL, NULL,
 #endif
-		mod_post_auth		/* post-auth */
+		NULL			/* post-auth */
 #ifdef WITH_COA
 		, mod_recv_coa,		/* coa-request */
 		NULL

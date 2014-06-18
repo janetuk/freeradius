@@ -20,7 +20,7 @@
  * @brief Function prototypes and datatypes for the REST (HTTP) transport.
  * @file rest.h
  *
- * @copyright 2012-2013  Arran Cudbard-Bell <a.cudbard-bell@freeradius.org>
+ * @copyright 2012-2014  Arran Cudbard-Bell <a.cudbard-bell@freeradius.org>
  */
 
 RCSIDH(other_h, "$Id$")
@@ -41,7 +41,7 @@ RCSIDH(other_h, "$Id$")
 
 #define REST_URI_MAX_LEN		2048
 #define REST_BODY_MAX_LEN		8192
-#define REST_BODY_INCR			512
+#define REST_BODY_INIT			1024
 #define REST_BODY_MAX_ATTRS		256
 
 typedef enum {
@@ -57,6 +57,8 @@ typedef enum {
 	HTTP_BODY_UNSUPPORTED,
 	HTTP_BODY_UNAVAILABLE,
 	HTTP_BODY_INVALID,
+	HTTP_BODY_NONE,
+	HTTP_BODY_CUSTOM,
 	HTTP_BODY_POST,
 	HTTP_BODY_JSON,
 	HTTP_BODY_XML,
@@ -95,55 +97,62 @@ extern const FR_NAME_NUMBER http_method_table[];
 
 extern const FR_NAME_NUMBER http_body_type_table[];
 
-extern const FR_NAME_NUMBER http_content_header_table[];
+extern const FR_NAME_NUMBER http_content_type_table[];
 
 /*
  *	Structure for section configuration
  */
 typedef struct rlm_rest_section_t {
-	char const *name;
-	char *uri;
+	char const		*name;		//!< Section name.
+	char const		*uri;		//!< URI to send HTTP request to.
 
-	char *method_str;
-	http_method_t method;
+	char const		*method_str;	//!< The string version of the HTTP method.
+	http_method_t		method;		//!< What HTTP method should be used, GET, POST etc...
 
-	char *body_str;
-	http_body_type_t body;
+	char const		*body_str;	//!< The string version of the encoding/content type.
+	http_body_type_t	body;		//!< What encoding type should be used.
 
-	char *username;
-	char *password;
-	char *auth_str;
-	http_auth_type_t auth;
-	bool require_auth;
+	http_body_type_t	force_to;	//!< Override the Content-Type header in the response
+						//!< to force decoding as a particular type.
 
-	char *tls_certificate_file;
-	char *tls_private_key_file;
-	char *tls_private_key_password;
-	char *tls_ca_file;
-	char *tls_ca_path;
-	char *tls_random_file;
-	bool tls_check_cert;
-	bool tls_check_cert_cn;
+	char const		*data;		//!< Custom body data (optional).
 
-	int timeout;
-	unsigned int chunk;
+	char const		*auth_str;	//!< The string version of the Auth-Type.
+	http_auth_type_t	auth;		//!< HTTP auth type.
+	bool			require_auth;	//!< Whether HTTP-Auth is required or not.
+	char const		*username;	//!< Username used for HTTP-Auth
+	char const		*password;	//!< Password used for HTTP-Auth
+
+	char const		*tls_certificate_file;
+	char const		*tls_private_key_file;
+	char const		*tls_private_key_password;
+	char const		*tls_ca_file;
+	char const		*tls_ca_path;
+	char const		*tls_random_file;
+	bool			tls_check_cert;
+	bool			tls_check_cert_cn;
+
+	uint32_t		timeout;	//!< Timeout passed to CURL.
+	uint32_t		chunk;		//!< Max chunk-size (mainly for testing the encoders)
 } rlm_rest_section_t;
 
 /*
  *	Structure for module configuration
  */
 typedef struct rlm_rest_t {
-	char const *xlat_name;
+	char const		*xlat_name;	//!< Instance name.
 
-	char *connect_uri;
+	char const		*connect_uri;	//!< URI we attempt to connect to, to pre-establish
+						//!< TCP connections.
 
-	fr_connection_pool_t *conn_pool;
+	fr_connection_pool_t	*conn_pool;	//!< Pointer to the connection pool.
 
-	rlm_rest_section_t authorize;
-	rlm_rest_section_t authenticate;
-	rlm_rest_section_t accounting;
-	rlm_rest_section_t checksimul;
-	rlm_rest_section_t postauth;
+	rlm_rest_section_t	authorize;	//!< Configuration specific to authorisation.
+	rlm_rest_section_t	authenticate;	//!< Configuration specific to authentication.
+	rlm_rest_section_t	accounting;	//!< Configuration specific to accounting.
+	rlm_rest_section_t	checksimul;	//!< Configuration specific to simultaneous session
+						//!< checking.
+	rlm_rest_section_t	post_auth;	//!< Configuration specific to Post-auth
 } rlm_rest_t;
 
 /*
@@ -169,49 +178,58 @@ typedef enum {
 /*
  *	Outbound data context (passed to CURLOPT_READFUNCTION as CURLOPT_READDATA)
  */
-typedef struct rlm_rest_read_t {
-	rlm_rest_t 	*instance;
-	REQUEST 	*request;
-	read_state_t 	state;
+typedef struct rlm_rest_request_t {
+	rlm_rest_t		*instance;	//!< This instance of rlm_rest.
+	REQUEST			*request;	//!< Current request.
+	read_state_t		state;		//!< Encoder state
 
-	vp_cursor_t 	cursor;
+	vp_cursor_t		cursor;		//!< Cursor pointing to the start of the list to encode.
 
-	unsigned int	chunk;
-} rlm_rest_read_t;
+	size_t			chunk;		//!< Chunk size
+
+	void			*encoder;	//!< Encoder specific data.
+} rlm_rest_request_t;
 
 /*
  *	Curl inbound data context (passed to CURLOPT_WRITEFUNCTION and
  *	CURLOPT_HEADERFUNCTION as CURLOPT_WRITEDATA and CURLOPT_HEADERDATA)
  */
-typedef struct rlm_rest_write_t {
-	rlm_rest_t	 *instance;
-	REQUEST		 *request;
-	write_state_t	 state;
+typedef struct rlm_rest_response_t {
+	rlm_rest_t		*instance;	//!< This instance of rlm_rest.
+	REQUEST			*request;	//!< Current request.
+	write_state_t		state;		//!< Decoder state.
 
-	char 		 *buffer;	/* HTTP incoming raw data */
-	size_t		 alloc;		/* Space allocated for buffer */
-	size_t		 used;		/* Space used in buffer */
+	char 			*buffer;	//!< Raw incoming HTTP data.
+	size_t		 	alloc;		//!< Space allocated for buffer.
+	size_t		 	used;		//!< Space used in buffer.
 
-	int		 code;		/* HTTP Status Code */
-	http_body_type_t type;		/* HTTP Content Type */
-} rlm_rest_write_t;
+	int		 	code;		//!< HTTP Status Code.
+	http_body_type_t	type;		//!< HTTP Content Type.
+	http_body_type_t	force_to;	//!< Force decoding the body type as a particular encoding.
+
+	void			*decoder;	//!< Decoder specific data.
+} rlm_rest_response_t;
 
 /*
  *	Curl context data
  */
 typedef struct rlm_rest_curl_context_t {
-	struct curl_slist	*headers;
-	char			*body;
-	rlm_rest_read_t		read;
-	rlm_rest_write_t	write;
+	struct curl_slist	*headers;	//!< Any HTTP headers which will be sent with the
+						//!< request.
+
+	char			*body;		//!< Pointer to the buffer which contains body data/
+						//!< Only used when not performing chunked encoding.
+
+	rlm_rest_request_t	request;	//!< Request context data.
+	rlm_rest_response_t	response;	//!< Response context data.
 } rlm_rest_curl_context_t;
 
 /*
  *	Connection API handle
  */
 typedef struct rlm_rest_handle_t {
-	void	*handle;	/* Real Handle */
-	void	*ctx;		/* Context */
+	void			*handle;	//!< Real Handle.
+	rlm_rest_curl_context_t	*ctx;		//!< Context.
 } rlm_rest_handle_t;
 
 /*
@@ -241,24 +259,29 @@ int rest_request_config(rlm_rest_t *instance,
 			rlm_rest_section_t *section, REQUEST *request,
 			void *handle, http_method_t method,
 			http_body_type_t type, char const *uri,
-			char const *username, char const *password);
+			char const *username, char const *password) CC_HINT(nonnull (1,2,3,4,7));
 
 int rest_request_perform(rlm_rest_t *instance,
 			 rlm_rest_section_t *section, REQUEST *request,
 			 void *handle);
 
-int rest_request_decode(rlm_rest_t *instance,
+int rest_response_decode(rlm_rest_t *instance,
 			UNUSED rlm_rest_section_t *section, REQUEST *request,
 			void *handle);
 
 void rest_request_cleanup(rlm_rest_t *instance, rlm_rest_section_t *section,
 			  void *handle);
 
-#define rest_get_handle_code(handle)(((rlm_rest_curl_context_t*)((rlm_rest_handle_t*)handle)->ctx)->write.code)
+#define rest_get_handle_code(handle)(((rlm_rest_curl_context_t*)((rlm_rest_handle_t*)handle)->ctx)->response.code)
 
-#define rest_get_handle_type(handle)(((rlm_rest_curl_context_t*)((rlm_rest_handle_t*)handle)->ctx)->write.type)
+#define rest_get_handle_type(handle)(((rlm_rest_curl_context_t*)((rlm_rest_handle_t*)handle)->ctx)->response.type)
+
+size_t rest_get_handle_data(char const **out, rlm_rest_handle_t *handle);
 
 /*
  *	Helper functions
  */
-ssize_t rest_uri_build(char **out, rlm_rest_t *instance, rlm_rest_section_t *section, REQUEST *request);
+size_t rest_uri_escape(UNUSED REQUEST *request, char *out, size_t outlen, char const *raw, UNUSED void *arg);
+ssize_t rest_uri_build(char **out, rlm_rest_t *instance, REQUEST *request, char const *uri);
+ssize_t rest_uri_host_unescape(char **out, UNUSED rlm_rest_t *instance, REQUEST *request,
+			       void *handle, char const *uri);

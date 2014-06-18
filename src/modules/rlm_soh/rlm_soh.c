@@ -98,7 +98,7 @@ static const CONF_PARSER module_config[] = {
 	/*
 	 * Do SoH over DHCP?
 	 */
-	{ "dhcp",    PW_TYPE_BOOLEAN, offsetof(rlm_soh_t,dhcp), NULL, "no" },
+	{ "dhcp", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_soh_t, dhcp), "no" },
 
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
@@ -118,11 +118,14 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	return 0;
 }
 
-static rlm_rcode_t mod_post_auth(UNUSED void * instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(UNUSED void * instance, UNUSED REQUEST *request)
 {
 #ifdef WITH_DHCP
 	int rcode;
 	VALUE_PAIR *vp;
+	rlm_soh_t *inst = instance;
+
+	if (!inst->dhcp) return RLM_MODULE_NOOP;
 
 	vp = pairfind(request->packet->vps, 43, DHCP_MAGIC_VENDOR, TAG_ANY);
 	if (vp) {
@@ -181,7 +184,7 @@ static rlm_rcode_t mod_post_auth(UNUSED void * instance, REQUEST *request)
 	return RLM_MODULE_NOOP;
 }
 
-static rlm_rcode_t mod_authorize(UNUSED void * instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void * instance, REQUEST *request)
 {
 	VALUE_PAIR *vp;
 	int rv;

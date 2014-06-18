@@ -31,37 +31,32 @@ RCSID("$Id$")
 #define  REALM_FORMAT_SUFFIX   1
 
 typedef struct realm_config_t {
-  int		format;
-  char		*formatstring;
-  char		*delim;
-  bool		ignore_default;
-  bool		ignore_null;
-  char		*default_community;
-  char		*rp_realm;
-  char		*trust_router;
-  unsigned int	tr_port;
+	int		format;
+	char const	*format_string;
+	char const	*delim;
+	bool		ignore_default;
+	bool		ignore_null;
+	char		const *default_community;
+	char		const *rp_realm;
+	char const 		*trust_router;
+	unsigned int	tr_port;
 } realm_config_t;
 
 #define stringify(s) #s
 
 static CONF_PARSER module_config[] = {
-  { "format", PW_TYPE_STRING_PTR,
-    offsetof(realm_config_t,formatstring), NULL, "suffix" },
-  { "delimiter", PW_TYPE_STRING_PTR,
-    offsetof(realm_config_t,delim), NULL, "@" },
-  { "ignore_default", PW_TYPE_BOOLEAN,
-    offsetof(realm_config_t,ignore_default), NULL, "no" },
-  { "ignore_null", PW_TYPE_BOOLEAN,
-    offsetof(realm_config_t,ignore_null), NULL, "no" },
-  { "default_community", PW_TYPE_STRING_PTR,
-    offsetof(realm_config_t,default_community), NULL, "none" },
-  { "rp_realm", PW_TYPE_STRING_PTR,
-    offsetof(realm_config_t,rp_realm), NULL, "none" },
-  { "trust_router", PW_TYPE_STRING_PTR,
-    offsetof(realm_config_t,trust_router), NULL, "none" },
-  { "tr_port", PW_TYPE_INTEGER,
-    offsetof(realm_config_t,tr_port), NULL, "0" },
-  //    offsetof(realm_config_t,tr_port), NULL, (stringify(TID_PORT)) },
+  { "format", FR_CONF_OFFSET(PW_TYPE_STRING, realm_config_t, format_string), "suffix" },
+  { "delimiter", FR_CONF_OFFSET(PW_TYPE_STRING, realm_config_t, delim), "@" },
+  { "ignore_default", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, realm_config_t, ignore_default), "no" },
+  { "ignore_null", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, realm_config_t, ignore_null), "no" },
+{ "default_community", FR_CONF_OFFSET(PW_TYPE_STRING,
+    realm_config_t,default_community),  "none" },
+{ "rp_realm", FR_CONF_OFFSET(PW_TYPE_STRING,
+    realm_config_t,rp_realm),  "none" },
+{ "trust_router", FR_CONF_OFFSET(PW_TYPE_STRING,
+    realm_config_t,trust_router),  "none" },
+{ "tr_port", FR_CONF_OFFSET(PW_TYPE_INTEGER,
+    realm_config_t,tr_port),  "0" },
   { NULL, -1, 0, NULL, NULL }    /* end the list */
 };
 
@@ -101,8 +96,8 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 #endif
 	    ) {
 
-		RDEBUG2("Proxy reply, or no User-Name.  Ignoring.");
-		return RLM_MODULE_OK;
+		RDEBUG2("Proxy reply, or no User-Name.  Ignoring");
+		return RLM_MODULE_NOOP;
 	}
 
 	/*
@@ -111,15 +106,15 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 	 */
 
 	if (pairfind(request->packet->vps, PW_REALM, 0, TAG_ANY) != NULL ) {
-		RDEBUG2("Request already has destination realm set.  Ignoring.");
-		return RLM_MODULE_OK;
+		RDEBUG2("Request already has destination realm set.  Ignoring");
+		return RLM_MODULE_NOOP;
 	}
 
 	/*
 	 *	We will be modifing this later, so we want our own copy
 	 *	of it.
 	 */
-	namebuf = talloc_strdup(request,  request->username->vp_strvalue);
+	namebuf = talloc_typed_strdup(request,  request->username->vp_strvalue);
 	username = namebuf;
 
 	switch(inst->format) {
@@ -184,7 +179,7 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 	}
 	if( inst->ignore_default &&
 	    (strcmp(realm->name, "DEFAULT")) == 0) {
-		RDEBUG2("Found DEFAULT, but skipping due to config.");
+		RDEBUG2("Found DEFAULT, but skipping due to config");
 		talloc_free(namebuf);
 		return RLM_MODULE_NOOP;
 	}
@@ -201,7 +196,7 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 		 *
 		 */
 		if (request->username->da->attr != PW_STRIPPED_USER_NAME) {
-			vp = radius_paircreate(request, &request->packet->vps,
+			vp = radius_paircreate(request->packet, &request->packet->vps,
 					       PW_STRIPPED_USER_NAME, 0);
 			RDEBUG2("Adding Stripped-User-Name = \"%s\"", username);
 		} else {
@@ -226,7 +221,7 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 	RDEBUG2("Adding Realm = \"%s\"", realmname);
 
 	talloc_free(namebuf);
-	realmname = username = NULL;
+	username = NULL;
 
 	/*
 	 *	Figure out what to do with the request.
@@ -235,14 +230,14 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 	default:
 		RDEBUG2("Unknown packet code %d\n",
 		       request->packet->code);
-		return RLM_MODULE_OK;		/* don't do anything */
+		return RLM_MODULE_NOOP;
 
 		/*
 		 *	Perhaps accounting proxying was turned off.
 		 */
-	case PW_ACCOUNTING_REQUEST:
+	case PW_CODE_ACCOUNTING_REQUEST:
 		if (!realm->acct_pool) {
-			RDEBUG2("Accounting realm is LOCAL.");
+			RDEBUG2("Accounting realm is LOCAL");
 			return RLM_MODULE_OK;
 		}
 		break;
@@ -250,9 +245,9 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 		/*
 		 *	Perhaps authentication proxying was turned off.
 		 */
-	case PW_AUTHENTICATION_REQUEST:
+	case PW_CODE_AUTHENTICATION_REQUEST:
 		if (!realm->auth_pool) {
-			RDEBUG2("Authentication realm is LOCAL.");
+			RDEBUG2("Authentication realm is LOCAL");
 			return RLM_MODULE_OK;
 		}
 		break;
@@ -266,7 +261,7 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 	 *	Skip additional checks if it's not an accounting
 	 *	request.
 	 */
-	if (request->packet->code != PW_ACCOUNTING_REQUEST) {
+	if (request->packet->code != PW_CODE_ACCOUNTING_REQUEST) {
 		*returnrealm = realm;
 		return RLM_MODULE_UPDATED;
 	}
@@ -355,16 +350,15 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	/* initialize the trust router integration code */
 	if (tr_init() < 0)
 	       return -1;
-	if (strcasecmp(inst->formatstring, "suffix") == 0) {
-
+	if (strcasecmp(inst->format_string, "suffix") == 0) {
 	     inst->format = REALM_FORMAT_SUFFIX;
 
-	} else if (strcasecmp(inst->formatstring, "prefix") == 0) {
+	} else if (strcasecmp(inst->format_string, "prefix") == 0) {
 	     inst->format = REALM_FORMAT_PREFIX;
 
 	} else {
 		cf_log_err_cs(conf, "Invalid value \"%s\" for format",
-			      inst->formatstring);
+			      inst->format_string);
 	     return -1;
 	}
 
@@ -385,7 +379,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
  *
  *  This should very nearly duplicate the old proxy_send() code
  */
-static rlm_rcode_t mod_authorize(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *request)
 {
 	rlm_rcode_t rcode;
 	REALM *realm;
@@ -413,7 +407,7 @@ static rlm_rcode_t mod_authorize(void *instance, REQUEST *request)
  * This does the exact same thing as the mod_authorize, it's just called
  * differently.
  */
-static rlm_rcode_t mod_preacct(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_preacct(void *instance, REQUEST *request)
 {
 	int rcode;
 	REALM *realm;
@@ -446,14 +440,14 @@ static rlm_rcode_t mod_preacct(void *instance, REQUEST *request)
  *	CoA realms via Operator-Name.  Because the realm isn't in a
  *	User-Name, concepts like "prefix" and "suffix' don't matter.
  */
-static rlm_rcode_t realm_recv_coa(UNUSED void *instance, REQUEST *request)
+static rlm_rcode_t mod_realm_recv_coa(UNUSED void *instance, REQUEST *request)
 {
 	VALUE_PAIR *vp;
 	REALM *realm;
 
 	if (pairfind(request->packet->vps, PW_REALM, 0, TAG_ANY) != NULL) {
-		RDEBUG2("Request already has destination realm set.  Ignoring.");
-		return RLM_MODULE_OK;
+		RDEBUG2("Request already has destination realm set.  Ignoring");
+		return RLM_MODULE_NOOP;
 	}
 
 	vp = pairfind(request->packet->vps, PW_OPERATOR_NAME, 0, TAG_ANY);
@@ -479,7 +473,7 @@ static rlm_rcode_t realm_recv_coa(UNUSED void *instance, REQUEST *request)
 
 
 	if (!realm->coa_pool) {
-		RDEBUG2("CoA realm is LOCAL.");
+		RDEBUG2("CoA realm is LOCAL");
 		return RLM_MODULE_OK;
 	}
 
@@ -498,7 +492,7 @@ static rlm_rcode_t realm_recv_coa(UNUSED void *instance, REQUEST *request)
 module_t rlm_realm = {
 	RLM_MODULE_INIT,
 	"realm",
-	RLM_TYPE_CHECK_CONFIG_SAFE | RLM_TYPE_HUP_SAFE,   	/* type */
+	RLM_TYPE_HUP_SAFE,   	/* type */
 	sizeof(struct realm_config_t),
 	module_config,
 	mod_instantiate,	       	/* instantiation */
@@ -513,8 +507,9 @@ module_t rlm_realm = {
 		NULL,			/* post-proxy */
 		NULL			/* post-auth */
 #ifdef WITH_COA
-		, realm_recv_coa,	/* recv-coa */
+		, mod_realm_recv_coa,	/* recv-coa */
 		NULL			/* send-coa */
 #endif
 	},
 };
+

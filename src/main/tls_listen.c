@@ -72,26 +72,17 @@ static void tls_socket_close(rad_listen_t *listener)
 {
 	listen_socket_t *sock = listener->data;
 
+	SSL_shutdown(sock->ssn->ssl);
+
+
 	listener->status = RAD_LISTEN_STATUS_EOL;
 	listener->tls = NULL; /* parent owns this! */
-
-	if (sock->parent) {
-		/*
-		 *	Decrement the number of connections.
-		 */
-		if (sock->parent->limit.num_connections > 0) {
-			sock->parent->limit.num_connections--;
-		}
-		if (sock->client->limit.num_connections > 0) {
-			sock->client->limit.num_connections--;
-		}
-	}
 
 	/*
 	 *	Tell the event handler that an FD has disappeared.
 	 */
 	DEBUG("Client has closed connection");
-	event_new_fd(listener);
+	radius_update_listener(listener);
 
 	/*
 	 *	Do NOT free the listener here.  It's in use by
@@ -102,7 +93,7 @@ static void tls_socket_close(rad_listen_t *listener)
 	 */
 }
 
-static int tls_socket_write(rad_listen_t *listener, REQUEST *request)
+static int CC_HINT(nonnull) tls_socket_write(rad_listen_t *listener, REQUEST *request)
 {
 	uint8_t *p;
 	ssize_t rcode;
@@ -115,7 +106,7 @@ static int tls_socket_write(rad_listen_t *listener, REQUEST *request)
 		rcode = write(request->packet->sockfd, p,
 			      (sock->ssn->dirty_out.data + sock->ssn->dirty_out.used) - p);
 		if (rcode <= 0) {
-			RDEBUG("Error writing to TLS socket: %s", strerror(errno));
+			RDEBUG("Error writing to TLS socket: %s", fr_syserror(errno));
 
 			tls_socket_close(listener);
 			return 0;
@@ -131,7 +122,7 @@ static int tls_socket_write(rad_listen_t *listener, REQUEST *request)
 
 static int tls_socket_recv(rad_listen_t *listener)
 {
-	int doing_init = false;
+	bool doing_init = false;
 	ssize_t rcode;
 	RADIUS_PACKET *packet;
 	REQUEST *request;
@@ -191,6 +182,7 @@ static int tls_socket_recv(rad_listen_t *listener)
 		(void) talloc_steal(sock, sock->ssn);
 		SSL_set_ex_data(sock->ssn->ssl, FR_TLS_EX_INDEX_REQUEST, (void *)request);
 		SSL_set_ex_data(sock->ssn->ssl, FR_TLS_EX_INDEX_CERTS, (void *)&request->packet->vps);
+		SSL_set_ex_data(sock->ssn->ssl, FR_TLS_EX_INDEX_TALLOC, sock->parent);
 
 		doing_init = true;
 	}
@@ -209,13 +201,14 @@ static int tls_socket_recv(rad_listen_t *listener)
 		     sizeof(sock->ssn->dirty_in.data));
 	if ((rcode < 0) && (errno == ECONNRESET)) {
 	do_close:
-		PTHREAD_MUTEX_UNLOCK(&sock->mutex);
+		DEBUG("Closing TLS socket from client port %u", sock->other_port);
 		tls_socket_close(listener);
+		PTHREAD_MUTEX_UNLOCK(&sock->mutex);
 		return 0;
 	}
 
 	if (rcode < 0) {
-		RDEBUG("Error reading TLS socket: %s", strerror(errno));
+		RDEBUG("Error reading TLS socket: %s", fr_syserror(errno));
 		goto do_close;
 	}
 
@@ -293,9 +286,12 @@ app:
 	packet->vps = NULL;
 	PTHREAD_MUTEX_UNLOCK(&sock->mutex);
 
-	if (!rad_packet_ok(packet, 0)) {
+	if (!rad_packet_ok(packet, 0, NULL)) {
 		RDEBUG("Received bad packet: %s", fr_strerror());
+		DEBUG("Closing TLS socket from client");
+		PTHREAD_MUTEX_LOCK(&sock->mutex);
 		tls_socket_close(listener);
+		PTHREAD_MUTEX_UNLOCK(&sock->mutex);
 		return 0;	/* do_close unlocks the mutex */
 	}
 
@@ -305,7 +301,7 @@ app:
 	if (fr_debug_flag) {
 		char host_ipaddr[128];
 
-		if ((packet->code > 0) && (packet->code < FR_MAX_PACKET_CODE)) {
+		if (is_radius_code(packet->code)) {
 			RDEBUG("tls_recv: %s packet from host %s port %d, id=%d, length=%d",
 			       fr_packet_codes[packet->code],
 			       inet_ntop(packet->src_ipaddr.af,
@@ -360,14 +356,14 @@ int dual_tls_recv(rad_listen_t *listener)
 	 *	set.
 	 */
 	switch(packet->code) {
-	case PW_AUTHENTICATION_REQUEST:
+	case PW_CODE_AUTHENTICATION_REQUEST:
 		if (listener->type != RAD_LISTEN_AUTH) goto bad_packet;
 		FR_STATS_INC(auth, total_requests);
 		fun = rad_authenticate;
 		break;
 
 #ifdef WITH_ACCOUNTING
-	case PW_ACCOUNTING_REQUEST:
+	case PW_CODE_ACCOUNTING_REQUEST:
 		if (listener->type != RAD_LISTEN_ACCT) {
 			/*
 			 *	Allow auth + dual.  Disallow
@@ -383,10 +379,10 @@ int dual_tls_recv(rad_listen_t *listener)
 		break;
 #endif
 
-	case PW_STATUS_SERVER:
-		if (!mainconfig.status_server) {
+	case PW_CODE_STATUS_SERVER:
+		if (!main_config.status_server) {
 			FR_STATS_INC(auth, total_unknown_types);
-			WDEBUG("Ignoring Status-Server request due to security configuration");
+			WARN("Ignoring Status-Server request due to security configuration");
 			rad_free(&sock->packet);
 			request->packet = NULL;
 			return 0;
@@ -426,6 +422,8 @@ int dual_tls_send(rad_listen_t *listener, REQUEST *request)
 {
 	listen_socket_t *sock = listener->data;
 
+	VERIFY_REQUEST(request);
+
 	rad_assert(request->listener == listener);
 	rad_assert(listener->send == dual_tls_send);
 
@@ -444,7 +442,7 @@ int dual_tls_send(rad_listen_t *listener, REQUEST *request)
 	 */
 	if (rad_encode(request->reply, request->packet,
 		       request->client->secret) < 0) {
-		RDEBUG("Failed encoding packet: %s", fr_strerror());
+		RERROR("Failed encoding packet: %s", fr_strerror());
 		return 0;
 	}
 
@@ -453,7 +451,7 @@ int dual_tls_send(rad_listen_t *listener, REQUEST *request)
 	 */
 	if (rad_sign(request->reply, request->packet,
 		       request->client->secret) < 0) {
-		RDEBUG("Failed signing packet: %s", fr_strerror());
+		RERROR("Failed signing packet: %s", fr_strerror());
 		return 0;
 	}
 
@@ -484,83 +482,151 @@ int dual_tls_send(rad_listen_t *listener, REQUEST *request)
 
 
 #ifdef WITH_PROXY
-int proxy_tls_recv(rad_listen_t *listener)
+/*
+ *	Read from the SSL socket.  Safe with either blocking or
+ *	non-blocking IO.  This level of complexity is probably not
+ *	necessary, as each packet gets put into one SSL application
+ *	record.  When SSL has a full record, we should be able to read
+ *	the entire packet via one SSL_read().
+ *
+ *	When SSL has a partial record, SSL_read() will return
+ *	WANT_READ or WANT_WRITE, and zero application data.
+ *
+ *	Called with the mutex held.
+ */
+static ssize_t proxy_tls_read(rad_listen_t *listener)
 {
 	int rcode;
 	size_t length;
-	listen_socket_t *sock = listener->data;
-	char buffer[256];
-	RADIUS_PACKET *packet;
 	uint8_t *data;
+	listen_socket_t *sock = listener->data;
 
 	/*
 	 *	Get the maximum size of data to receive.
 	 */
 	if (!sock->data) sock->data = talloc_array(sock, uint8_t,
 						   sock->ssn->offset);
+
 	data = sock->data;
 
-	if (listener->status != RAD_LISTEN_STATUS_KNOWN) return 0;
-	DEBUG3("Proxy SSL socket has data to read");
-	PTHREAD_MUTEX_LOCK(&sock->mutex);
-redo:
-	rcode = SSL_read(sock->ssn->ssl, data, 4);
-	if (rcode <= 0) {
-		int err = SSL_get_error(sock->ssn->ssl, rcode);
-		switch (err) {
-		case SSL_ERROR_WANT_READ:
-		case SSL_ERROR_WANT_WRITE:
-			goto redo;
+	if (sock->partial < 4) {
+		rcode = SSL_read(sock->ssn->ssl, data + sock->partial,
+				 4 - sock->partial);
+		if (rcode <= 0) {
+			int err = SSL_get_error(sock->ssn->ssl, rcode);
+			switch (err) {
+			case SSL_ERROR_WANT_READ:
+			case SSL_ERROR_WANT_WRITE:
+				return 0; /* do some more work later */
 
-		case SSL_ERROR_ZERO_RETURN:
-			/* remote end sent close_notify, send one back */
-			SSL_shutdown(sock->ssn->ssl);
+			case SSL_ERROR_ZERO_RETURN:
+				/* remote end sent close_notify, send one back */
+				SSL_shutdown(sock->ssn->ssl);
 
-		case SSL_ERROR_SYSCALL:
-		do_close:
-			PTHREAD_MUTEX_UNLOCK(&sock->mutex);
-			tls_socket_close(listener);
-			return 0;
+			case SSL_ERROR_SYSCALL:
+			do_close:
+				return -1;
 
-		default:
-			while ((err = ERR_get_error())) {
-				DEBUG("proxy recv says %s",
-				      ERR_error_string(err, NULL));
+			default:
+				while ((err = ERR_get_error())) {
+					DEBUG("proxy recv says %s",
+					      ERR_error_string(err, NULL));
+				}
+
+				goto do_close;
 			}
-
-			goto do_close;
 		}
-	}
+
+		sock->partial = rcode;
+	} /* try reading the packet header */
+
+	if (sock->partial < 4) return 0; /* read more data */
 
 	length = (data[2] << 8) | data[3];
-	DEBUG3("Proxy received header saying we have a packet of %u bytes",
-	       (unsigned int) length);
 
-	if (length > sock->ssn->offset) {
-		INFO("Received packet will be too large! Set \"fragment_size=%u\"",
-		       (data[2] << 8) | data[3]);
-		goto do_close;
-	}
+	/*
+	 *	Do these checks only once, when we read the header.
+	 */
+	if (sock->partial == 4) {
+		DEBUG3("Proxy received header saying we have a packet of %u bytes",
+		       (unsigned int) length);
 
-	rcode = SSL_read(sock->ssn->ssl, data + 4, length);
-	if (rcode <= 0) {
-		switch (SSL_get_error(sock->ssn->ssl, rcode)) {
-		case SSL_ERROR_WANT_READ:
-		case SSL_ERROR_WANT_WRITE:
-			break;
-
-
-		case SSL_ERROR_ZERO_RETURN:
-			/* remote end sent close_notify, send one back */
-			SSL_shutdown(sock->ssn->ssl);
-			goto do_close;
-		default:
+		/*
+		 *	FIXME: allocate a RADIUS_PACKET, and set
+		 *	"data" to be as large as necessary.
+		 */
+		if (length > sock->ssn->offset) {
+			INFO("Received packet will be too large! Set \"fragment_size = %u\"",
+			     (data[2] << 8) | data[3]);
 			goto do_close;
 		}
-
-
 	}
+
+	/*
+	 *	Try to read some more.
+	 */
+	if (sock->partial < length) {
+		rcode = SSL_read(sock->ssn->ssl, data + sock->partial,
+				 length - sock->partial);
+		if (rcode <= 0) {
+			switch (SSL_get_error(sock->ssn->ssl, rcode)) {
+			case SSL_ERROR_WANT_READ:
+			case SSL_ERROR_WANT_WRITE:
+				return 0;
+
+			case SSL_ERROR_ZERO_RETURN:
+				/* remote end sent close_notify, send one back */
+				SSL_shutdown(sock->ssn->ssl);
+				goto do_close;
+			default:
+				goto do_close;
+			}
+		}
+
+		sock->partial += rcode;
+	}
+
+	/*
+	 *	If we're not done, say so.
+	 *
+	 *	Otherwise, reset the partially read data flag, and say
+	 *	we have a packet.
+	 */
+	if (sock->partial < length) {
+		return 0;
+	}
+
+	sock->partial = 0;	/* we've now read the packet */
+	return length;
+}
+
+
+int proxy_tls_recv(rad_listen_t *listener)
+{
+	listen_socket_t *sock = listener->data;
+	char buffer[256];
+	RADIUS_PACKET *packet;
+	uint8_t *data;
+	ssize_t data_len;
+
+	if (listener->status != RAD_LISTEN_STATUS_KNOWN) return 0;
+
+	DEBUG3("Proxy SSL socket has data to read");
+	PTHREAD_MUTEX_LOCK(&sock->mutex);
+	data_len = proxy_tls_read(listener);
 	PTHREAD_MUTEX_UNLOCK(&sock->mutex);
+
+	if (data_len < 0) {
+		DEBUG("Closing TLS socket to home server");
+		PTHREAD_MUTEX_LOCK(&sock->mutex);
+		tls_socket_close(listener);
+		PTHREAD_MUTEX_UNLOCK(&sock->mutex);
+		return 0;
+	}
+
+	if (data_len == 0) return 0; /* not done yet */
+
+	data = sock->data;
 
 	packet = rad_alloc(sock, 0);
 	packet->sockfd = listener->fd;
@@ -570,7 +636,7 @@ redo:
 	packet->dst_port = sock->my_port;
 	packet->code = data[0];
 	packet->id = data[1];
-	packet->data_len = length;
+	packet->data_len = data_len;
 	packet->data = talloc_array(packet, uint8_t, packet->data_len);
 	memcpy(packet->data, data, packet->data_len);
 	memcpy(packet->vector, packet->data + 4, 16);
@@ -579,13 +645,13 @@ redo:
 	 *	FIXME: Client MIB updates?
 	 */
 	switch(packet->code) {
-	case PW_AUTHENTICATION_ACK:
-	case PW_ACCESS_CHALLENGE:
-	case PW_AUTHENTICATION_REJECT:
+	case PW_CODE_AUTHENTICATION_ACK:
+	case PW_CODE_ACCESS_CHALLENGE:
+	case PW_CODE_AUTHENTICATION_REJECT:
 		break;
 
 #ifdef WITH_ACCOUNTING
-	case PW_ACCOUNTING_RESPONSE:
+	case PW_CODE_ACCOUNTING_RESPONSE:
 		break;
 #endif
 
@@ -610,12 +676,16 @@ redo:
 	return 1;
 }
 
+
 int proxy_tls_send(rad_listen_t *listener, REQUEST *request)
 {
 	int rcode;
 	listen_socket_t *sock = listener->data;
 
-	if (listener->status != RAD_LISTEN_STATUS_KNOWN) return 0;
+	VERIFY_REQUEST(request);
+
+	if ((listener->status != RAD_LISTEN_STATUS_INIT) &&
+	    (listener->status != RAD_LISTEN_STATUS_KNOWN)) return 0;
 
 	/*
 	 *	Normal proxying calls us with the data already
@@ -630,16 +700,26 @@ int proxy_tls_send(rad_listen_t *listener, REQUEST *request)
 	DEBUG3("Proxy is writing %u bytes to SSL",
 	       (unsigned int) request->proxy->data_len);
 	PTHREAD_MUTEX_LOCK(&sock->mutex);
-	while ((rcode = SSL_write(sock->ssn->ssl, request->proxy->data,
-				  request->proxy->data_len)) < 0) {
+	rcode = SSL_write(sock->ssn->ssl, request->proxy->data,
+			  request->proxy->data_len);
+	if (rcode < 0) {
 		int err;
-		while ((err = ERR_get_error())) {
+
+		err = ERR_get_error();
+		switch (err) {
+		case SSL_ERROR_NONE:
+		case SSL_ERROR_WANT_READ:
+		case SSL_ERROR_WANT_WRITE:
+			break;	/* let someone else retry */
+
+		default:
 			DEBUG("proxy SSL_write says %s",
 			      ERR_error_string(err, NULL));
+			DEBUG("Closing TLS socket to home server");
+			tls_socket_close(listener);
+			PTHREAD_MUTEX_UNLOCK(&sock->mutex);
+			return 0;
 		}
-		PTHREAD_MUTEX_UNLOCK(&sock->mutex);
-		tls_socket_close(listener);
-		return 0;
 	}
 	PTHREAD_MUTEX_UNLOCK(&sock->mutex);
 

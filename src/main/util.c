@@ -26,7 +26,6 @@ RCSID("$Id$")
 #include <freeradius-devel/rad_assert.h>
 
 #include <ctype.h>
-#include <signal.h>
 
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -243,45 +242,6 @@ int request_opaque_free(REQUEST *request)
 }
 
 /*
- *	Check a filename for sanity.
- *
- *	Allow only uppercase/lowercase letters, numbers, and '-_/.'
- */
-int rad_checkfilename(char const *filename)
-{
-	if (strspn(filename, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_/.") == strlen(filename)) {
-		return 0;
-	}
-
-	return -1;
-}
-
-/** Check if file exists
- *
- * @param filename to check.
- * @return 0 if the file does not exist, 1 if the file exists, -1 if the file
- *	exists but there was an error opening it. errno value should be usable
- *	for error messages.
- */
-int rad_file_exists(char const *filename)
-{
-	int des;
-	int ret = 1;
-
-	if ((des = open(filename, O_RDONLY)) == -1) {
-		if (errno == ENOENT) {
-			ret = 0;
-		} else {
-			ret = -1;
-		}
-	} else {
-		close(des);
-	}
-
-	return ret;
-}
-
-/*
  *	Create possibly many directories.
  *
  *	Note that the input directory name is NOT a constant!
@@ -292,60 +252,46 @@ int rad_mkdir(char *directory, mode_t mode)
 {
 	int rcode;
 	char *p;
-	struct stat st;
 
 	/*
-	 *	If the directory exists, don't do anything.
+	 *	Try to make the directory.  If it exists, chmod it.
+	 *	If a path doesn't exist, that's OK.  Otherwise
+	 *	return with an error.
 	 */
-	if (stat(directory, &st) == 0) {
-		return 0;
-	}
+	rcode = mkdir(directory, mode & 0777);
+	if (rcode < 0) {
+		if (errno == EEXIST) {
+			return chmod(directory, mode);
+		}
 
-	/*
-	 *	Look for the LAST directory name.  Try to create that,
-	 *	failing on any error.
-	 */
-	p = strrchr(directory, FR_DIR_SEP);
-	if (p != NULL) {
-		*p = '\0';
-		rcode = rad_mkdir(directory, mode);
-
-		/*
-		 *	On error, we leave the directory name as the
-		 *	one which caused the error.
-		 */
-		if (rcode < 0) {
-			if (errno == EEXIST) return 0;
+		if (errno != ENOENT) {
 			return rcode;
 		}
 
 		/*
-		 *	Reset the directory delimiter, and go ask
-		 *	the system to make the directory.
+		 *	A component in the directory path doesn't
+		 *	exist.  Look for the LAST directory name.  Try
+		 *	to create that.  If there's an error, we leave
+		 *	the directory path as the one at which the
+		 *	error occured.
+		 */
+		p = strrchr(directory, FR_DIR_SEP);
+		if (!p || (p == directory)) return -1;
+
+		*p = '\0';
+		rcode = rad_mkdir(directory, mode);
+		if (rcode < 0) return rcode;
+
+		/*
+		 *	Reset the directory path, and try again to
+		 *	make the directory.
 		 */
 		*p = FR_DIR_SEP;
-	} else {
-		return 0;
-	}
+		rcode = mkdir(directory, mode & 0777);
+		if (rcode < 0) return rcode;
+	} /* else we successfully created the directory */
 
-	/*
-	 *	Having done everything successfully, we do the
-	 *	system call to actually go create the directory.
-	 */
-	rcode = mkdir(directory, mode & 0777);
-	if (rcode < 0) {
-		return rcode;
-	}
-
-	/*
-	 *	Set things like sticky bits that aren't supported by
-	 *	mkdir.
-	 */
-	if (mode & ~0777) {
-		rcode = chmod(directory, mode);
-	}
-
-	return rcode;
+	return chmod(directory, mode);
 }
 
 
@@ -367,13 +313,6 @@ void *rad_malloc(size_t size)
 }
 
 
-void *rad_calloc(size_t size)
-{
-	void *ptr = rad_malloc(size);
-	memset(ptr, 0, size);
-	return ptr;
-}
-
 void rad_const_free(void const *ptr)
 {
 	void *tmp;
@@ -389,11 +328,11 @@ void rad_const_free(void const *ptr)
  *
  */
 
-void NEVER_RETURNS rad_assert_fail (char const *file, unsigned int line,
-				    char const *expr)
+void NEVER_RETURNS rad_assert_fail(char const *file, unsigned int line, char const *expr)
 {
 	ERROR("ASSERT FAILED %s[%u]: %s", file, line, expr);
-	abort();
+	fr_fault(SIGABRT);
+	fr_exit_now(1);
 }
 
 
@@ -419,11 +358,11 @@ REQUEST *request_alloc(TALLOC_CTX *ctx)
 	request->username = NULL;
 	request->password = NULL;
 	request->timestamp = time(NULL);
-	request->options = debug_flag; /* Default to global debug level */
+	request->log.lvl = debug_flag; /* Default to global debug level */
 
 	request->module = "";
 	request->component = "<core>";
-	request->radlog = radlog_request;
+	request->log.func = vradlog_request;
 
 	return request;
 }
@@ -458,13 +397,13 @@ REQUEST *request_alloc_fake(REQUEST *request)
 	 */
 	fake->server = request->server;
 
-	fake->packet = rad_alloc(request, 1);
+	fake->packet = rad_alloc(fake, 1);
 	if (!fake->packet) {
 		request_free(&fake);
 		return NULL;
 	}
 
-	fake->reply = rad_alloc(request, 0);
+	fake->reply = rad_alloc(fake, 0);
 	if (!fake->reply) {
 		request_free(&fake);
 		return NULL;
@@ -511,8 +450,7 @@ REQUEST *request_alloc_fake(REQUEST *request)
 	/*
 	 *	Copy debug information.
 	 */
-	fake->options = request->options;
-	fake->radlog = request->radlog;
+	memcpy(&(fake->log), &(request->log), sizeof(fake->log));
 
 	return fake;
 }
@@ -525,8 +463,8 @@ REQUEST *request_alloc_coa(REQUEST *request)
 	/*
 	 *	Originate CoA requests only when necessary.
 	 */
-	if ((request->packet->code != PW_AUTHENTICATION_REQUEST) &&
-	    (request->packet->code != PW_ACCOUNTING_REQUEST)) return NULL;
+	if ((request->packet->code != PW_CODE_AUTHENTICATION_REQUEST) &&
+	    (request->packet->code != PW_CODE_ACCOUNTING_REQUEST)) return NULL;
 
 	request->coa = request_alloc_fake(request);
 	if (!request->coa) return NULL;
@@ -663,9 +601,9 @@ int rad_copy_variable(char *to, char const *from)
 #define USEC 1000000
 #endif
 
-int rad_pps(int *past, int *present, time_t *then, struct timeval *now)
+uint32_t rad_pps(uint32_t *past, uint32_t *present, time_t *then, struct timeval *now)
 {
-	int pps;
+	uint32_t pps;
 
 	if (*then != now->tv_sec) {
 		*then = now->tv_sec;
@@ -813,7 +751,7 @@ int rad_expand_xlat(REQUEST *request, char const *cmd,
 	 *	We have to have SOMETHING, at least.
 	 */
 	if (argc <= 0) {
-		ERROR("rad_expand_xlat: Empty command line.");
+		ERROR("rad_expand_xlat: Empty command line");
 		return -1;
 	}
 
@@ -854,7 +792,7 @@ int rad_expand_xlat(REQUEST *request, char const *cmd,
 		left--;
 
 		if (left <= 0) {
-			ERROR("rad_expand_xlat: Ran out of space while expanding arguments.");
+			ERROR("rad_expand_xlat: Ran out of space while expanding arguments");
 			return -1;
 		}
 	}
@@ -866,8 +804,8 @@ int rad_expand_xlat(REQUEST *request, char const *cmd,
 const FR_NAME_NUMBER pair_lists[] = {
 	{ "request",		PAIR_LIST_REQUEST },
 	{ "reply",		PAIR_LIST_REPLY },
+	{ "control",		PAIR_LIST_CONTROL },		/* New name should have priority */
 	{ "config",		PAIR_LIST_CONTROL },
-	{ "control",		PAIR_LIST_CONTROL },
 #ifdef WITH_PROXY
 	{ "proxy-request",	PAIR_LIST_PROXY_REQUEST },
 	{ "proxy-reply",	PAIR_LIST_PROXY_REPLY },
@@ -905,10 +843,10 @@ const FR_NAME_NUMBER request_refs[] = {
  * @see dict_attrbyname
  *
  * @param[in,out] name of attribute.
- * @param[in] unknown the list to return if no qualifiers were found.
+ * @param[in] default_list the list to return if no qualifiers were found.
  * @return PAIR_LIST_UNKOWN if qualifiers couldn't be resolved to a list.
  */
-pair_lists_t radius_list_name(char const **name, pair_lists_t unknown)
+pair_lists_t radius_list_name(char const **name, pair_lists_t default_list)
 {
 	char const *p = *name;
 	char const *q;
@@ -918,34 +856,79 @@ pair_lists_t radius_list_name(char const **name, pair_lists_t unknown)
 	rad_assert(name && *name);
 
 	/*
-	 *	We couldn't determine the list if:
-	 *
-	 * 	A colon delimiter was found, but the next char was a
-	 *	number, indicating a tag, not a list qualifier.
-	 *
-	 *	No colon was found and the first char was upper case
-	 *	indicating an attribute.
-	 *
+	 *	Unfortunately, ':' isn't a definitive separator for
+	 *	the list name.  We may have numeric tags, too.
 	 */
 	q = strchr(p, ':');
-	if (((q && (q[1] >= '0') && (q[1] <= '9'))) ||
-	    (!q && isupper((int) *p))) {
-		return unknown;
-	}
-
 	if (q) {
-		*name = (q + 1);	/* Consume the list and delimiter */
-		return fr_substr2int(pair_lists, p, PAIR_LIST_UNKNOWN, (q - p));
+		/*
+		 *	Check for tagged attributes.  They have
+		 *	"name:tag", where tag is a decimal number.
+		 *	Valid tags are invalid attributes, so that's
+		 *	OK.
+		 *
+		 *	Also allow "name:tag[#]" as a tag.
+		 *
+		 *	However, "request:" is allowed, too, and
+		 *	shouldn't be interpreted as a tag.
+		 *
+		 *	We do this check first rather than just
+		 *	looking up the request name, because this
+		 *	check is cheap, and looking up the request
+		 *	name is expensive.
+		 */
+		if (isdigit((int) q[1])) {
+			char const *d = q + 1;
+
+			while (isdigit((int) *d)) {
+				d++;
+			}
+
+			/*
+			 *	Return the DEFAULT list as supplied by
+			 *	the caller.  This is usually
+			 *	PAIRLIST_REQUEST.
+			 */
+			if (!*d || (*d == '[')) {
+				return default_list;
+			}
+		}
+
+		/*
+		 *	If the first part is a list name, then treat
+		 *	it as a list.  This means that we CANNOT have
+		 *	an attribute which is named "request",
+		 *	"reply", etc.  Allowing a tagged attribute
+		 *	"request:3" would just be insane.
+		 */
+		output = fr_substr2int(pair_lists, p, PAIR_LIST_UNKNOWN, (q - p));
+		if (output != PAIR_LIST_UNKNOWN) {
+			*name = (q + 1);	/* Consume the list and delimiter */
+			return output;
+		}
+
+		/*
+		 *	It's not a known list, say so.
+		 */
+		return PAIR_LIST_UNKNOWN;
 	}
 
-	q = (p + strlen(p));	/* Consume the entire string */
+	/*
+	 *	The input string may be just a list name,
+	 *	e.g. "request".  Check for that.
+	 */
+	q = (p + strlen(p));
 	output = fr_substr2int(pair_lists, p, PAIR_LIST_UNKNOWN, (q - p));
 	if (output != PAIR_LIST_UNKNOWN) {
 		*name = q;
 		return output;
 	}
 
-	return unknown;
+	/*
+	 *	It's just an attribute name.  Return the default list
+	 *	as supplied by the caller.
+	 */
+	return default_list;
 }
 
 
@@ -1090,3 +1073,68 @@ void rad_regcapture(REQUEST *request, int compare, char const *value, regmatch_t
 	}
 }
 
+#ifndef NDEBUG
+/*
+ *	Verify a packet.
+ */
+static void verify_packet(REQUEST *request, RADIUS_PACKET *packet)
+{
+	TALLOC_CTX *parent;
+
+	if (!packet) return;
+
+	parent = talloc_parent(packet);
+	if (parent != request) {
+		ERROR("Expected RADIUS_PACKET to be parented by %p (%s), "
+		      "but parented by %p (%s)",
+		      request, talloc_get_name(request),
+		      parent, parent ? talloc_get_name(parent) : "NULL");
+
+		fr_log_talloc_report(packet);
+		if (parent) fr_log_talloc_report(parent);
+
+		rad_assert(0);
+	}
+
+	VERIFY_PACKET(packet);
+
+	if (!packet->vps) return;
+
+#ifdef WITH_VERIFY_PTR
+	fr_verify_list(packet, packet->vps);
+#endif
+}
+/*
+ *	Catch horrible talloc errors.
+ */
+void verify_request(REQUEST *request)
+{
+	if (!request) return;
+
+	(void) talloc_get_type_abort(request, REQUEST);
+
+#ifdef WITH_VERIFY_PTR
+	fr_verify_list(request, request->config_items);
+#endif
+
+	if (request->packet) verify_packet(request, request->packet);
+	if (request->reply) verify_packet(request, request->reply);
+#ifdef WITH_PROXY
+	if (request->proxy) verify_packet(request, request->proxy);
+	if (request->proxy_reply) verify_packet(request, request->proxy_reply);
+#endif
+
+#ifdef WITH_COA
+	if (request->coa) {
+		void *parent;
+
+		(void) talloc_get_type_abort(request->coa, REQUEST);
+		parent = talloc_parent(request->coa);
+
+		rad_assert(parent == request);
+
+		verify_request(request->coa);
+	}
+#endif
+}
+#endif

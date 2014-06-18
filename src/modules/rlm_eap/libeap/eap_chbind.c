@@ -64,7 +64,7 @@ void chbind_free(CHBIND_REQ *chbind)
 
 int chbind_process(REQUEST *req, CHBIND_REQ *chbind_req)
 {
-  int rcode = PW_AUTHENTICATION_REJECT;
+  int rcode = PW_CODE_AUTHENTICATION_REJECT;
   REQUEST *fake = NULL;
   VALUE_PAIR *vp = NULL;
   uint8_t *attr_data;
@@ -75,7 +75,7 @@ int chbind_process(REQUEST *req, CHBIND_REQ *chbind_req)
 	     (chbind_req != NULL) &&
 	     (chbind_req->chbind_req_pkt != NULL));
   if (chbind_req->chbind_req_len < 4)
-    return PW_AUTHENTICATION_REJECT;  /* Is this the right response? */
+    return PW_CODE_AUTHENTICATION_REJECT;  /* Is this the right response? */
 
   /* Set-up NULL response for cases where channel bindings can't be processed */
   chbind_req->chbind_resp = NULL;
@@ -116,7 +116,7 @@ int chbind_process(REQUEST *req, CHBIND_REQ *chbind_req)
 			  /* If radaddr2vp fails, return NULL string for 
 			     channel binding response */
 			  request_free(&fake);
-			  return PW_AUTHENTICATION_ACK;
+			  return PW_CODE_AUTHENTICATION_ACK;
 		  }
 		  /* TODO: need to account for the possibility of rad_attr2vp generating 
 		     multiple vps */
@@ -140,21 +140,21 @@ int chbind_process(REQUEST *req, CHBIND_REQ *chbind_req)
 	  fprintf(fr_log_fp, "server %s {\n",
 	    (fake->server == NULL) ? "" : fake->server);
   }
-  rcode = rad_authenticate(fake);
+  rcode = rad_virtual_server(fake);
 
   switch(rcode) {
     /* If rad_authenticate succeeded, build a reply */
   case RLM_MODULE_OK:
   case RLM_MODULE_HANDLED:
     if ((chbind_req->chbind_resp = chbind_build_response(fake, &chbind_req->chbind_resp_len)) != NULL)
-      rcode = PW_AUTHENTICATION_ACK;
+      rcode = PW_CODE_AUTHENTICATION_ACK;
     else
-      rcode = PW_AUTHENTICATION_REJECT;
+      rcode = PW_CODE_AUTHENTICATION_REJECT;
     break;
   
   /* If we got any other response from rad_authenticate, it maps to a reject */
   default:
-    rcode = PW_AUTHENTICATION_REJECT;
+    rcode = PW_CODE_AUTHENTICATION_REJECT;
     break;
   }
 

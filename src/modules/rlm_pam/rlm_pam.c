@@ -52,8 +52,7 @@ typedef struct rlm_pam_t {
 } rlm_pam_t;
 
 static const CONF_PARSER module_config[] = {
-	{ "pam_auth",    PW_TYPE_STRING_PTR, offsetof(rlm_pam_t,pam_auth_name),
-	  NULL, "radiusd" },
+	{ "pam_auth", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_pam_t, pam_auth_name), "radiusd" },
 	{ NULL, -1, 0, NULL, NULL }
 };
 
@@ -189,7 +188,7 @@ static int pam_pass(char const *name, char const *passwd, char const *pamauth)
 }
 
 /* translate between function declarations */
-static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *request)
 {
 	int	r;
 	VALUE_PAIR *pair;
@@ -202,7 +201,7 @@ static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
 	 *	a User-Name attribute.
 	 */
 	if (!request->username) {
-		AUTH("rlm_pam: Attribute \"User-Name\" is required for authentication.");
+		AUTH("rlm_pam: Attribute \"User-Name\" is required for authentication");
 		return RLM_MODULE_INVALID;
 	}
 
@@ -211,7 +210,7 @@ static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
 	 *	a User-Password attribute.
 	 */
 	if (!request->password) {
-		AUTH("rlm_pam: Attribute \"User-Password\" is required for authentication.");
+		AUTH("rlm_pam: Attribute \"User-Password\" is required for authentication");
 		return RLM_MODULE_INVALID;
 	}
 
@@ -228,7 +227,7 @@ static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
 	 *	Let the 'users' file over-ride the PAM auth name string,
 	 *	for backwards compatibility.
 	 */
-	pair = pairfind(request->config_items, PAM_AUTH_ATTR, 0, TAG_ANY);
+	pair = pairfind(request->config_items, PW_PAM_AUTH, 0, TAG_ANY);
 	if (pair) pam_auth_string = pair->vp_strvalue;
 
 	r = pam_pass(request->username->vp_strvalue,

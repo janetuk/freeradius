@@ -1,4 +1,4 @@
-switch User-Name {
+switch &User-Name {
 	case "bob" {
 		update reply {
 			Filter-Id := "filter"
@@ -16,5 +16,4 @@ switch User-Name {
 			Filter-Id := "default"
 		}
 	}
-
 }

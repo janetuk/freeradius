@@ -27,7 +27,7 @@ RCSID("$Id$")
 #include <freeradius-devel/radiusd.h>
 #include "krb5.h"
 
-#ifdef HEIMDAL_KRB5
+#ifdef HAVE_KRB5_GET_ERROR_MESSAGE
 #  define KRB5_STRERROR_BUFSIZE (2048)
 
 fr_thread_local_setup(char *, krb5_error_buffer)	/* macro */
@@ -69,7 +69,18 @@ char const *rlm_krb5_error(krb5_context context, krb5_error_code code)
 	msg = krb5_get_error_message(context, code);
 	if (msg) {
 		strlcpy(buffer, msg, KRB5_STRERROR_BUFSIZE);
+#ifdef HAVE_KRB5_FREE_ERROR_MESSAGE
 		krb5_free_error_message(context, msg);
+#elif defined(HAVE_KRB5_FREE_ERROR_STRING)
+		{
+			char *free;
+
+			memcpy(&free, &msg, sizeof(free));
+			krb5_free_error_string(context, free);
+		}
+#else
+#  error "No way to free error strings, missing krb5_free_error_message() and krb5_free_error_string()"
+#endif
 	} else {
 		strlcpy(buffer, "Unknown error", KRB5_STRERROR_BUFSIZE);
 	}
@@ -102,6 +113,13 @@ static int _free_handle(rlm_krb5_handle_t *conn) {
 	if (conn->keytab) {
 		krb5_kt_close(conn->context, conn->keytab);
 	}
+
+#ifdef HEIMDAL_KRB5
+	if (conn->ccache) {
+		krb5_cc_destroy(conn->context, conn->ccache);
+	}
+#endif
+
 	return 0;
 }
 
@@ -123,7 +141,7 @@ void *mod_conn_create(void *instance)
 	MEM(conn = talloc_zero(instance, rlm_krb5_handle_t));
 	ret = krb5_init_context(&conn->context);
 	if (ret) {
-		EDEBUG("rlm_krb5 (%s): Context initialisation failed: %s", inst->xlat_name,
+		ERROR("rlm_krb5 (%s): Context initialisation failed: %s", inst->xlat_name,
 		       rlm_krb5_error(NULL, ret));
 
 		return NULL;
@@ -140,14 +158,13 @@ void *mod_conn_create(void *instance)
 	}
 
 #ifdef HEIMDAL_KRB5
-	/*
-	 *	Setup krb5_verify_user options
-	 *
-	 *	Not entirely sure this is necessary, but as we use context
-	 *	to get the cache handle, we probably do have to do this with
-	 *	the cloned context.
-	 */
-	krb5_cc_default(conn->context, &conn->ccache);
+	ret = krb5_cc_new_unique(conn->context, "MEMORY", NULL, &conn->ccache);
+	if (ret) {
+		ERROR("rlm_krb5 (%s): Credential cache creation failed: %s", inst->xlat_name,
+		      rlm_krb5_error(conn->context, ret));
+
+		return NULL;
+	}
 
 	krb5_verify_opt_init(&conn->options);
 	krb5_verify_opt_set_ccache(&conn->options, conn->ccache);

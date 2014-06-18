@@ -77,7 +77,7 @@ static rlm_rcode_t rlm_ldap_group_name2dn(ldap_instance_t const *inst, REQUEST *
 	 *	It'll probably only save a few ms in network latency, but it means we can send a query
 	 *	for the entire group list at once.
 	 */
-	filter = talloc_asprintf(request, "%s%s%s",
+	filter = talloc_typed_asprintf(request, "%s%s%s",
 				 inst->groupobj_filter ? "(&" : "",
 				 inst->groupobj_filter ? inst->groupobj_filter : "",
 				 names[0] && names[1] ? "(|" : "");
@@ -225,7 +225,7 @@ static rlm_rcode_t rlm_ldap_group_dn2name(ldap_instance_t const *inst, REQUEST *
 
 	RDEBUG("Group name is \"%s\"", vals[0]);
 
-	*out = talloc_strdup(request, vals[0]);
+	*out = talloc_typed_strdup(request, vals[0]);
 
 	finish:
 	if (result) {
@@ -286,9 +286,8 @@ rlm_rcode_t rlm_ldap_cacheable_userobj(ldap_instance_t const *inst, REQUEST *req
 			 *	The easy case, were caching DNs and we got a DN.
 			 */
 			if (is_dn) {
-				pairmake(request, &request->config_items, inst->group_da->name, vals[i], T_OP_ADD);
-				RDEBUG("Added %s with value \"%s\" to control list", inst->group_da->name, vals[i]);
-
+				pairmake(request, &request->config_items, inst->cache_da->name, vals[i], T_OP_ADD);
+				RDEBUG("Added %s with value \"%s\" to control list", inst->cache_da->name, vals[i]);
 			/*
 			 *	We were told to cache DNs but we got a name, we now need to resolve
 			 *	this to a DN. Store all the group names in an array so we can do one query.
@@ -303,8 +302,8 @@ rlm_rcode_t rlm_ldap_cacheable_userobj(ldap_instance_t const *inst, REQUEST *req
 			 *	The easy case, were caching names and we got a name.
 			 */
 			if (!is_dn) {
-				pairmake(request, &request->config_items, inst->group_da->name, vals[i], T_OP_ADD);
-				RDEBUG("Added %s with value \"%s\" to control list", inst->group_da->name, vals[i]);
+				pairmake(request, &request->config_items, inst->cache_da->name, vals[i], T_OP_ADD);
+				RDEBUG("Added control:%s with value \"%s\"", inst->cache_da->name, vals[i]);
 			/*
 			 *	We were told to cache names but we got a DN, we now need to resolve
 			 *	this to a name.
@@ -319,8 +318,8 @@ rlm_rcode_t rlm_ldap_cacheable_userobj(ldap_instance_t const *inst, REQUEST *req
 					return rcode;
 				}
 
-				pairmake(request, &request->config_items, inst->group_da->name, name, T_OP_ADD);
-				RDEBUG("Added %s with value \"%s\" to control list", inst->group_da->name, name);
+				pairmake(request, &request->config_items, inst->cache_da->name, name, T_OP_ADD);
+				DEBUG("Added control:%s with value \"%s\"", inst->cache_da->name, name);
 				talloc_free(name);
 			}
 		}
@@ -337,8 +336,8 @@ rlm_rcode_t rlm_ldap_cacheable_userobj(ldap_instance_t const *inst, REQUEST *req
 
 	dn_p = group_dn;
 	while(*dn_p) {
-		pairmake(request, &request->config_items, inst->group_da->name, *dn_p, T_OP_ADD);
-		RDEBUG("Added %s with value \"%s\" to control list", inst->group_da->name, *dn_p);
+		pairmake(request, &request->config_items, inst->cache_da->name, *dn_p, T_OP_ADD);
+		RDEBUG("Added control:%s with value \"%s\"", inst->cache_da->name, *dn_p);
 		ldap_memfree(*dn_p);
 
 		dn_p++;
@@ -415,8 +414,8 @@ rlm_rcode_t rlm_ldap_cacheable_groupobj(ldap_instance_t const *inst, REQUEST *re
 	do {
 		if (inst->cacheable_group_dn) {
 			dn = ldap_get_dn((*pconn)->handle, entry);
-			pairmake(request, &request->config_items, inst->group_da->name, dn, T_OP_ADD);
-			RDEBUG("Added %s with value \"%s\" to control list", inst->group_da->name, dn);
+			pairmake(request, &request->config_items, inst->cache_da->name, dn, T_OP_ADD);
+			RDEBUG("Added control:%s with value \"%s\"", inst->cache_da->name, dn);
 			ldap_memfree(dn);
 		}
 
@@ -426,8 +425,8 @@ rlm_rcode_t rlm_ldap_cacheable_groupobj(ldap_instance_t const *inst, REQUEST *re
 				continue;
 			}
 
-			pairmake(request, &request->config_items, inst->group_da->name, *vals, T_OP_ADD);
-			RDEBUG("Added %s with value \"%s\" to control list", inst->group_da->name, *vals);
+			pairmake(request, &request->config_items, inst->cache_da->name, *vals, T_OP_ADD);
+			RDEBUG("Added control:%s with value \"%s\"", inst->cache_da->name, *vals);
 
 			ldap_value_free(vals);
 		}
@@ -535,7 +534,7 @@ rlm_rcode_t rlm_ldap_check_userobj_dynamic(ldap_instance_t const *inst, REQUEST 
 {
 	rlm_rcode_t	rcode = RLM_MODULE_NOTFOUND, ret;
 	ldap_rcode_t	status;
-	int		name_is_dn = false, value_is_dn = false;
+	bool		name_is_dn = false, value_is_dn = false;
 
 	LDAPMessage     *result = NULL;
 	LDAPMessage     *entry = NULL;
@@ -595,7 +594,7 @@ rlm_rcode_t rlm_ldap_check_userobj_dynamic(ldap_instance_t const *inst, REQUEST 
 		 */
 		if (!name_is_dn && !value_is_dn) {
 			if (strcmp(vals[i], name) == 0){
-				RDEBUG("User found. Comparison between membership: name, check: name]");
+				RDEBUG("User found. Comparison between membership: name, check: name");
 				rcode = RLM_MODULE_OK;
 
 				goto finish;
@@ -702,13 +701,13 @@ rlm_rcode_t rlm_ldap_check_cached(ldap_instance_t const *inst, REQUEST *request,
 	int		ret;
 	vp_cursor_t	cursor;
 
-	paircursor(&cursor, &request->config_items);
-	vp = pairfindnext(&cursor, inst->group_da->attr, inst->group_da->vendor, TAG_ANY);
+	fr_cursor_init(&cursor, &request->config_items);
+	vp = fr_cursor_next_by_num(&cursor, inst->cache_da->attr, inst->cache_da->vendor, TAG_ANY);
 	if (!vp) {
 		return RLM_MODULE_INVALID;
 	}
 
-	for (; vp; vp = pairfindnext(&cursor, inst->group_da->attr, inst->group_da->vendor, TAG_ANY)) {
+	for (; vp; vp = fr_cursor_next_by_num(&cursor, inst->cache_da->attr, inst->cache_da->vendor, TAG_ANY)) {
 		ret = radius_compare_vps(request, check, vp);
 		if (ret == 0) {
 			RDEBUG2("User found. Matched cached membership");

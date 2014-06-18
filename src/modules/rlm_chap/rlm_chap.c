@@ -26,7 +26,7 @@ RCSID("$Id$")
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/modules.h>
 
-static rlm_rcode_t mod_authorize(UNUSED void *instance,
+static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance,
 				  UNUSED REQUEST *request)
 {
 	if (!pairfind(request->packet->vps, PW_CHAP_PASSWORD, 0, TAG_ANY)) {
@@ -51,7 +51,7 @@ static rlm_rcode_t mod_authorize(UNUSED void *instance,
  *	from the database. The authentication code only needs to check
  *	the password, the rest is done here.
  */
-static rlm_rcode_t mod_authenticate(UNUSED void *instance,
+static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(UNUSED void *instance,
 				     UNUSED REQUEST *request)
 {
 	VALUE_PAIR *passwd_item, *chap;
@@ -88,22 +88,50 @@ static rlm_rcode_t mod_authenticate(UNUSED void *instance,
 		if (pairfind(request->config_items, PW_USER_PASSWORD, 0, TAG_ANY) != NULL){
 			REDEBUG("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
 			REDEBUG("!!! Please update your configuration so that the \"known !!!");
-			REDEBUG("!!! good\" clear text password is in Cleartext-Password, !!!");
+			REDEBUG("!!! good\" cleartext password is in Cleartext-Password,  !!!");
 			REDEBUG("!!! and NOT in User-Password.                            !!!");
 			REDEBUG("!!!						          !!!");
 			REDEBUG("!!! Authentication will fail because of this.	          !!!");
 			REDEBUG("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
 		}
 
-		REDEBUG("Clear-Text password is required for authentication");
+		REDEBUG("Cleartext password is required for authentication");
 		return RLM_MODULE_INVALID;
 	}
 
-	RDEBUG("Using Clear-Text password \"%s\" for user %s authentication.",
-	      passwd_item->vp_strvalue, request->username->vp_strvalue);
+	rad_chap_encode(request->packet, pass_str,
+			chap->vp_octets[0], passwd_item);
 
-	rad_chap_encode(request->packet,pass_str,
-			chap->vp_octets[0],passwd_item);
+	if (RDEBUG_ENABLED3) {
+		uint8_t const *p;
+		size_t length;
+		VALUE_PAIR *vp;
+		char buffer[CHAP_VALUE_LENGTH * 2 + 1];
+
+		RDEBUG3("Comparing with \"known good\" Cleartext-Password \"%s\"", passwd_item->vp_strvalue);
+
+		vp = pairfind(request->packet->vps, PW_CHAP_CHALLENGE, 0, TAG_ANY);
+		if (vp) {
+			p = vp->vp_octets;
+			length = vp->length;
+		} else {
+			p = request->packet->vector;
+			length = sizeof(request->packet->vector);
+		}
+
+		fr_bin2hex(buffer, p, length);
+		RINDENT();
+		RDEBUG3("CHAP challenge :  %s", buffer);
+
+		fr_bin2hex(buffer, chap->vp_octets + 1, CHAP_VALUE_LENGTH);
+		RDEBUG3("Client sent    : %s", buffer);
+
+		fr_bin2hex(buffer, pass_str + 1, CHAP_VALUE_LENGTH);
+		RDEBUG3("We calculated  : %s", buffer);
+		REXDENT();
+	} else {
+		RDEBUG2("Comparing with \"known good\" Cleartext-Password");
+	}
 
 	if (rad_digest_cmp(pass_str + 1, chap->vp_octets + 1,
 			   CHAP_VALUE_LENGTH) != 0) {
@@ -129,7 +157,7 @@ static rlm_rcode_t mod_authenticate(UNUSED void *instance,
 module_t rlm_chap = {
 	 RLM_MODULE_INIT,
 	"CHAP",
-	RLM_TYPE_CHECK_CONFIG_SAFE,   	/* type */
+	0,   	/* type */
 	 0,
 	 NULL,				/* CONF_PARSER */
 	NULL,				/* instantiation */

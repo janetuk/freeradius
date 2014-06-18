@@ -30,7 +30,7 @@ RCSID("$Id$")
 /*
  *	Find the client definition.
  */
-static rlm_rcode_t mod_authorize(UNUSED void *instance,
+static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance,
 				 REQUEST *request)
 {
 	size_t length;
@@ -62,7 +62,7 @@ static rlm_rcode_t mod_authorize(UNUSED void *instance,
 
 	value = cf_pair_value(cp);
 	if (!value) {
-		RDEBUG("No value given for the directory entry in the client.");
+		RDEBUG("No value given for the directory entry in the client");
 		return RLM_MODULE_NOOP;
 	}
 
@@ -91,9 +91,9 @@ static rlm_rcode_t mod_authorize(UNUSED void *instance,
 	return RLM_MODULE_OK;
 }
 #else
-static rlm_rcode_t mod_authorize(UNUSED void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, REQUEST *request)
 {
-	RDEBUG("Dynamic clients are unsupported in this build.");
+	RDEBUG("Dynamic clients are unsupported in this build");
 	return RLM_MODULE_FAIL;
 }
 #endif

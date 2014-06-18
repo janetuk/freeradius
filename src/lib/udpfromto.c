@@ -83,6 +83,7 @@ RCSID("$Id$")
 /* Fallback to to using recvfrom */
 #    else
 #      undef IPV6_RECVPKTINFO
+#      undef IPV6_PKTINFO
 #    endif
 #  else
 #    define FR_IPV6_RECVPKTINFO IPV6_PKTINFO
@@ -97,7 +98,13 @@ int udpfromto_init(int s)
 
 	errno = ENOSYS;
 
-	proto = -1;
+	/*
+	 *	Clang analyzer doesn't see that getsockname initialises
+	 *	the memory passed to it.
+	 */
+#ifdef __clang_analyzer__
+	memset(&si, 0, sizeof(si));
+#endif
 
 	if (getsockname(s, (struct sockaddr *) &si, &si_len) < 0) {
 		return -1;
@@ -110,15 +117,18 @@ int udpfromto_init(int s)
 		 */
 		proto = SOL_IP;
 		flag = IP_PKTINFO;
-#endif
-
+#else
 #ifdef IP_RECVDSTADDR
+
 		/*
 		 *	Set the IP_RECVDSTADDR option (BSD).  Note:
 		 *	IP_RECVDSTADDR == IP_SENDSRCADDR
 		 */
 		proto = IPPROTO_IP;
 		flag = IP_RECVDSTADDR;
+#else
+		return -1;
+#endif
 #endif
 
 #ifdef AF_INET6
@@ -133,6 +143,8 @@ int udpfromto_init(int s)
 		 *	Work around Linux-specific hackery.
 		 */
 		flag = FR_IPV6_RECVPKTINFO;
+#else
+		return -1;
 #  endif
 #endif
 	} else {
@@ -169,6 +181,14 @@ int recvfromto(int s, void *buf, size_t len, int flags,
 	 *	Catch the case where the caller passes invalid arguments.
 	 */
 	if (!to || !tolen) return recvfrom(s, buf, len, flags, from, fromlen);
+
+	/*
+	 *	Clang analyzer doesn't see that getsockname initialises
+	 *	the memory passed to it.
+	 */
+#ifdef __clang_analyzer__
+	memset(&si, 0, sizeof(si));
+#endif
 
 	/*
 	 *	recvmsg doesn't provide sin_port so we have to
@@ -224,6 +244,7 @@ int recvfromto(int s, void *buf, size_t len, int flags,
 	}
 
 	/* Set up iov and msgh structures. */
+	memset(&cbuf, 0, sizeof(cbuf));
 	memset(&msgh, 0, sizeof(struct msghdr));
 	iov.iov_base = buf;
 	iov.iov_len  = len;
@@ -292,12 +313,41 @@ int sendfromto(int s, void *buf, size_t len, int flags,
 	struct iovec iov;
 	char cbuf[256];
 
-#if !defined(IP_PKTINFO) && !defined(IP_SENDSRCADDR) && !defined(IPV6_PKTINFO)
+#ifdef __FreeBSD__
+	/*
+	 *	FreeBSD is extra pedantic about the use of IP_SENDSRCADDR,
+	 *	and sendmsg will fail with EINVAL if IP_SENDSRCADDR is used
+	 *	with a socket which is bound to something other than
+	 *	INADDR_ANY
+	 */
+	struct sockaddr bound;
+	socklen_t bound_len = sizeof(bound);
+
+	if (getsockname(s, &bound, &bound_len) < 0) {
+		return -1;
+	}
+
+	switch (bound.sa_family) {
+	case AF_INET:
+		if (((struct sockaddr_in *) &bound)->sin_addr.s_addr != INADDR_ANY) {
+			from = NULL;
+		}
+		break;
+
+	case AF_INET6:
+		if (!IN6_IS_ADDR_UNSPECIFIED(&((struct sockaddr_in6 *) &bound)->sin6_addr))) {
+			from = NULL;
+		}
+		break;
+	}
+#else
+#  if !defined(IP_PKTINFO) && !defined(IP_SENDSRCADDR) && !defined(IPV6_PKTINFO)
 	/*
 	 *	If the sendmsg() flags aren't defined, fall back to
 	 *	using sendto().
 	 */
 	from = NULL;
+#  endif
 #endif
 
 	/*
@@ -307,7 +357,8 @@ int sendfromto(int s, void *buf, size_t len, int flags,
 		return sendto(s, buf, len, flags, to, tolen);
 	}
 
-	/* Set up iov and msgh structures. */
+	/* Set up control buffer iov and msgh structures. */
+	memset(&cbuf, 0, sizeof(cbuf));
 	memset(&msgh, 0, sizeof(msgh));
 	memset(&iov, 0, sizeof(iov));
 	iov.iov_base = buf;
@@ -413,7 +464,7 @@ int main(int argc, char **argv)
 	struct sockaddr_in from, to, in;
 	char buf[TESTLEN];
 	char *destip = DESTIP;
-	int port = DEF_PORT;
+	uint16_t port = DEF_PORT;
 	int n, server_socket, client_socket, fl, tl, pid;
 
 	if (argc > 1) destip = argv[1];

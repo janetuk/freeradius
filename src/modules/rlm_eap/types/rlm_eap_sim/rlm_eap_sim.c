@@ -117,45 +117,137 @@ static int eap_sim_sendstart(eap_handler_t *handler)
 static int eap_sim_get_challenge(eap_handler_t *handler, VALUE_PAIR *vps, int idx, eap_sim_state_t *ess)
 {
 	REQUEST *request = handler->request;
-	VALUE_PAIR *vp;
+	VALUE_PAIR *vp, *ki, *algo_version;
 
 	rad_assert(idx >= 0 && idx < 3);
 
+	/*
+	 *	Generate a new RAND value, and derive Kc and SRES from Ki
+	 */
+	ki = pairfind(vps, ATTRIBUTE_EAP_SIM_KI, 0, TAG_ANY);
+	if (ki) {
+		int i;
+
+		/*
+		 *	Check to see if have a Ki for the IMSI, this allows us to generate the rest
+		 *	of the triplets.
+		 */
+		algo_version = pairfind(vps, ATTRIBUTE_EAP_SIM_ALGO_VERSION, 0, TAG_ANY);
+		if (!algo_version) {
+			REDEBUG("Found Ki, but missing EAP-Sim-Algo-Version");
+			return 0;
+		}
+
+		for (i = 0; i < EAPSIM_RAND_SIZE; i++) {
+			ess->keys.rand[idx][i] = fr_rand();
+		}
+
+		switch (algo_version->vp_integer) {
+			case 1:
+				comp128v1(ess->keys.sres[idx], ess->keys.Kc[idx], ki->vp_octets, ess->keys.rand[idx]);
+				break;
+
+			case 2:
+				comp128v23(ess->keys.sres[idx], ess->keys.Kc[idx], ki->vp_octets, ess->keys.rand[idx],
+					   true);
+				break;
+
+			case 3:
+				comp128v23(ess->keys.sres[idx], ess->keys.Kc[idx], ki->vp_octets, ess->keys.rand[idx],
+					   false);
+				break;
+
+			case 4:
+				REDEBUG("Comp128-4 algorithm is not supported as details have not yet been published. "
+					"If you have details of this algorithm please contact the FreeRADIUS "
+					"maintainers");
+				return 0;
+
+			default:
+				REDEBUG("Unknown/unsupported algorithm Comp128-%i", algo_version->vp_integer);
+		}
+
+		if (RDEBUG_ENABLED2) {
+			char buffer[33];	/* 32 hexits (16 bytes) + 1 */
+			char *p;
+
+			RDEBUG2("Generated following triplets for round %i:", idx);
+
+			p = buffer;
+			for (i = 0; i < EAPSIM_RAND_SIZE; i++) {
+				p += sprintf(p, "%02x", ess->keys.rand[idx][i]);
+			}
+			RDEBUG2("\tRAND : 0x%s", buffer);
+
+			p = buffer;
+			for (i = 0; i < EAPSIM_SRES_SIZE; i++) {
+				p += sprintf(p, "%02x", ess->keys.sres[idx][i]);
+			}
+			RDEBUG2("\tSRES : 0x%s", buffer);
+
+			p = buffer;
+			for (i = 0; i < EAPSIM_KC_SIZE; i++) {
+				p += sprintf(p, "%02x", ess->keys.Kc[idx][i]);
+			}
+			RDEBUG2("\tKc   : 0x%s", buffer);
+		}
+		return 1;
+	}
+
+	/*
+	 *	Use known RAND, SRES, and Kc values, these may of been pulled in from an AuC,
+	 *	or created by sending challenges to the SIM directly.
+	 */
 	vp = pairfind(vps, ATTRIBUTE_EAP_SIM_RAND1 + idx, 0, TAG_ANY);
-	if(!vp) {
+	/* Hack for backwards compatibility */
+	if (!vp) {
+		vp = pairfind(request->reply->vps, ATTRIBUTE_EAP_SIM_KC1 + idx, 0, TAG_ANY);
+	}
+	if (!vp) {
 		/* bad, we can't find stuff! */
-		REDEBUG("EAP-SIM Challenge[%i] not found", idx);
+		REDEBUG("EAP-SIM-RAND%i not found", idx + 1);
 		return 0;
 	}
-	if(vp->length != EAPSIM_RAND_SIZE) {
-		REDEBUG("EAP-SIM challenge[%i] is not 8 bytes, got %zu bytes", idx, vp->length);
+	if (vp->length != EAPSIM_RAND_SIZE) {
+		REDEBUG("EAP-SIM-RAND%i is not " STRINGIFY(EAPSIM_RAND_SIZE) " bytes, got %zu bytes",
+			idx + 1, vp->length);
 		return 0;
 	}
 	memcpy(ess->keys.rand[idx], vp->vp_strvalue, EAPSIM_RAND_SIZE);
 
 	vp = pairfind(vps, ATTRIBUTE_EAP_SIM_SRES1 + idx, 0, TAG_ANY);
+	/* Hack for backwards compatibility */
+	if (!vp) {
+		vp = pairfind(request->reply->vps, ATTRIBUTE_EAP_SIM_KC1 + idx, 0, TAG_ANY);
+	}
 	if (!vp) {
 		/* bad, we can't find stuff! */
-		REDEBUG("EAP-SIM SRES[%i] not found", idx);
+		REDEBUG("EAP-SIM-SRES%i not found", idx + 1);
 		return 0;
 	}
 	if (vp->length != EAPSIM_SRES_SIZE) {
-		REDEBUG("EAP-SIM SRES[%i] is not 16 bytes, got %zu bytes", idx, vp->length);
+		REDEBUG("EAP-SIM-SRES%i is not " STRINGIFY(EAPSIM_SRES_SIZE) " bytes, got %zu bytes",
+			idx + 1, vp->length);
 		return 0;
 	}
 	memcpy(ess->keys.sres[idx], vp->vp_strvalue, EAPSIM_SRES_SIZE);
 
 	vp = pairfind(vps, ATTRIBUTE_EAP_SIM_KC1 + idx, 0, TAG_ANY);
+	/* Hack for backwards compatibility */
+	if (!vp) {
+		vp = pairfind(request->reply->vps, ATTRIBUTE_EAP_SIM_KC1 + idx, 0, TAG_ANY);
+	}
 	if (!vp) {
 		/* bad, we can't find stuff! */
-		REDEBUG("EAP-SIM Kc[%i] not found", idx);
+		REDEBUG("EAP-SIM-Kc%i not found", idx + 1);
 		return 0;
 	}
-	if (vp->length != EAPSIM_Kc_SIZE) {
-		REDEBUG("EAP-SIM Kc[%i] is not 16 bytes, got %zu bytes", idx, vp->length);
+	if (vp->length != EAPSIM_KC_SIZE) {
+		REDEBUG("EAP-SIM-Kc%i is not " STRINGIFY(EAPSIM_KC_SIZE) " bytes, got %zu bytes",
+			idx + 1, vp->length);
 		return 0;
 	}
-	memcpy(ess->keys.Kc[idx], vp->vp_strvalue, EAPSIM_Kc_SIZE);
+	memcpy(ess->keys.Kc[idx], vp->vp_strvalue, EAPSIM_KC_SIZE);
 
 	return 1;
 }
@@ -342,7 +434,7 @@ static void eap_sim_stateenter(eap_handler_t *handler,
 	 * 	Send the EAP Success message
 	 */
 	case eapsim_server_success:
-  		eap_sim_sendsuccess(handler);
+		eap_sim_sendsuccess(handler);
 		handler->eap_ds->request->code = PW_EAP_SUCCESS;
 		break;
 	/*
@@ -367,17 +459,7 @@ static int eap_sim_initiate(UNUSED void *instance, eap_handler_t *handler)
 {
 	REQUEST *request = handler->request;
 	eap_sim_state_t *ess;
-	VALUE_PAIR *vp;
-	VALUE_PAIR *outvps;
 	time_t n;
-
-	outvps = handler->request->reply->vps;
-
-	vp = pairfind(outvps, ATTRIBUTE_EAP_SIM_RAND1, 0, TAG_ANY);
-	if (!vp) {
-		RDEBUG2("Can't initiate EAP-SIM, no RAND1 attribute");
-		return 0;
-	}
 
 	ess = talloc_zero(handler, eap_sim_state_t);
 	if (!ess) {
@@ -391,10 +473,9 @@ static int eap_sim_initiate(UNUSED void *instance, eap_handler_t *handler)
 	/*
 	 *	Save the keying material, because it could change on a subsequent retrival.
 	 */
-	if ((eap_sim_get_challenge(handler, outvps, 0, ess) +
-	     eap_sim_get_challenge(handler, outvps, 1, ess) +
-	     eap_sim_get_challenge(handler, outvps, 2, ess)) != 3) {
-		RDEBUG2("Can't initiate EAP-SIM, missing attributes");
+	if (!eap_sim_get_challenge(handler, request->config_items, 0, ess) ||
+	    !eap_sim_get_challenge(handler, request->config_items, 1, ess) ||
+	    !eap_sim_get_challenge(handler, request->config_items, 2, ess)) {
 		return 0;
 	}
 
@@ -451,7 +532,7 @@ static int process_eap_sim_start(eap_handler_t *handler, VALUE_PAIR *vps)
 	/*
 	 *	Record it for later keying
 	 */
- 	memcpy(ess->keys.versionselect, selectedversion_vp->vp_strvalue, sizeof(ess->keys.versionselect));
+	memcpy(ess->keys.versionselect, selectedversion_vp->vp_strvalue, sizeof(ess->keys.versionselect));
 
 	/*
 	 *	Double check the nonce size.
@@ -602,7 +683,7 @@ static int mod_authenticate(UNUSED void *arg, eap_handler_t *handler)
 
 	default:
 		rad_assert(0 == 1);
- 	}
+	}
 
 	return 0;
 }

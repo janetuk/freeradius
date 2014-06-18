@@ -44,11 +44,22 @@ RCSID("$Id$")
 #include <sys/stat.h>
 
 #include <libpq-fe.h>
+#include <postgres_ext.h>
+
+#include "config.h"
 #include "rlm_sql.h"
 #include "sql_postgresql.h"
 
+#ifndef NAMEDATALEN
+#  define NAMEDATALEN 64
+#endif
+
+typedef struct rlm_sql_postgres_config {
+	char const	*db_string;
+	bool		send_application_name;
+} rlm_sql_postgres_config_t;
+
 typedef struct rlm_sql_postgres_conn {
-	char const	*dbstring;	//!< String describing parameters for the connection
 	PGconn		*db;
 	PGresult	*result;
 	int		cur_row;
@@ -57,75 +68,145 @@ typedef struct rlm_sql_postgres_conn {
 	char		**row;
 } rlm_sql_postgres_conn_t;
 
-/* Internal function. Return true if the postgresql status value
- * indicates successful completion of the query. Return false otherwise
-static int
-status_is_ok(ExecStatusType status)
+static CONF_PARSER driver_config[] = {
+	{ "send_application_name", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_sql_postgres_config_t, send_application_name), "yes" },
+
+	{ NULL, -1, 0, NULL, NULL }
+};
+
+static int mod_instantiate(CONF_SECTION *conf, UNUSED rlm_sql_config_t *config)
 {
-	return status == PGRES_COMMAND_OK || status == PGRES_TUPLES_OK;
+#if defined(HAVE_OPENSSL_CRYPTO_H) && (defined(HAVE_PQINITOPENSSL) || defined(HAVE_PQINITSSL))
+	static bool			ssl_init = false;
+#endif
+
+	rlm_sql_postgres_config_t	*driver;
+	char 				application_name[NAMEDATALEN];
+	char				*db_string;
+
+#if defined(HAVE_OPENSSL_CRYPTO_H) && (defined(HAVE_PQINITOPENSSL) || defined(HAVE_PQINITSSL))
+	if (!ssl_init) {
+#  ifdef HAVE_PQINITOPENSSL
+		PQinitOpenSSL(0, 0);
+#  else
+		PQinitSSL(0);
+#  endif
+		ssl_init = true;
+	}
+#endif
+
+	MEM(driver = config->driver = talloc_zero(config, rlm_sql_postgres_config_t));
+	if (cf_section_parse(conf, driver, driver_config) < 0) {
+		return -1;
+	}
+
+	db_string = strchr(config->sql_db, '=') ?
+		talloc_typed_strdup(driver, config->sql_db) :
+		talloc_typed_asprintf(driver, "dbname='%s'", config->sql_db);
+
+	if (config->sql_server[0] != '\0') {
+		db_string = talloc_asprintf_append(db_string, " host='%s'", config->sql_server);
+	}
+
+	if (config->sql_port[0] != '\0') {
+		db_string = talloc_asprintf_append(db_string, " port=%s", config->sql_port);
+	}
+
+	if (config->sql_login[0] != '\0') {
+		db_string = talloc_asprintf_append(db_string, " user='%s'", config->sql_login);
+	}
+
+	if (config->sql_password[0] != '\0') {
+		db_string = talloc_asprintf_append(db_string, " password='%s'", config->sql_password);
+	}
+
+	/*
+	 *	Allow the user to set their own, or disable it
+	 */
+	if (driver->send_application_name) {
+		snprintf(application_name, sizeof(application_name),
+			 "FreeRADIUS "  RADIUSD_VERSION_STRING " - %s (%s)", progname, config->xlat_name);
+		db_string = talloc_asprintf_append(db_string, " application_name='%s'", application_name);
+	}
+	driver->db_string = db_string;
+
+	return 0;
 }
-*/
 
-
-/* Internal function. Return the number of affected rows of the result
- * as an int instead of the string that postgresql provides */
+/** Return the number of affected rows of the result as an int instead of the string that postgresql provides
+ *
+ */
 static int affected_rows(PGresult * result)
 {
 	return atoi(PQcmdTuples(result));
 }
 
-/* Internal function. Free the row of the current result that's stored
- * in the conn struct. */
+/** Free the row of the current result that's stored in the conn struct
+ *
+ */
 static void free_result_row(rlm_sql_postgres_conn_t *conn)
 {
-	int i;
-	if (conn->row != NULL) {
-		for (i = conn->num_fields-1; i >= 0; i--) {
-			if (conn->row[i] != NULL) {
-				free(conn->row[i]);
-			}
-		}
-		free((char*)conn->row);
-		conn->row = NULL;
-		conn->num_fields = 0;
-	}
+	TALLOC_FREE(conn->row);
+	conn->num_fields = 0;
 }
 
-
-/*************************************************************************
-*	Function: check_fatal_error
-*
-*	Purpose:  Check error type and behave accordingly
-*
-*************************************************************************/
-
-static int check_fatal_error (char *errorcode)
+#if defined(PG_DIAG_SQLSTATE) && defined(PG_DIAG_MESSAGE_PRIMARY)
+static sql_rcode_t sql_classify_error(PGresult const *result)
 {
-	int x = 0;
+	int i;
+
+	char *errorcode;
+	char *errormsg;
 
 	/*
-	Check the error code to see if we should reconnect or not
-	Error Code table taken from
-	http://www.postgresql.org/docs/8.1/interactive/errcodes-appendix.html
-	*/
-
-	if (!errorcode) return -1;
-
-	while(errorcodes[x].errorcode != NULL){
-		if (strcmp(errorcodes[x].errorcode, errorcode) == 0){
-			DEBUG("rlm_sql_postgresql: Postgresql Fatal Error: [%s: %s] Occurred!!", errorcode, errorcodes[x].meaning);
-			if (errorcodes[x].shouldreconnect == 1)
-				return RLM_SQL_RECONNECT;
-			else
-				return -1;
-		}
-		x++;
+	 *	Check the error code to see if we should reconnect or not
+	 *	Error Code table taken from:
+	 *	http://www.postgresql.org/docs/8.1/interactive/errcodes-appendix.html
+	 */
+	errorcode = PQresultErrorField(result, PG_DIAG_SQLSTATE);
+	errormsg = PQresultErrorField(result, PG_DIAG_MESSAGE_PRIMARY);
+	if (!errorcode) {
+		ERROR("rlm_sql_postgresql: Error occurred, but unable to retrieve error code");
+		return RLM_SQL_ERROR;
 	}
 
-	DEBUG("rlm_sql_postgresql: Postgresql Fatal Error: [%s] Occurred!!", errorcode);
-	/*	We don't seem to have a matching error class/code */
-	return -1;
+	/* SUCCESSFUL COMPLETION */
+	if (strcmp("00000", errorcode) == 0) {
+		return RLM_SQL_OK;
+	}
+
+	/* WARNING */
+	if (strcmp("01000", errorcode) == 0) {
+		WARN("%s", errormsg);
+		return RLM_SQL_OK;
+	}
+
+	/* UNIQUE VIOLATION */
+	if (strcmp("23505", errorcode) == 0) {
+		return RLM_SQL_DUPLICATE;
+	}
+
+	/* others */
+	for (i = 0; errorcodes[i].errorcode != NULL; i++) {
+		if (strcmp(errorcodes[i].errorcode, errorcode) == 0) {
+			ERROR("rlm_sql_postgresql: %s: %s", errorcode, errorcodes[i].meaning);
+
+			return (errorcodes[i].reconnect == true) ?
+				RLM_SQL_RECONNECT :
+				RLM_SQL_ERROR;
+		}
+	}
+
+	ERROR("rlm_sql_postgresql: Can't classify: %s", errorcode);
+	return RLM_SQL_ERROR;
 }
+#  else
+static sql_rcode_t sql_classify_error(UNUSED PGresult const *result)
+{
+	ERROR("rlm_sql_postgresql: Error occurred, no more information available, rebuild with newer libpq");
+	return RLM_SQL_ERROR;
+}
+#endif
 
 static int sql_socket_destructor(void *c)
 {
@@ -139,6 +220,7 @@ static int sql_socket_destructor(void *c)
 
 	/* PQfinish also frees the memory used by the PGconn structure */
 	PQfinish(conn->db);
+	conn->db = NULL;
 
 	return 0;
 }
@@ -150,49 +232,27 @@ static int sql_socket_destructor(void *c)
  *	Purpose: Establish connection to the db
  *
  *************************************************************************/
-static int sql_init_socket(rlm_sql_handle_t *handle, rlm_sql_config_t *config) {
-	char *dbstring;
+static int CC_HINT(nonnull) sql_init_socket(rlm_sql_handle_t *handle, rlm_sql_config_t *config)
+{
+	rlm_sql_postgres_config_t *driver = config->driver;
 	rlm_sql_postgres_conn_t *conn;
-
-#ifdef HAVE_OPENSSL_CRYPTO_H
-	static bool ssl_init = false;
-
-	if (!ssl_init) {
-		PQinitOpenSSL(0, 0);
-		ssl_init = true;
-	}
-#endif
 
 	MEM(conn = handle->conn = talloc_zero(handle, rlm_sql_postgres_conn_t));
 	talloc_set_destructor((void *) conn, sql_socket_destructor);
 
-	dbstring = strchr(config->sql_db, '=') ?
-		talloc_strdup(conn, config->sql_db) :
-		talloc_asprintf(conn, "dbname='%s'", config->sql_db);
-
-	if (config->sql_server[0] != '\0') {
-		dbstring = talloc_asprintf_append(dbstring, " host='%s'", config->sql_server);
-	}
-
-	if (config->sql_port[0] != '\0') {
-		dbstring = talloc_asprintf_append(dbstring, " port=%s", config->sql_port);
-	}
-
-	if (config->sql_login[0] != '\0') {
-		dbstring = talloc_asprintf_append(dbstring, " user='%s'", config->sql_login);
-	}
-
-	if (config->sql_password[0] != '\0') {
-		dbstring = talloc_asprintf_append(dbstring, " password='%s'", config->sql_password);
-	}
-
-	conn->dbstring = dbstring;
-	conn->db = PQconnectdb(dbstring);
-	DEBUG2("rlm_sql_postgresql: Connecting using parameters: %s", dbstring);
-	if (!conn->db || (PQstatus(conn->db) != CONNECTION_OK)) {
-		ERROR("rlm_sql_postgresql: Connection failed: %s", PQerrorMessage(conn->db));
+	DEBUG2("rlm_sql_postgresql: Connecting using parameters: %s", driver->db_string);
+	conn->db = PQconnectdb(driver->db_string);
+	if (!conn->db) {
+		ERROR("rlm_sql_postgresql: Connection failed: Out of memory");
 		return -1;
 	}
+	if (PQstatus(conn->db) != CONNECTION_OK) {
+		ERROR("rlm_sql_postgresql: Connection failed: %s", PQerrorMessage(conn->db));
+		PQfinish(conn->db);
+		conn->db = NULL;
+		return -1;
+	}
+
 	DEBUG2("Connected to database '%s' on '%s' server version %i, protocol version %i, backend PID %i ",
 	       PQdb(conn->db), PQhost(conn->db), PQserverVersion(conn->db), PQprotocolVersion(conn->db),
 	       PQbackendPID(conn->db));
@@ -207,121 +267,95 @@ static int sql_init_socket(rlm_sql_handle_t *handle, rlm_sql_config_t *config) {
  *	Purpose: Issue a query to the database
  *
  *************************************************************************/
-static sql_rcode_t sql_query(rlm_sql_handle_t * handle, UNUSED rlm_sql_config_t *config, char const *query)
+static CC_HINT(nonnull) sql_rcode_t sql_query(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config,
+					      char const *query)
 {
 	rlm_sql_postgres_conn_t *conn = handle->conn;
+	ExecStatusType status;
 	int numfields = 0;
-	char *errorcode;
-	char *errormsg;
 
 	if (!conn->db) {
 		ERROR("rlm_sql_postgresql: Socket not connected");
 		return RLM_SQL_RECONNECT;
 	}
 
+	/*
+	 *  Returns a PGresult pointer or possibly a null pointer.
+	 *  A non-null pointer will generally be returned except in
+	 *  out-of-memory conditions or serious errors such as inability
+	 *  to send the command to the server. If a null pointer is
+	 *  returned, it should be treated like a PGRES_FATAL_ERROR
+	 *  result.
+	 */
 	conn->result = PQexec(conn->db, query);
-		/*
-		 * Returns a PGresult pointer or possibly a null pointer.
-		 * A non-null pointer will generally be returned except in
-		 * out-of-memory conditions or serious errors such as inability
-		 * to send the command to the server. If a null pointer is
-		 * returned, it should be treated like a PGRES_FATAL_ERROR
-		 * result.
-		 */
+
+	/*
+	 *  As this error COULD be a connection error OR an out-of-memory
+	 *  condition return value WILL be wrong SOME of the time
+	 *  regardless! Pick your poison...
+	 */
 	if (!conn->result) {
-		ERROR("rlm_sql_postgresql: PostgreSQL Query failed Error: %s",
-				PQerrorMessage(conn->db));
-		/* As this error COULD be a connection error OR an out-of-memory
-		 * condition return value WILL be wrong SOME of the time regardless!
-		 * Pick your poison....
-		 */
-		return  RLM_SQL_RECONNECT;
-	} else {
-		ExecStatusType status = PQresultStatus(conn->result);
-		DEBUG("rlm_sql_postgresql: Status: %s", PQresStatus(status));
-
-		switch (status){
-
-			case PGRES_COMMAND_OK:
-				/*Successful completion of a command returning no data.*/
-
-				/*affected_rows function only returns
-				the number of affected rows of a command
-				returning no data...
-				*/
-				conn->affected_rows	= affected_rows(conn->result);
-				DEBUG("rlm_sql_postgresql: query affected rows = %i", conn->affected_rows);
-				return 0;
-
-			break;
-
-			case PGRES_TUPLES_OK:
-				/*Successful completion of a command returning data (such as a SELECT or SHOW).*/
-
-				conn->cur_row = 0;
- 				conn->affected_rows = PQntuples(conn->result);
-				numfields = PQnfields(conn->result); /*Check row storing functions..*/
-				DEBUG("rlm_sql_postgresql: query affected rows = %i , fields = %i", conn->affected_rows, numfields);
-				return 0;
-
-			break;
-
-			case PGRES_BAD_RESPONSE:
-				/*The server's response was not understood.*/
-				DEBUG("rlm_sql_postgresql: Bad Response From Server!!");
-				return -1;
-
-			break;
-
-			case PGRES_NONFATAL_ERROR:
-				/*A nonfatal error (a notice or warning) occurred. Possibly never returns*/
-
-				return -1;
-
-			break;
-
-			case PGRES_FATAL_ERROR:
-#if defined(PG_DIAG_SQLSTATE) && defined(PG_DIAG_MESSAGE_PRIMARY)
-				/*A fatal error occurred.*/
-
-				errorcode = PQresultErrorField(conn->result, PG_DIAG_SQLSTATE);
-				errormsg  = PQresultErrorField(conn->result, PG_DIAG_MESSAGE_PRIMARY);
-				DEBUG("rlm_sql_postgresql: Error %s", errormsg);
-				return check_fatal_error(errorcode);
-#endif
-
-			break;
-
-			default:
-				/* FIXME: An unhandled error occurred.*/
-
-				/* PGRES_EMPTY_QUERY PGRES_COPY_OUT PGRES_COPY_IN */
-
-				return -1;
-
-			break;
-
-
-		}
-
-		/*
-			Note to self ... sql_store_result returns 0 anyway
-			after setting the handle->affected_rows..
-			sql_num_fields returns 0 at worst case which means the check below
-			has a really small chance to return false..
-			lets remove it then .. yuck!!
-		*/
-		/*
-		} else {
-			if ((sql_store_result(handle, config) == 0)
-					&& (sql_num_fields(handle, config) >= 0))
-				return 0;
-			else
-				return -1;
-		}
-		*/
+		ERROR("rlm_sql_postgresql: Failed getting query result: %s", PQerrorMessage(conn->db));
+		return RLM_SQL_RECONNECT;
 	}
-	return -1;
+
+	status = PQresultStatus(conn->result);
+	DEBUG("rlm_sql_postgresql: Status: %s", PQresStatus(status));
+
+	switch (status){
+	/*
+	 *  Successful completion of a command returning no data.
+	 */
+	case PGRES_COMMAND_OK:
+		/*
+		 *  Affected_rows function only returns the number of affected rows of a command
+		 *  returning no data...
+		 */
+		conn->affected_rows = affected_rows(conn->result);
+		DEBUG("rlm_sql_postgresql: query affected rows = %i", conn->affected_rows);
+		return RLM_SQL_OK;
+	/*
+	 *  Successful completion of a command returning data (such as a SELECT or SHOW).
+	 */
+#ifdef HAVE_PGRES_SINGLE_TUPLE
+	case PGRES_SINGLE_TUPLE:
+#endif
+	case PGRES_TUPLES_OK:
+		conn->cur_row = 0;
+		conn->affected_rows = PQntuples(conn->result);
+		numfields = PQnfields(conn->result); /*Check row storing functions..*/
+		DEBUG("rlm_sql_postgresql: query affected rows = %i , fields = %i", conn->affected_rows, numfields);
+		return RLM_SQL_OK;
+
+#ifdef HAVE_PGRES_COPY_BOTH
+	case PGRES_COPY_BOTH:
+#endif
+	case PGRES_COPY_OUT:
+	case PGRES_COPY_IN:
+		DEBUG("rlm_sql_postgresql: Data transfer started");
+		return RLM_SQL_OK;
+
+	/*
+	 *  Weird.. this shouldn't happen.
+	 */
+	case PGRES_EMPTY_QUERY:
+		ERROR("rlm_sql_postgresql: Empty query");
+		return RLM_SQL_QUERY_ERROR;
+
+	/*
+	 *  The server's response was not understood.
+	 */
+	case PGRES_BAD_RESPONSE:
+		ERROR("rlm_sql_postgresql: Bad Response From Server");
+		return RLM_SQL_RECONNECT;
+
+
+	case PGRES_NONFATAL_ERROR:
+	case PGRES_FATAL_ERROR:
+		return sql_classify_error(conn->result);
+	}
+
+	return RLM_SQL_ERROR;
 }
 
 
@@ -361,14 +395,11 @@ static sql_rcode_t sql_fetch_row(rlm_sql_handle_t * handle, UNUSED rlm_sql_confi
 	conn->num_fields = records;
 
 	if ((PQntuples(conn->result) > 0) && (records > 0)) {
-		conn->row = (char **)rad_malloc((records+1)*sizeof(char *));
-		memset(conn->row, '\0', (records+1)*sizeof(char *));
-
+		conn->row = talloc_zero_array(conn, char *, records + 1);
 		for (i = 0; i < records; i++) {
 			len = PQgetlength(conn->result, conn->cur_row, i);
-			conn->row[i] = (char *)rad_malloc(len+1);
-			memset(conn->row[i], '\0', len+1);
-			strlcpy(conn->row[i], PQgetvalue(conn->result, conn->cur_row,i),len + 1);
+			conn->row[i] = talloc_array(conn->row, char, len + 1);
+			strlcpy(conn->row[i], PQgetvalue(conn->result, conn->cur_row, i),len + 1);
 		}
 		conn->cur_row++;
 		handle->row = conn->row;
@@ -410,7 +441,7 @@ static sql_rcode_t sql_free_result(rlm_sql_handle_t * handle, UNUSED rlm_sql_con
 
 	rlm_sql_postgres_conn_t *conn = handle->conn;
 
-	if (conn->result) {
+	if (conn->result != NULL) {
 		PQclear(conn->result);
 		conn->result = NULL;
 	}
@@ -439,31 +470,6 @@ static char const *sql_error(rlm_sql_handle_t * handle, UNUSED rlm_sql_config_t 
 
 /*************************************************************************
  *
- *	Function: sql_finish_query
- *
- *	Purpose: End the query, such as freeing memory
- *
- *************************************************************************/
-static sql_rcode_t sql_finish_query(rlm_sql_handle_t * handle, rlm_sql_config_t *config) {
-
-	return sql_free_result(handle, config);
-}
-
-/*************************************************************************
- *
- *	Function: sql_finish_select_query
- *
- *	Purpose: End the select query, such as freeing memory or result
- *
- *************************************************************************/
-static sql_rcode_t sql_finish_select_query(rlm_sql_handle_t * handle, rlm_sql_config_t *config) {
-
-	return sql_free_result(handle, config);
-}
-
-
-/*************************************************************************
- *
  *	Function: sql_affected_rows
  *
  *	Purpose: Return the number of rows affected by the last query.
@@ -478,7 +484,7 @@ static int sql_affected_rows(rlm_sql_handle_t * handle, UNUSED rlm_sql_config_t 
 /* Exported to rlm_sql */
 rlm_sql_module_t rlm_sql_postgresql = {
 	"rlm_sql_postgresql",
-	NULL,
+	mod_instantiate,
 	sql_init_socket,
 	sql_query,
 	sql_select_query,
@@ -488,7 +494,7 @@ rlm_sql_module_t rlm_sql_postgresql = {
 	sql_fetch_row,
 	NULL, /* sql_free_result */
 	sql_error,
-	sql_finish_query,
-	sql_finish_select_query,
+	sql_free_result,
+	sql_free_result,
 	sql_affected_rows,
 };

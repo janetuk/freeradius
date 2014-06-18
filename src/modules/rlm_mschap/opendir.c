@@ -65,7 +65,6 @@ static rlm_rcode_t getUserNodeRef(REQUEST *request, char* inUserName, char **out
 	tAttributeListRef       attrListRef	= 0;
 	char		    *pUserLocation	= NULL;
 	tAttributeValueListRef  valueRef	= 0;
-	tAttributeValueEntry    *pValueEntry	= NULL;
 	tDataList	       *pUserNode	= NULL;
 	rlm_rcode_t		result		= RLM_MODULE_FAIL;
 
@@ -142,10 +141,12 @@ static rlm_rcode_t getUserNodeRef(REQUEST *request, char* inUserName, char **out
 		for (attrIndex = 1; (attrIndex <= pRecEntry->fRecordAttributeCount) && (status == eDSNoErr); attrIndex++) {
 			status = dsGetAttributeEntry(nodeRef, tDataBuff, attrListRef, attrIndex, &valueRef, &pAttrEntry);
 			if (status == eDSNoErr && pAttrEntry != NULL) {
+				tAttributeValueEntry    *pValueEntry	= NULL;
+
 				if (strcmp(pAttrEntry->fAttributeSignature.fBufferData, kDSNAttrMetaNodeLocation) == 0) {
 					status = dsGetAttributeValue(nodeRef, tDataBuff, 1, valueRef, &pValueEntry);
 					if (status == eDSNoErr && pValueEntry != NULL) {
-						pUserLocation = (char *) calloc(pValueEntry->fAttributeValueData.fBufferLength + 1, sizeof(char));
+						pUserLocation = talloc_zero_array(request, char, pValueEntry->fAttributeValueData.fBufferLength + 1);
 						memcpy(pUserLocation, pValueEntry->fAttributeValueData.fBufferData, pValueEntry->fAttributeValueData.fBufferLength);
 					}
 				} else if (strcmp(pAttrEntry->fAttributeSignature.fBufferData, kDSNAttrRecordName) == 0) {
@@ -156,7 +157,7 @@ static rlm_rcode_t getUserNodeRef(REQUEST *request, char* inUserName, char **out
 					}
 				}
 
-				if (pValueEntry != NULL) {
+				if (pValueEntry) {
 					dsDeallocAttributeValueEntry(dsRef, pValueEntry);
 					pValueEntry = NULL;
 				}
@@ -168,12 +169,18 @@ static rlm_rcode_t getUserNodeRef(REQUEST *request, char* inUserName, char **out
 			}
 		}
 
+		if (!pUserLocation) {
+			DEBUG2("[mschap] OpenDirectory has no user location");
+			result = RLM_MODULE_NOOP;
+			break;
+		}
+
 		/* OpenDirectory doesn't support mschapv2 authentication against
 		 * Active Directory.  AD users need to be authenticated using the
 		 * normal freeradius AD path (i.e. ntlm_auth).
 		 */
 		if (strncmp(pUserLocation, kActiveDirLoc, strlen(kActiveDirLoc)) == 0) {
-			DEBUG2("[mschap] OpenDirectory authentication returning noop.  OD doesn't support MSCHAPv2 for ActiveDirectory users.");
+			DEBUG2("[mschap] OpenDirectory authentication returning noop.  OD doesn't support MSCHAPv2 for ActiveDirectory users");
 			result = RLM_MODULE_NOOP;
 			break;
 		}
@@ -206,7 +213,7 @@ static rlm_rcode_t getUserNodeRef(REQUEST *request, char* inUserName, char **out
 		dsDataBufferDeAllocate(dsRef, tDataBuff);
 
 	if (pUserLocation != NULL)
-		free(pUserLocation);
+		talloc_free(pUserLocation);
 
 	if (pRecName != NULL) {
 		dsDataListDeallocate(dsRef, pRecName);
@@ -306,7 +313,8 @@ rlm_rcode_t od_mschap_auth(REQUEST *request, VALUE_PAIR *challenge, VALUE_PAIR *
 	memcpy(&(tDataBuff->fBufferData[uiCurr]), shortUserName, uiLen);
 	uiCurr += uiLen;
 #ifndef NDEBUG
-	RDEBUG2("	stepbuf server challenge:\t");
+	RINDENT();
+	RDEBUG2("Stepbuf server challenge : ");
 	for (t = 0; t < challenge->length; t++) {
 		fprintf(stderr, "%02x", challenge->vp_strvalue[t]);
 	}
@@ -322,7 +330,7 @@ rlm_rcode_t od_mschap_auth(REQUEST *request, VALUE_PAIR *challenge, VALUE_PAIR *
 	uiCurr += uiLen;
 
 #ifndef NDEBUG
-	RDEBUG2("	stepbuf peer challenge:\t\t");
+	RDEBUG2("Stepbuf peer challenge   : ");
 	for (t = 2; t < 18; t++) {
 		fprintf(stderr, "%02x", response->vp_strvalue[t]);
 	}
@@ -338,7 +346,8 @@ rlm_rcode_t od_mschap_auth(REQUEST *request, VALUE_PAIR *challenge, VALUE_PAIR *
 	uiCurr += uiLen;
 
 #ifndef NDEBUG
-	RDEBUG2("	stepbuf p24:\t\t");
+	RDEBUG2("Stepbuf p24              : ");
+	REXDENT();
 	for (t = 26; t < 50; t++) {
 		fprintf(stderr, "%02x", response->vp_strvalue[t]);
 	}
@@ -366,7 +375,7 @@ rlm_rcode_t od_mschap_auth(REQUEST *request, VALUE_PAIR *challenge, VALUE_PAIR *
 				 pStepBuff, NULL);
 	if (status == eDSNoErr) {
 		if (pStepBuff->fBufferLength > 4) {
-			uint32_t len;
+			size_t len;
 
 			memcpy(&len, pStepBuff->fBufferData, sizeof(len));
 			if (len == 40) {
@@ -379,7 +388,7 @@ rlm_rcode_t od_mschap_auth(REQUEST *request, VALUE_PAIR *challenge, VALUE_PAIR *
 						 *response->vp_strvalue,
 						 "MS-CHAP2-Success",
 						 mschap_reply, len+2);
-				RDEBUG2("dsDoDirNodeAuth returns stepbuff: %s (len=%ld)\n", mschap_reply, len);
+				RDEBUG2("dsDoDirNodeAuth returns stepbuff: %s (len=%zu)\n", mschap_reply, len);
 			}
 		}
 	}

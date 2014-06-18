@@ -1,24 +1,27 @@
 Source: freeradius
-Build-Depends: debhelper (>= 9),
+Build-Depends: debhelper (>= 7.4),
  quilt,
  dpkg-dev (>= 1.13.19),
  autotools-dev,
- libpam0g-dev,
- libmysqlclient-dev,
- libsqlite3-dev,
+ libcurl4-openssl-dev,
  libgdbm-dev,
- libldap2-dev,
- libsasl2-dev,
  libiodbc2-dev,
+ libjson0,
+ libjson0-dev,
  libkrb5-dev,
- libperl-dev,
+ libldap2-dev,
+ libpam0g-dev,
  libpcap-dev,
- python-dev,
- libreadline-dev,
+ libperl-dev,
+ libmysqlclient-dev,
  libpq-dev,
+ libreadline-dev,
+ libsasl2-dev,
+ libsqlite3-dev,
  libssl-dev,
  libtalloc-dev,
- libyubikey-dev
+ libyubikey-dev,
+ python-dev
 Section: net
 Priority: optional
 Maintainer: Josip Rodin <joy-packages@debian.org>
@@ -107,6 +110,13 @@ Architecture: any
 Depends: freeradius (= ${binary:Version}), ${shlibs:Depends}
 Description: LDAP module for FreeRADIUS server
  The FreeRADIUS server can use LDAP to authenticate users, and this module
+ is necessary for that.
+
+Package: freeradius-rest
+Architecture: any
+Depends: freeradius (= ${binary:Version}), ${shlibs:Depends}
+Description: REST module for FreeRADIUS server
+ The FreeRADIUS server can make calls to remote web APIs, and this module
  is necessary for that.
 
 Package: freeradius-postgresql

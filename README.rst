@@ -1,15 +1,13 @@
 The FreeRADIUS server
 =====================
 
-0. BRANCH STATE
----------------
-|BuildStatus|_
+|BuildStatus|_ |CoverityStatus|_
 
-.. |BuildStatus| image:: https://travis-ci.org/FreeRADIUS/freeradius-server.png?branch=v3.0.x
-.. _BuildStatus: https://travis-ci.org/FreeRADIUS/freeradius-server
+.. contents::
+   :local:
 
-1. INTRODUCTION
----------------
+Introduction
+------------
 
 The FreeRADIUS Server Project is a high performance and highly
 configurable RADIUS server that is available under the terms of the
@@ -43,14 +41,14 @@ Please see http://freeradius.org and http://wiki.freeradius.org for
 more information.
 
 
-2. INSTALLATION
----------------
+Installation
+------------
 
 To install the server, please see the INSTALL file in this directory.
 
 
-3. DEBUGGING THE SERVER
------------------------
+Debugging the Server
+--------------------
 
 Run the server in debugging mode, (``radiusd -X``) and READ the output.
 We cannot emphasize this point strongly enough.  The vast majority of
@@ -74,8 +72,8 @@ Type some key words into the search box, and you should find
 discussions about common problems and solution.
 
 
-4. ADDITIONAL INFORMATION
--------------------------
+Additional Information
+----------------------
 
 See ``doc/README`` for more information about FreeRADIUS.
 
@@ -85,20 +83,8 @@ old, and is not much more than a basic introduction to the subject.
 
 http://www.amazon.com/exec/obidos/ASIN/0596003226/freeradiusorg-20/
 
-For other RADIUS information, the Livington internet site had a lot
-of information about radius online.  Unfortunately Livingston, and the
-site, don't exist anymore but there is a copy of the site still at:
-
-http://portmasters.com/www.livingston.com/
-
-Especially worth reading is the "RADIUS for Unix administrators guide"
-
-* HTML:  http://portmasters.com/tech/docs/radius/1185title.html
-* PDF:   http://portmasters.com/tech/docs/pdf/radius.pdf
-
-
-5. PROBLEMS AND CONCERNS
-------------------------
+Problems and Concerns
+---------------------
 
 We understand that the server may be difficult to configure,
 install, or administer.  It is, after all, a complex system with many
@@ -113,10 +99,10 @@ following:
 2. Save a copy of the default configuration: It WORKS.  Don't change it!
 3. Verify that the server starts.  (You ARE using debugging mode, right?)
 4. Send it test packets using "radclient", or a NAS or AP.
-5. Verify that the server does what you expect.
-      - If it does not work, change the configuration, and go to step (3) 
-        If you're stuck, revert to using the "last working" configuration.
-      - If it works, proceed to step (6).
+5. Verify that the server does what you expect
+    - If it does not work, change the configuration, and go to step (3) 
+    - If you're stuck, revert to using the "last working" configuration.
+    - If it works, proceed to step (6).
 6. Save a copy of the working configuration, along with a note of what 
    you changed, and why.
 7. Make a SMALL change to the configuration.
@@ -129,8 +115,8 @@ will always take more time.  The "fast and loose" way will be MORE
 frustrating than quickly making forward progress!
 
 
-6. FEEDBACK
------------
+Feedback
+--------
 
 If you have any comments, bug reports, problems, or concerns, please
 send them to the 'freeradius-users' list (see the URL above).  We will
@@ -166,3 +152,9 @@ http://freeradius.org
 Please submit bug reports, suggestions, or patches.  That feedback
 gives the developers a guide as to where they should focus their work.
 If you like the server, feel free to mail the list and say so.
+
+.. |CoverityStatus| image:: https://scan.coverity.com/projects/58/badge.svg?
+.. _CoverityStatus: https://scan.coverity.com/projects/58
+
+.. |BuildStatus| image:: https://travis-ci.org/FreeRADIUS/freeradius-server.png
+.. _BuildStatus: https://travis-ci.org/FreeRADIUS/freeradius-server

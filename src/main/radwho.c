@@ -64,7 +64,7 @@ bool log_stripped_names;
 /*
  *	Global, for log.c to use.
  */
-struct main_config_t mainconfig;
+struct main_config_t main_config;
 
 #include <sys/wait.h>
 pid_t rad_fork(void)
@@ -80,11 +80,11 @@ pid_t rad_waitpid(pid_t pid, int *status)
 #endif
 
 struct radutmp_config_t {
-  char *radutmp_fn;
+  char const *radutmp_fn;
 } radutmpconfig;
 
 static const CONF_PARSER module_config[] = {
-  { "filename", PW_TYPE_FILE_INPUT, 0, &radutmpconfig.radutmp_fn,  RADUTMP },
+  { "filename", FR_CONF_POINTER(PW_TYPE_FILE_INPUT, &radutmpconfig.radutmp_fn), RADUTMP },
   { NULL, -1, 0, NULL, NULL }
 };
 
@@ -220,6 +220,13 @@ int main(int argc, char **argv)
 
 	raddb_dir = RADIUS_DIR;
 
+#ifndef NDEBUG
+	if (fr_fault_setup(getenv("PANIC_ACTION"), argv[0]) < 0) {
+		fr_perror("radwho");
+		exit(EXIT_FAILURE);
+	}
+#endif
+
 	talloc_set_log_stderr();
 
 	while((c = getopt(argc, argv, "d:fF:nN:sSipP:crRu:U:Z")) != EOF) switch(c) {
@@ -283,6 +290,14 @@ int main(int argc, char **argv)
 	}
 
 	/*
+	 *	Mismatch between the binary and the libraries it depends on
+	 */
+	if (fr_check_lib_magic(RADIUSD_MAGIC_NUMBER) < 0) {
+		fr_perror("radwho");
+		return 1;
+	}
+
+	/*
 	 *	Be safe.
 	 */
 	if (zap && !radiusoutput) zap = 0;
@@ -306,9 +321,9 @@ int main(int argc, char **argv)
 	if (radutmp_file) goto have_radutmp;
 
 	/*
-	 *	Initialize mainconfig
+	 *	Initialize main_config
 	 */
-	memset(&mainconfig, 0, sizeof(mainconfig));
+	memset(&main_config, 0, sizeof(main_config));
 
 	/* Read radiusd.conf */
 	snprintf(buffer, sizeof(buffer), "%.200s/radiusd.conf", raddb_dir);
@@ -339,7 +354,7 @@ int main(int argc, char **argv)
 	 */
 	if ((fp = fopen(radutmp_file, "r")) == NULL) {
 		fprintf(stderr, "%s: Error reading %s: %s\n",
-			progname, radutmp_file, strerror(errno));
+			progname, radutmp_file, fr_syserror(errno));
 		return 0;
 	}
 

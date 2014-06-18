@@ -51,32 +51,29 @@ RCSID("$Id$")
  */
 typedef struct detail_instance {
 	char const	*name;		//!< Instance name.
-	char		*filename;	//!< File/path to write to.
-	int		perm;		//!< Permissions to use for new files.
-	char		*group;		//!< Group to use for new files.
+	char const	*filename;	//!< File/path to write to.
+	uint32_t	perm;		//!< Permissions to use for new files.
+	char const	*group;		//!< Group to use for new files.
 
-	int		dirperm;	//!< Directory permissions to use for new files.
-
-	char		*header;	//!< Header format.
+	char const	*header;	//!< Header format.
 	bool		locking;	//!< Whether the file should be locked.
 
 	bool		log_srcdst;	//!< Add IP src/dst attributes to entries.
+
+	fr_logfile_t    *lf;		//!< Log file handler
 
 	fr_hash_table_t *ht;		//!< Holds suppressed attributes.
 } detail_instance_t;
 
 static const CONF_PARSER module_config[] = {
-	{ "detailfile", PW_TYPE_FILE_OUTPUT | PW_TYPE_DEPRECATED, offsetof(detail_instance_t, filename),
-	 NULL, NULL },
-	{ "filename", PW_TYPE_FILE_OUTPUT | PW_TYPE_REQUIRED, offsetof(detail_instance_t, filename),
-	 NULL, "%A/%{Client-IP-Address}/detail" },
-	{ "header", PW_TYPE_STRING_PTR, offsetof(detail_instance_t, header), NULL, "%t" },
-	{ "detailperm",	PW_TYPE_INTEGER | PW_TYPE_DEPRECATED, offsetof(detail_instance_t, perm), NULL, NULL },
-	{ "permissions", PW_TYPE_INTEGER, offsetof(detail_instance_t, perm), NULL, "0600" },
-	{ "group", PW_TYPE_STRING_PTR, offsetof(detail_instance_t, group), NULL,  NULL},
-	{ "dir_permissions", PW_TYPE_INTEGER, offsetof(detail_instance_t, dirperm), NULL, "0755" },
-	{ "locking", PW_TYPE_BOOLEAN, offsetof(detail_instance_t, locking), NULL, "no" },
-	{ "log_packet_header", PW_TYPE_BOOLEAN, offsetof(detail_instance_t, log_srcdst), NULL, "no" },
+	{ "detailfile", FR_CONF_OFFSET(PW_TYPE_FILE_OUTPUT | PW_TYPE_DEPRECATED, detail_instance_t, filename), NULL },
+	{ "filename", FR_CONF_OFFSET(PW_TYPE_FILE_OUTPUT | PW_TYPE_REQUIRED, detail_instance_t, filename), "%A/%{Client-IP-Address}/detail" },
+	{ "header", FR_CONF_OFFSET(PW_TYPE_STRING, detail_instance_t, header), "%t" },
+	{ "detailperm", FR_CONF_OFFSET(PW_TYPE_INTEGER | PW_TYPE_DEPRECATED, detail_instance_t, perm), NULL },
+	{ "permissions", FR_CONF_OFFSET(PW_TYPE_INTEGER, detail_instance_t, perm), "0600" },
+	{ "group", FR_CONF_OFFSET(PW_TYPE_STRING, detail_instance_t, group), NULL },
+	{ "locking", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, detail_instance_t, locking), "no" },
+	{ "log_packet_header", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, detail_instance_t, log_srcdst), "no" },
 	{ NULL, -1, 0, NULL, NULL }
 };
 
@@ -118,6 +115,12 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	inst->name = cf_section_name2(conf);
 	if (!inst->name) {
 		inst->name = cf_section_name1(conf);
+	}
+
+	inst->lf= fr_logfile_init(inst);
+	if (!inst->lf) {
+		cf_log_err_cs(conf, "Failed creating log file context");
+		return -1;
 	}
 
 	/*
@@ -176,6 +179,22 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	return 0;
 }
 
+/*
+ *	Wrapper for VPs allocated on the stack.
+ */
+static void detail_vp_print(TALLOC_CTX *ctx, FILE *out, VALUE_PAIR const *stacked)
+{
+	VALUE_PAIR *vp;
+
+	vp = talloc(ctx, VALUE_PAIR);
+	if (!vp) return;
+
+	memcpy(vp, stacked, sizeof(*vp));
+	vp_print(out, vp);
+	talloc_free(vp);
+}
+
+
 /** Write a single detail entry to file pointer
  *
  * @param[in] out Where to write entry.
@@ -195,7 +214,7 @@ static int detail_write(FILE *out, detail_instance_t *inst, REQUEST *request, RA
 
 #define WRITE(fmt, ...) do {\
 	if (fprintf(out, fmt, ## __VA_ARGS__) < 0) {\
-		RERROR("Failed writing to detail file: %s", strerror(errno));\
+		RERROR("Failed writing to detail file: %s", fr_syserror(errno));\
 		return -1;\
 	}\
 } while(0)
@@ -210,7 +229,7 @@ static int detail_write(FILE *out, detail_instance_t *inst, REQUEST *request, RA
 		 *	Print out names, if they're OK.
 		 *	Numbers, if not.
 		 */
-		if ((packet->code > 0) && (packet->code < FR_MAX_PACKET_CODE)) {
+		if (is_radius_code(packet->code)) {
 			WRITE("\tPacket-Type = %s\n", fr_packet_codes[packet->code]);
 		} else {
 			WRITE("\tPacket-Type = %d\n", packet->code);
@@ -246,24 +265,24 @@ static int detail_write(FILE *out, detail_instance_t *inst, REQUEST *request, RA
 			break;
 		}
 
-		vp_print(out, &src_vp);
-		vp_print(out, &dst_vp);
+		detail_vp_print(request, out, &src_vp);
+		detail_vp_print(request, out, &dst_vp);
 
 		src_vp.da = dict_attrbyvalue(PW_PACKET_SRC_PORT, 0);
 		src_vp.vp_integer = packet->src_port;
 		dst_vp.da = dict_attrbyvalue(PW_PACKET_DST_PORT, 0);
 		dst_vp.vp_integer = packet->dst_port;
 
-		vp_print(out, &src_vp);
-		vp_print(out, &dst_vp);
+		detail_vp_print(request, out, &src_vp);
+		detail_vp_print(request, out, &dst_vp);
 	}
 
 	{
 		vp_cursor_t cursor;
 		/* Write each attribute/value to the log file */
-		for (vp = paircursor(&cursor, &packet->vps);
+		for (vp = fr_cursor_init(&cursor, &packet->vps);
 		     vp;
-		     vp = pairnext(&cursor)) {
+		     vp = fr_cursor_next(&cursor)) {
 			if (inst->ht &&
 			    fr_hash_table_finddata(inst->ht, vp->da)) continue;
 
@@ -304,17 +323,11 @@ static int detail_write(FILE *out, detail_instance_t *inst, REQUEST *request, RA
 /*
  *	Do detail, compatible with old accounting
  */
-static rlm_rcode_t detail_do(void *instance, REQUEST *request, RADIUS_PACKET *packet, bool compat)
+static rlm_rcode_t CC_HINT(nonnull) detail_do(void *instance, REQUEST *request, RADIUS_PACKET *packet, bool compat)
 {
 	int		outfd;
 	char		buffer[DIRLEN];
-	char		*p;
-	struct stat	st;
-	int		locked;
-	int		lock_count;
-	struct timeval	tv;
 
-	off_t		fsize;
 	FILE		*outfp;
 
 #ifdef HAVE_GRP_H
@@ -324,15 +337,6 @@ static rlm_rcode_t detail_do(void *instance, REQUEST *request, RADIUS_PACKET *pa
 #endif
 
 	detail_instance_t *inst = instance;
-
-	rad_assert(request != NULL);
-
-	/*
-	 *	Nothing to log: don't do anything.
-	 */
-	if (!packet) {
-		return RLM_MODULE_NOOP;
-	}
 
 	/*
 	 *	Generate the path for the detail file.  Use the same
@@ -361,89 +365,11 @@ static rlm_rcode_t detail_do(void *instance, REQUEST *request, RADIUS_PACKET *pa
 #endif
 #endif
 
-	/*
-	 *	Grab the last directory delimiter.
-	 */
-	p = strrchr(buffer,'/');
-
-	/*
-	 *	There WAS a directory delimiter there, and the file
-	 *	doesn't exist, so we must create it the directories..
-	 */
-	if (p) {
-		*p = '\0';
-
-		/*
-		 *	Always try to create the directory.  If it
-		 *	exists, rad_mkdir() will check via stat(), and
-		 *	return immediately.
-		 *
-		 *	This catches the case where some idiot deleted
-		 *	a directory that the server was using.
-		 */
-		if (rad_mkdir(buffer, inst->dirperm) < 0) {
-			RERROR("Failed to create directory %s: %s", buffer, strerror(errno));
-			return RLM_MODULE_FAIL;
-		}
-
-		*p = '/';
-	} /* else there was no directory delimiter. */
-
-	locked = 0;
-	lock_count = 0;
-	do {
-		/*
-		 *	Open & create the file, with the given
-		 *	permissions.
-		 */
-		if ((outfd = open(buffer, O_WRONLY | O_APPEND | O_CREAT, inst->perm)) < 0) {
-			RERROR("Couldn't open file %s: %s", buffer, strerror(errno));
-			return RLM_MODULE_FAIL;
-		}
-
-		/*
-		 *	If we fail to aquire the filelock in 80 tries
-		 *	(approximately two seconds) we bail out.
-		 */
-		if (inst->locking) {
-			lseek(outfd, 0L, SEEK_SET);
-			if (rad_lockfd_nonblock(outfd, 0) < 0) {
-				close(outfd);
-				tv.tv_sec = 0;
-				tv.tv_usec = 25000;
-				select(0, NULL, NULL, NULL, &tv);
-				lock_count++;
-				continue;
-			}
-
-			/*
-			 *	The file might have been deleted by
-			 *	radrelay while we tried to acquire
-			 *	the lock (race condition)
-			 */
-			if (fstat(outfd, &st) != 0) {
-				RERROR("Couldn't stat file %s: %s", buffer, strerror(errno));
-				close(outfd);
-				return RLM_MODULE_FAIL;
-			}
-			if (st.st_nlink == 0) {
-				RDEBUG2("File '%s' removed by another program, retrying", buffer);
-				close(outfd);
-				lock_count = 0;
-				continue;
-			}
-
-			RDEBUG2("Acquired filelock, tried %d time(s)", lock_count + 1);
-			locked = 1;
-		}
-	} while (inst->locking && !locked && lock_count < 80);
-
-	if (inst->locking && !locked) {
-		close(outfd);
-		RERROR("Failed to acquire filelock for '%s', giving up", buffer);
+	outfd = fr_logfile_open(inst->lf, buffer, inst->perm);
+	if (outfd < 0) {
+		RERROR("Couldn't open file %s: %s", buffer, fr_strerror());
 		return RLM_MODULE_FAIL;
 	}
-
 
 #ifdef HAVE_GRP_H
 	if (inst->group != NULL) {
@@ -465,42 +391,24 @@ static rlm_rcode_t detail_do(void *instance, REQUEST *request, RADIUS_PACKET *pa
 skip_group:
 #endif
 
-	fsize = lseek(outfd, 0L, SEEK_END);
-	if (fsize < 0) {
-		RERROR("Failed to seek to the end of detail file '%s'", buffer);
-		close(outfd);
-		return RLM_MODULE_FAIL;
-	}
-
 	/*
 	 *	Open the output fp for buffering.
 	 */
 	if ((outfp = fdopen(outfd, "a")) == NULL) {
-		RERROR("Couldn't open file %s: %s", buffer, strerror(errno));
-		close(outfd);
+		RERROR("Couldn't open file %s: %s", buffer, fr_syserror(errno));
+	fail:
+		if (outfp) fclose(outfp);
+		fr_logfile_unlock(inst->lf, outfd);
 		return RLM_MODULE_FAIL;
 	}
 
-	if (detail_write(outfp, inst, request, packet, compat) < 0) {
-		fclose(outfp);
-		return RLM_MODULE_FAIL;
-	}
+	if (detail_write(outfp, inst, request, packet, compat) < 0) goto fail;
 
 	/*
-	 *	If we can't flush it to disk, truncate the file and return an error.
+	 *	Flush everything
 	 */
-	if (fflush(outfp) != 0) {
-		int ret;
-		ret = ftruncate(outfd, fsize);
-		if (ret) {
-			REDEBUG4("Failed truncating detail file: %s", strerror(ret));
-		}
-
-		fclose(outfp);
-		return RLM_MODULE_FAIL;
-	}
-
 	fclose(outfp);
+	fr_logfile_unlock(inst->lf, outfd); /* do NOT close outfp */
 
 	/*
 	 *	And everything is fine.
@@ -511,13 +419,13 @@ skip_group:
 /*
  *	Accounting - write the detail files.
  */
-static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *request)
 {
 #ifdef WITH_DETAIL
 	if (request->listener->type == RAD_LISTEN_DETAIL &&
 	    strcmp(((detail_instance_t *)instance)->filename,
 		   ((listen_detail_t *)request->listener->data)->filename) == 0) {
-		RDEBUG("Suppressing writes to detail file as the request was just read from a detail file.");
+		RDEBUG("Suppressing writes to detail file as the request was just read from a detail file");
 		return RLM_MODULE_NOOP;
 	}
 #endif
@@ -528,7 +436,7 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 /*
  *	Incoming Access Request - write the detail files.
  */
-static rlm_rcode_t mod_authorize(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *request)
 {
 	return detail_do(instance, request, request->packet, false);
 }
@@ -536,7 +444,7 @@ static rlm_rcode_t mod_authorize(void *instance, REQUEST *request)
 /*
  *	Outgoing Access-Request Reply - write the detail files.
  */
-static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *request)
 {
 	return detail_do(instance, request, request->reply, false);
 }
@@ -545,7 +453,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 /*
  *	Incoming CoA - write the detail files.
  */
-static rlm_rcode_t mod_recv_coa(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_recv_coa(void *instance, REQUEST *request)
 {
 	return detail_do(instance, request, request->packet, false);
 }
@@ -553,7 +461,7 @@ static rlm_rcode_t mod_recv_coa(void *instance, REQUEST *request)
 /*
  *	Outgoing CoA - write the detail files.
  */
-static rlm_rcode_t mod_send_coa(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_send_coa(void *instance, REQUEST *request)
 {
 	return detail_do(instance, request, request->reply, false);
 }
@@ -563,7 +471,7 @@ static rlm_rcode_t mod_send_coa(void *instance, REQUEST *request)
  *	Outgoing Access-Request to home server - write the detail files.
  */
 #ifdef WITH_PROXY
-static rlm_rcode_t mod_pre_proxy(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_pre_proxy(void *instance, REQUEST *request)
 {
 	if (request->proxy && request->proxy->vps) {
 		return detail_do(instance, request, request->proxy, false);
@@ -576,7 +484,7 @@ static rlm_rcode_t mod_pre_proxy(void *instance, REQUEST *request)
 /*
  *	Outgoing Access-Request Reply - write the detail files.
  */
-static rlm_rcode_t mod_post_proxy(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_post_proxy(void *instance, REQUEST *request)
 {
 	if (request->proxy_reply && request->proxy_reply->vps) {
 		return detail_do(instance, request, request->proxy_reply, false);
@@ -594,7 +502,7 @@ static rlm_rcode_t mod_post_proxy(void *instance, REQUEST *request)
 
 		rcode = mod_accounting(instance, request);
 		if (rcode == RLM_MODULE_OK) {
-			request->reply->code = PW_ACCOUNTING_RESPONSE;
+			request->reply->code = PW_CODE_ACCOUNTING_RESPONSE;
 		}
 		return rcode;
 	}
@@ -607,7 +515,7 @@ static rlm_rcode_t mod_post_proxy(void *instance, REQUEST *request)
 module_t rlm_detail = {
 	RLM_MODULE_INIT,
 	"detail",
-	RLM_TYPE_THREAD_UNSAFE | RLM_TYPE_CHECK_CONFIG_SAFE | RLM_TYPE_HUP_SAFE,
+	RLM_TYPE_HUP_SAFE,
 	sizeof(detail_instance_t),
 	module_config,
 	mod_instantiate,		/* instantiation */

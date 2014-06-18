@@ -41,16 +41,17 @@ typedef struct fr_event_fd_t {
 struct fr_event_list_t {
 	fr_heap_t	*times;
 
-	int		changed;
+	bool		changed;
 
 	int		exit;
 
 	fr_event_status_t status;
 
 	struct timeval  now;
-	int		dispatch;
+	bool		dispatch;
 
 	int		max_readers;
+	int		num_readers;
 	fr_event_fd_t	readers[FR_EV_MAX_FDS];
 };
 
@@ -61,7 +62,7 @@ struct fr_event_t {
 	fr_event_callback_t	callback;
 	void			*ctx;
 	struct timeval		when;
-	fr_event_t		**ev_p;
+	fr_event_t		**parent;
 	int			heap;
 };
 
@@ -81,34 +82,35 @@ static int fr_event_list_time_cmp(void const *one, void const *two)
 }
 
 
-void fr_event_list_free(fr_event_list_t *el)
+static int _event_list_free(fr_event_list_t *list)
 {
+	fr_event_list_t *el = list;
 	fr_event_t *ev;
-
-	if (!el) return;
 
 	while ((ev = fr_heap_peek(el->times)) != NULL) {
 		fr_event_delete(el, &ev);
 	}
 
 	fr_heap_delete(el->times);
-	free(el);
+
+	return 0;
 }
 
 
-fr_event_list_t *fr_event_list_create(fr_event_status_t status)
+fr_event_list_t *fr_event_list_create(TALLOC_CTX *ctx, fr_event_status_t status)
 {
 	int i;
 	fr_event_list_t *el;
 
-	el = malloc(sizeof(*el));
-	if (!el) return NULL;
-	memset(el, 0, sizeof(*el));
+	el = talloc_zero(ctx, fr_event_list_t);
+	if (!fr_assert(el)) {
+		return NULL;
+	}
+	talloc_set_destructor(el, _event_list_free);
 
-	el->times = fr_heap_create(fr_event_list_time_cmp,
-				   offsetof(fr_event_t, heap));
+	el->times = fr_heap_create(fr_event_list_time_cmp, offsetof(fr_event_t, heap));
 	if (!el->times) {
-		fr_event_list_free(el);
+		talloc_free(el);
 		return NULL;
 	}
 
@@ -117,9 +119,16 @@ fr_event_list_t *fr_event_list_create(fr_event_status_t status)
 	}
 
 	el->status = status;
-	el->changed = 1;	/* force re-set of fds's */
+	el->changed = true;	/* force re-set of fds's */
 
 	return el;
+}
+
+int fr_event_list_num_fds(fr_event_list_t *el)
+{
+	if (!el) return 0;
+
+	return el->num_readers;
 }
 
 int fr_event_list_num_elements(fr_event_list_t *el)
@@ -130,49 +139,77 @@ int fr_event_list_num_elements(fr_event_list_t *el)
 }
 
 
-int fr_event_delete(fr_event_list_t *el, fr_event_t **ev_p)
+int fr_event_delete(fr_event_list_t *el, fr_event_t **parent)
 {
+	int ret;
+
 	fr_event_t *ev;
 
-	if (!el || !ev_p || !*ev_p) return 0;
+	if (!el || !parent || !*parent) return 0;
 
-	ev = *ev_p;
-	if (ev->ev_p) *(ev->ev_p) = NULL;
-	*ev_p = NULL;
+#ifndef NDEBUG
+	/*
+	 *  Validate the event_t struct to detect memory issues early.
+	 */
+	ev = talloc_get_type_abort(*parent, fr_event_t);
 
-	fr_heap_extract(el->times, ev);
-	free(ev);
+#else
+	ev = *parent;
+#endif
 
-	return 1;
+	if (ev->parent) {
+		fr_assert(*(ev->parent) == ev);
+		*ev->parent = NULL;
+	}
+	*parent = NULL;
+
+	ret = fr_heap_extract(el->times, ev);
+	fr_assert(ret == 1);	/* events MUST be in the heap */
+	talloc_free(ev);
+
+	return ret;
 }
 
 
-int fr_event_insert(fr_event_list_t *el,
-		      fr_event_callback_t callback,
-		      void *ctx, struct timeval *when,
-		      fr_event_t **ev_p)
+int fr_event_insert(fr_event_list_t *el, fr_event_callback_t callback, void *ctx, struct timeval *when,
+		    fr_event_t **parent)
 {
 	fr_event_t *ev;
 
-	if (!el || !callback | !when || (when->tv_usec >= USEC)) return 0;
-
-	if (ev_p && *ev_p) fr_event_delete(el, ev_p);
-
-	ev = malloc(sizeof(*ev));
-	if (!ev) return 0;
-	memset(ev, 0, sizeof(*ev));
-
-	ev->callback = callback;
-	ev->ctx = ctx;
-	ev->when = *when;
-	ev->ev_p = ev_p;
-
-	if (!fr_heap_insert(el->times, ev)) {
-		free(ev);
+	if (!el) {
+		fr_strerror_printf("Invalid arguments (NULL event list)");
 		return 0;
 	}
 
-	if (ev_p) *ev_p = ev;
+	if (!callback) {
+		fr_strerror_printf("Invalid arguments (NULL callback)");
+		return 0;
+	}
+
+	if (!when || (when->tv_usec >= USEC)) {
+		fr_strerror_printf("Invalid arguments (time)");
+		return 0;
+	}
+
+	if (!parent) {
+		fr_strerror_printf("Invalid arguments (NULL parent)");
+		return 0;
+	}
+
+	if (*parent) fr_event_delete(el, parent);
+
+	ev = talloc_zero(el, fr_event_t);
+	ev->callback = callback;
+	ev->ctx = ctx;
+	ev->when = *when;
+	ev->parent = parent;
+
+	if (!fr_heap_insert(el->times, ev)) {
+		talloc_free(ev);
+		return 0;
+	}
+
+	*parent = ev;
 	return 1;
 }
 
@@ -197,6 +234,10 @@ int fr_event_run(fr_event_list_t *el, struct timeval *when)
 		when->tv_usec = 0;
 		return 0;
 	}
+
+#ifndef NDEBUG
+	ev = talloc_get_type_abort(ev, fr_event_t);
+#endif
 
 	/*
 	 *	See if it's time to do this one.
@@ -241,11 +282,35 @@ int fr_event_fd_insert(fr_event_list_t *el, int type, int fd,
 	int i;
 	fr_event_fd_t *ef;
 
-	if (!el || (fd < 0) || !handler || !ctx) return 0;
+	if (!el) {
+		fr_strerror_printf("Invalid arguments (NULL event list)");
+		return 0;
+	}
 
-	if (type != 0) return 0;
+	if (!handler) {
+		fr_strerror_printf("Invalid arguments (NULL handler)");
+		return 0;
+	}
 
-	if (el->max_readers >= FR_EV_MAX_FDS) return 0;
+	if (!ctx) {
+		fr_strerror_printf("Invalid arguments (NULL ctx)");
+		return 0;
+	}
+
+	if (fd < 0) {
+		fr_strerror_printf("Invalid arguments (bad FD %i)", fd);
+		return 0;
+	}
+
+	if (type != 0) {
+		fr_strerror_printf("Invalid type %i", type);
+		return 0;
+	}
+
+	if (el->max_readers >= FR_EV_MAX_FDS) {
+		fr_strerror_printf("Too many readers");
+		return 0;
+	}
 
 	ef = NULL;
 	for (i = 0; i <= el->max_readers; i++) {
@@ -255,6 +320,7 @@ int fr_event_fd_insert(fr_event_list_t *el, int type, int fd,
 		if (el->readers[i].fd == fd) {
 			if ((el->readers[i].handler != handler) ||
 			    (el->readers[i].ctx != ctx)) {
+				fr_strerror_printf("Multiple handlers for same FD");
 				return 0;
 			}
 
@@ -266,19 +332,23 @@ int fr_event_fd_insert(fr_event_list_t *el, int type, int fd,
 
 		if (el->readers[i].fd < 0) {
 			ef = &el->readers[i];
+			el->num_readers++;
 
 			if (i == el->max_readers) el->max_readers = i + 1;
 			break;
 		}
 	}
 
-	if (!ef) return 0;
+	if (!ef) {
+		fr_strerror_printf("Failed assigning FD");
+		return 0;
+	}
 
 	ef->handler = handler;
 	ef->ctx = ctx;
 	ef->fd = fd;
 
-	el->changed = 1;
+	el->changed = true;
 
 	return 1;
 }
@@ -294,8 +364,10 @@ int fr_event_fd_delete(fr_event_list_t *el, int type, int fd)
 	for (i = 0; i < el->max_readers; i++) {
 		if (el->readers[i].fd == fd) {
 			el->readers[i].fd = -1;
+			el->num_readers--;
+
 			if ((i + 1) == el->max_readers) el->max_readers = i;
-			el->changed = 1;
+			el->changed = true;
 			return 1;
 		}
 	}
@@ -311,6 +383,10 @@ void fr_event_loop_exit(fr_event_list_t *el, int code)
 	el->exit = code;
 }
 
+bool fr_event_loop_exiting(fr_event_list_t *el)
+{
+	return (el->exit != 0);
+}
 
 int fr_event_loop(fr_event_list_t *el)
 {
@@ -319,16 +395,19 @@ int fr_event_loop(fr_event_list_t *el)
 	fd_set read_fds, master_fds;
 
 	el->exit = 0;
-	el->dispatch = 1;
-	el->changed = 1;
+	el->dispatch = true;
+	el->changed = true;
 
 	while (!el->exit) {
 		/*
 		 *	Cache the list of FD's to watch.
 		 */
 		if (el->changed) {
+#ifdef __clang_analyzer__
+			memset(&master_fds, 0, sizeof(master_fds));
+#else
 			FD_ZERO(&master_fds);
-
+#endif
 			for (i = 0; i < el->max_readers; i++) {
 				if (el->readers[i].fd < 0) continue;
 
@@ -338,7 +417,7 @@ int fr_event_loop(fr_event_list_t *el)
 				FD_SET(el->readers[i].fd, &master_fds);
 			}
 
-			el->changed = 0;
+			el->changed = false;
 		}
 
 		/*
@@ -392,9 +471,8 @@ int fr_event_loop(fr_event_list_t *el)
 		read_fds = master_fds;
 		rcode = select(maxfd + 1, &read_fds, NULL, NULL, wake);
 		if ((rcode < 0) && (errno != EINTR)) {
-			fr_strerror_printf("Failed in select: %s",
-					   strerror(errno));
-			el->dispatch = 0;
+			fr_strerror_printf("Failed in select: %s", fr_syserror(errno));
+			el->dispatch = false;
 			return -1;
 		}
 
@@ -420,7 +498,7 @@ int fr_event_loop(fr_event_list_t *el)
 		}
 	}
 
-	el->dispatch = 0;
+	el->dispatch = false;
 	return el->exit;
 }
 
@@ -474,7 +552,7 @@ int main(int argc, char **argv)
 	struct timeval now, when;
 	fr_event_list_t *el;
 
-	el = fr_event_list_create();
+	el = fr_event_list_create(NULL, NULL);
 	if (!el) exit(1);
 
 	memset(&rand_pool, 0, sizeof(rand_pool));
@@ -509,7 +587,7 @@ int main(int argc, char **argv)
 		}
 	}
 
-	fr_event_list_free(el);
+	talloc_free(el);
 
 	return 0;
 }

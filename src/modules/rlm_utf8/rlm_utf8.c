@@ -28,15 +28,15 @@ RCSID("$Id$")
 /*
  *	Reject any non-UTF8 data.
  */
-static rlm_rcode_t utf8_clean(UNUSED void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_utf8_clean(UNUSED void *instance, REQUEST *request)
 {
 	size_t i, len;
 	VALUE_PAIR *vp;
 	vp_cursor_t cursor;
 
-	for (vp = paircursor(&cursor, &request->packet->vps);
+	for (vp = fr_cursor_init(&cursor, &request->packet->vps);
 	     vp;
-	     vp = pairnext(&cursor)) {
+	     vp = fr_cursor_next(&cursor)) {
 		if (vp->da->type != PW_TYPE_STRING) continue;
 
 		for (i = 0; i < vp->length; i += len) {
@@ -67,15 +67,15 @@ module_t rlm_utf8 = {
 	NULL,				/* detach */
 	{
 		NULL,		 	/* authentication */
-		utf8_clean,		/* authorization */
-		utf8_clean,		/* preaccounting */
+		mod_utf8_clean,		/* authorization */
+		mod_utf8_clean,		/* preaccounting */
 		NULL,			/* accounting */
 		NULL,			/* checksimul */
 		NULL,			/* pre-proxy */
 		NULL,			/* post-proxy */
 		NULL			/* post-auth */
 #ifdef WITH_COA
-		, utf8_clean,
+		, mod_utf8_clean,
 		NULL
 #endif
 	},

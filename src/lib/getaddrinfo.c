@@ -139,7 +139,7 @@ gethostbyname_r(char const *hostname, struct hostent *result,
 
 #ifdef HAVE_PTHREAD_H
     if (fr_hostbyname == 0) {
-    	pthread_mutex_init(&fr_hostbyname_mutex, NULL);
+	pthread_mutex_init(&fr_hostbyname_mutex, NULL);
 	fr_hostbyname = 1;
     }
     pthread_mutex_lock(&fr_hostbyname_mutex);
@@ -172,7 +172,7 @@ gethostbyaddr_r(char const *addr, int len, int type, struct hostent *result,
 
 #ifdef HAVE_PTHREAD_H
     if (fr_hostbyaddr == 0) {
-    	pthread_mutex_init(&fr_hostbyaddr_mutex, NULL);
+	pthread_mutex_init(&fr_hostbyaddr_mutex, NULL);
 	fr_hostbyaddr = 1;
     }
     pthread_mutex_lock(&fr_hostbyaddr_mutex);
@@ -204,7 +204,7 @@ gethostbyaddr_r(char const *addr, int len, int type, struct hostent *result,
 
 #ifndef HAVE_GETADDRINFO
 static struct addrinfo *
-malloc_ai(int port, u_long addr, int socktype, int proto)
+malloc_ai(uint16_t port, u_long addr, int socktype, int proto)
 {
     struct addrinfo *ai;
 
@@ -266,7 +266,8 @@ getaddrinfo(char const *hostname, char const *servname,
     struct hostent *hp;
     struct hostent result;
     struct in_addr in;
-    int i, port = 0, socktype, proto;
+    int i, socktype, proto;
+    uint16_t port = 0;
     int error;
     char buffer[2048];
 

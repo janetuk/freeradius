@@ -30,50 +30,45 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 void cbtls_info(SSL const *s, int where, int ret)
 {
 	char const *str, *state;
-	int w;
 	REQUEST *request = SSL_get_ex_data(s, FR_TLS_EX_INDEX_REQUEST);
-	char buffer[1024];
 
-	w = where & ~SSL_ST_MASK;
-	if (w & SSL_ST_CONNECT) str="    TLS_connect";
-	else if (w & SSL_ST_ACCEPT) str="    TLS_accept";
-	else str="    (other)";
-
-	state = SSL_state_string_long(s);
-	state = state ? state : "NULL";
-	buffer[0] = '\0';
-
-	if (where & SSL_CB_LOOP) {
-		RDEBUG2("%s: %s", str, state);
-	} else if (where & SSL_CB_HANDSHAKE_START) {
-		RDEBUG2("%s: %s", str, state);
-	} else if (where & SSL_CB_HANDSHAKE_DONE) {
-		RDEBUG2("%s: %s", str, state);
-	} else if (where & SSL_CB_ALERT) {
-		str=(where & SSL_CB_READ)?"read":"write";
-
-		snprintf(buffer, sizeof(buffer), "TLS Alert %s:%s:%s",
-			 str,
-			 SSL_alert_type_string_long(ret),
-			 SSL_alert_desc_string_long(ret));
-	} else if (where & SSL_CB_EXIT) {
-		if (ret == 0) {
-			snprintf(buffer, sizeof(buffer), "%s: failed in %s",
-				 str, state);
-
-		} else if (ret < 0) {
-			if (SSL_want_read(s)) {
-				RDEBUG2("%s: Need to read more data: %s",
-				       str, state);
-			} else {
-				snprintf(buffer, sizeof(buffer),
-					 "%s: error in %s", str, state);
-			}
-		}
+	if ((where & ~SSL_ST_MASK) & SSL_ST_CONNECT) {
+		str="TLS_connect";
+	} else if (((where & ~SSL_ST_MASK)) & SSL_ST_ACCEPT) {
+		str="TLS_accept";
+	} else {
+		str="(other)";
 	}
 
-	if (buffer[0] && request) {
-		REDEBUG("SSL says: %s", buffer);
+	state = SSL_state_string_long(s);
+	state = state ? state : "<none>";
+
+	if ((where & SSL_CB_LOOP) || (where & SSL_CB_HANDSHAKE_START) || (where & SSL_CB_HANDSHAKE_DONE)) {
+		RDEBUG2("%s: %s", str, state);
+		return;
+	}
+
+	if (where & SSL_CB_ALERT) {
+		if ((ret & 0xff) == SSL_AD_CLOSE_NOTIFY) return;
+
+		RERROR("TLS Alert %s:%s:%s", (where & SSL_CB_READ) ? "read": "write",
+		       SSL_alert_type_string_long(ret), SSL_alert_desc_string_long(ret));
+		return;
+	}
+
+	if (where & SSL_CB_EXIT) {
+		if (ret == 0) {
+			RERROR("%s: Failed in %s", str, state);
+			return;
+		}
+
+		if (ret < 0) {
+			if (SSL_want_read(s)) {
+				RDEBUG2("%s: Need to read more data: %s", str, state);
+				return;
+			}
+			ERROR("tls: %s: Error in %s", str, state);
+		}
 	}
 }
 
@@ -107,6 +102,23 @@ void cbtls_msg(int write_p, int msg_version, int content_type,
 		state->info.handshake_type = ((unsigned char const *)buf)[0];
 		state->info.alert_level = 0x00;
 		state->info.alert_description = 0x00;
+
+#ifdef SSL3_RT_HEARTBEAT
+	} else if (content_type == TLS1_RT_HEARTBEAT) {
+		uint8_t *p = buf;
+
+		if ((len >= 3) && (p[0] == 1)) {
+			size_t payload_len;
+
+			payload_len = (p[1] << 8) | p[2];
+
+			if ((payload_len + 3) > len) {
+				state->invalid_hb_used = true;
+				ERROR("OpenSSL Heartbeat attack detected.  Closing connection");
+				return;
+			}
+		}
+#endif
 	}
 	tls_session_information(state);
 }

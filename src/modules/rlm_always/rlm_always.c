@@ -32,9 +32,9 @@ RCSID("$Id$")
  *	going to return.
  */
 typedef struct rlm_always_t {
-	char		*rcode_str;
+	char const	*rcode_str;
 	rlm_rcode_t	rcode;
-	int		simulcount;
+	uint32_t	simulcount;
 	bool		mpp;
 } rlm_always_t;
 
@@ -42,12 +42,9 @@ typedef struct rlm_always_t {
  *	A mapping of configuration file names to internal variables.
  */
 static const CONF_PARSER module_config[] = {
-  { "rcode",      PW_TYPE_STRING_PTR, offsetof(rlm_always_t,rcode_str),
-    NULL, "fail" },
-  { "simulcount", PW_TYPE_INTEGER,    offsetof(rlm_always_t,simulcount),
-    NULL, "0" },
-  { "mpp",	PW_TYPE_BOOLEAN,    offsetof(rlm_always_t,mpp),
-    NULL, "no" },
+  { "rcode", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_always_t, rcode_str), "fail" },
+  { "simulcount", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_always_t, simulcount), "0" },
+  { "mpp", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_always_t, mpp), "no" },
 
   { NULL, -1, 0, NULL, NULL }		/* end the list */
 };
@@ -97,7 +94,7 @@ static int mod_instantiate(UNUSED CONF_SECTION *conf, void *instance)
  *	Just return the rcode ... this function is autz, auth, acct, and
  *	preacct!
  */
-static rlm_rcode_t always_return(void *instance, UNUSED REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_always_return(void *instance, UNUSED REQUEST *request)
 {
 	return ((struct rlm_always_t *)instance)->rcode;
 }
@@ -106,7 +103,7 @@ static rlm_rcode_t always_return(void *instance, UNUSED REQUEST *request)
 /*
  *	checksimul fakes some other variables besides the rcode...
  */
-static rlm_rcode_t mod_checksimul(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_checksimul(void *instance, REQUEST *request)
 {
 	struct rlm_always_t *inst = instance;
 
@@ -122,28 +119,28 @@ static rlm_rcode_t mod_checksimul(void *instance, REQUEST *request)
 module_t rlm_always = {
 	RLM_MODULE_INIT,
 	"always",
-	RLM_TYPE_CHECK_CONFIG_SAFE,   	/* type */
+	0,   	/* type */
 	sizeof(rlm_always_t),		/* config size */
 	module_config,			/* configuration */
 	mod_instantiate,		/* instantiation */
 	NULL,				/* detach */
 	{
-		always_return,		/* authentication */
-		always_return,		/* authorization */
-		always_return,		/* preaccounting */
-		always_return,		/* accounting */
+		mod_always_return,		/* authentication */
+		mod_always_return,		/* authorization */
+		mod_always_return,		/* preaccounting */
+		mod_always_return,		/* accounting */
 #ifdef WITH_SESSION_MGMT
 		mod_checksimul,	/* checksimul */
 #else
 		NULL,
 #endif
-		always_return,	       	/* pre-proxy */
-		always_return,		/* post-proxy */
-		always_return		/* post-auth */
+		mod_always_return,	       	/* pre-proxy */
+		mod_always_return,		/* post-proxy */
+		mod_always_return		/* post-auth */
 #ifdef WITH_COA
 		,
-		always_return,		/* recv-coa */
-		always_return		/* send-coa */
+		mod_always_return,		/* recv-coa */
+		mod_always_return		/* send-coa */
 #endif
 	},
 };

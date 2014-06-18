@@ -39,7 +39,7 @@ int		timestr_match(char const *, time_t);
  *	be used as the instance handle.
  */
 typedef struct rlm_logintime_t {
-	int min_time;
+	uint32_t	min_time;
 } rlm_logintime_t;
 
 /*
@@ -52,8 +52,8 @@ typedef struct rlm_logintime_t {
  *	buffer over-flows.
  */
 static const CONF_PARSER module_config[] = {
-  { "minimum-timeout", PW_TYPE_INTEGER | PW_TYPE_DEPRECATED, offsetof(rlm_logintime_t,min_time), NULL, NULL},
-  { "minimum_timeout", PW_TYPE_INTEGER, offsetof(rlm_logintime_t,min_time), NULL, "60" },
+  { "minimum-timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER | PW_TYPE_DEPRECATED, rlm_logintime_t, min_time), NULL },
+  { "minimum_timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_logintime_t, min_time), "60" },
 
   { NULL, -1, 0, NULL, NULL }
 };
@@ -143,11 +143,11 @@ static int time_of_day(UNUSED void *instance, REQUEST *req, UNUSED VALUE_PAIR *r
 /*
  *      Check if account has expired, and if user may login now.
  */
-static rlm_rcode_t mod_authorize(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *request)
 {
 	rlm_logintime_t *inst = instance;
 	VALUE_PAIR *ends, *timeout;
-	int left;
+	uint32_t left;
 
 	ends = pairfind(request->config_items, PW_LOGIN_TIME, 0, TAG_ANY);
 	if (!ends) {
@@ -198,13 +198,13 @@ static rlm_rcode_t mod_authorize(void *instance, REQUEST *request)
 			timeout->vp_integer = left;
 		}
 	} else {
-		timeout = radius_paircreate(request, &request->reply->vps, PW_SESSION_TIMEOUT, 0);
+		timeout = radius_paircreate(request->reply, &request->reply->vps, PW_SESSION_TIMEOUT, 0);
 		timeout->vp_integer = left;
 	}
 
 	RDEBUG("reply:Session-Timeout set to %i", left);
 
-	return RLM_MODULE_OK;
+	return RLM_MODULE_UPDATED;
 }
 
 
@@ -255,7 +255,7 @@ static int mod_detach(UNUSED void *instance)
 module_t rlm_logintime = {
 	RLM_MODULE_INIT,
 	"logintime",
-	RLM_TYPE_CHECK_CONFIG_SAFE,   	/* type */
+	0,   	/* type */
 	sizeof(rlm_logintime_t),
 	module_config,
 	mod_instantiate,		/* instantiation */

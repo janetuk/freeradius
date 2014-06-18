@@ -31,7 +31,6 @@ RCSID("$Id$");
 
 /* @todo: this is a hack */
 #  define DEBUG			if (fr_debug_flag && fr_log_fp) fr_printf_log
-void fr_strerror_printf(char const *fmt, ...);
 #  define debug_pair(vp)	do { if (fr_debug_flag && fr_log_fp) { \
 					vp_print(fr_log_fp, vp); \
 				     } \
@@ -87,7 +86,7 @@ static int vqp_sendto(int sockfd, void *data, size_t data_len, int flags,
 		      UNUSED fr_ipaddr_t *src_ipaddr,
 #endif
 		      fr_ipaddr_t *dst_ipaddr,
-		      int dst_port)
+		      uint16_t dst_port)
 {
 	struct sockaddr_storage	dst;
 	socklen_t		sizeof_dst;
@@ -144,7 +143,7 @@ static ssize_t vqp_recvfrom(int sockfd, RADIUS_PACKET *packet, int flags,
 	ssize_t			data_len;
 	uint8_t			header[4];
 	size_t			len;
-	int			port;
+	uint16_t		port;
 
 	memset(&src, 0, sizeof_src);
 	memset(&dst, 0, sizeof_dst);
@@ -293,7 +292,7 @@ RADIUS_PACKET *vqp_recv(int sockfd)
 	 *	Check for socket errors.
 	 */
 	if (length < 0) {
-		fr_strerror_printf("Error receiving packet: %s", strerror(errno));
+		fr_strerror_printf("Error receiving packet: %s", fr_syserror(errno));
 		/* packet->data is NULL */
 		rad_free(&packet);
 		return NULL;
@@ -385,7 +384,7 @@ RADIUS_PACKET *vqp_recv(int sockfd)
 	/*
 	 *	This is more than a bit of a hack.
 	 */
-	packet->code = PW_AUTHENTICATION_REQUEST;
+	packet->code = PW_CODE_AUTHENTICATION_REQUEST;
 
 	memcpy(&id, packet->data + 4, 4);
 	packet->id = ntohl(id);
@@ -433,7 +432,7 @@ int vqp_decode(RADIUS_PACKET *packet)
 
 	if (packet->data_len < VQP_HDR_LEN) return -1;
 
-	paircursor(&cursor, &packet->vps);
+	fr_cursor_init(&cursor, &packet->vps);
 	vp = paircreate(packet, PW_VQP_PACKET_TYPE, 0);
 	if (!vp) {
 		fr_strerror_printf("No memory");
@@ -441,7 +440,7 @@ int vqp_decode(RADIUS_PACKET *packet)
 	}
 	vp->vp_integer = packet->data[1];
 	debug_pair(vp);
-	pairinsert(&cursor, vp);
+	fr_cursor_insert(&cursor, vp);
 
 	vp = paircreate(packet, PW_VQP_ERROR_CODE, 0);
 	if (!vp) {
@@ -450,7 +449,7 @@ int vqp_decode(RADIUS_PACKET *packet)
 	}
 	vp->vp_integer = packet->data[2];
 	debug_pair(vp);
-	pairinsert(&cursor, vp);
+	fr_cursor_insert(&cursor, vp);
 
 	vp = paircreate(packet, PW_VQP_SEQUENCE_NUMBER, 0);
 	if (!vp) {
@@ -459,7 +458,7 @@ int vqp_decode(RADIUS_PACKET *packet)
 	}
 	vp->vp_integer = packet->id; /* already set by vqp_recv */
 	debug_pair(vp);
-	pairinsert(&cursor, vp);
+	fr_cursor_insert(&cursor, vp);
 
 	ptr = packet->data + VQP_HDR_LEN;
 	end = packet->data + packet->data_len;
@@ -489,7 +488,7 @@ int vqp_decode(RADIUS_PACKET *packet)
 		}
 
 		switch (vp->da->type) {
-		case PW_TYPE_IPADDR:
+		case PW_TYPE_IPV4_ADDR:
 			if (length == 4) {
 				memcpy(&vp->vp_ipaddr, ptr, 4);
 				vp->length = 4;
@@ -507,20 +506,32 @@ int vqp_decode(RADIUS_PACKET *packet)
 
 		default:
 		case PW_TYPE_OCTETS:
-			pairmemcpy(vp, ptr, length);
+			if (length < 1024) {
+				pairmemcpy(vp, ptr, length);
+			} else {
+				pairmemcpy(vp, ptr, 1024);
+			}
 			break;
 
 		case PW_TYPE_STRING:
-			vp->length = length;
-			vp->vp_strvalue = p = talloc_array(vp, char, vp->length + 1);
-			vp->type = VT_DATA;
-			memcpy(p, ptr, vp->length);
-			p[vp->length] = '\0';
+			if (length < 1024) {
+				vp->length = length;
+				vp->vp_strvalue = p = talloc_array(vp, char, vp->length + 1);
+				vp->type = VT_DATA;
+				memcpy(p, ptr, vp->length);
+				p[vp->length] = '\0';
+			} else {
+				vp->length = 1024;
+				vp->vp_strvalue = p = talloc_array(vp, char, 1025);
+				vp->type = VT_DATA;
+				memcpy(p, ptr, vp->length);
+				p[vp->length] = '\0';
+			}
 			break;
 		}
 		ptr += length;
 		debug_pair(vp);
-		pairinsert(&cursor, vp);
+		fr_cursor_insert(&cursor, vp);
 	}
 
 	/*
@@ -680,7 +691,7 @@ int vqp_encode(RADIUS_PACKET *packet, RADIUS_PACKET *original)
 
 		/* Data */
 		switch (vp->da->type) {
-		case PW_TYPE_IPADDR:
+		case PW_TYPE_IPV4_ADDR:
 			memcpy(ptr, &vp->vp_ipaddr, 4);
 			break;
 

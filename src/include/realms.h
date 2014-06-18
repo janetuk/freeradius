@@ -15,29 +15,35 @@ RCSIDH(realms_h, "$Id$")
 extern "C" {
 #endif
 
-#define HOME_TYPE_INVALID (0)
-#define HOME_TYPE_AUTH    (1)
-#define HOME_TYPE_ACCT    (2)
+typedef enum {
+	HOME_TYPE_INVALID = 0,
+	HOME_TYPE_AUTH,
+	HOME_TYPE_ACCT
 #ifdef WITH_COA
-#define HOME_TYPE_COA     (3)
+	,HOME_TYPE_COA
 #endif
+} home_type_t;
 
-#define HOME_PING_CHECK_NONE		(0)
-#define HOME_PING_CHECK_STATUS_SERVER	(1)
-#define HOME_PING_CHECK_REQUEST		(2)
+typedef enum {
+	HOME_PING_CHECK_NONE = 0,
+	HOME_PING_CHECK_STATUS_SERVER,
+	HOME_PING_CHECK_REQUEST
+} home_ping_check_t;
 
-#define HOME_STATE_ALIVE		(0)
-#define HOME_STATE_ZOMBIE		(1)
-#define HOME_STATE_IS_DEAD		(2)
-#define HOME_STATE_UNKNOWN		(3)
+typedef enum {
+	HOME_STATE_ALIVE = 0,
+	HOME_STATE_ZOMBIE,
+	HOME_STATE_IS_DEAD,
+	HOME_STATE_UNKNOWN
+} home_state_t;
 
 typedef struct fr_socket_limit_t {
-	int		max_connections;
-	int		num_connections;
-	int		max_requests;
-	int		num_requests;
-	int		lifetime;
-	int		idle_timeout;
+	uint32_t	max_connections;
+	uint32_t	num_connections;
+	uint32_t	max_requests;
+	uint32_t	num_requests;
+	uint32_t	lifetime;
+	uint32_t	idle_timeout;
 } fr_socket_limit_t;
 
 typedef struct home_server {
@@ -49,7 +55,7 @@ typedef struct home_server {
 
 	fr_ipaddr_t	ipaddr;
 
-	int		port;
+	uint16_t	port;
 	int		type;		/* auth/acct */
 
 	int		proto;
@@ -62,15 +68,16 @@ typedef struct home_server {
 	fr_event_t	*ev;
 	struct timeval	when;
 
-	int		response_window;
-	int		max_outstanding; /* don't overload it */
-	int		currently_outstanding;
+	struct timeval	response_window;
+	uint32_t	max_outstanding; /* don't overload it */
+	uint32_t	currently_outstanding;
 
 	time_t		last_packet_sent;
 	time_t		last_packet_recv;
+	time_t		last_failed_open;
 	struct timeval	revive_time;
 	struct timeval	zombie_period_start;
-	int		zombie_period; /* unresponsive for T, mark it dead */
+	uint32_t	zombie_period; /* unresponsive for T, mark it dead */
 
 	int		state;
 
@@ -78,19 +85,19 @@ typedef struct home_server {
 	char const	*ping_user_name;
 	char const	*ping_user_password;
 
-	int		ping_interval;
-	int		num_pings_to_alive;
-	int		num_sent_pings;
-	int		num_received_pings;
-	int		ping_timeout;
+	uint32_t	ping_interval;
+	uint32_t	num_pings_to_alive;
+	uint32_t	num_sent_pings;
+	uint32_t	num_received_pings;
+	uint32_t	ping_timeout;
 
-	int		revive_interval; /* if it doesn't support pings */
+	uint32_t	revive_interval; /* if it doesn't support pings */
 	CONF_SECTION	*cs;
 #ifdef WITH_COA
-	int			coa_irt;
-	int			coa_mrc;
-	int			coa_mrt;
-	int			coa_mrd;
+	uint32_t	coa_irt;
+	uint32_t	coa_mrc;
+	uint32_t	coa_mrt;
+	uint32_t	coa_mrd;
 #endif
 #ifdef WITH_TLS
 	fr_tls_server_conf_t	*tls;
@@ -103,7 +110,7 @@ typedef struct home_server {
 
 	fr_stats_ema_t  ema;
 #endif
-} home_server;
+} home_server_t;
 
 
 typedef enum home_pool_type_t {
@@ -125,12 +132,12 @@ typedef struct home_pool_t {
 
 	char const		*virtual_server; /* for pre/post-proxy */
 
-	home_server		*fallback;
+	home_server_t		*fallback;
 	int			in_fallback;
 	time_t			time_all_dead;
 
 	int			num_home_servers;
-	home_server		*servers[1];
+	home_server_t		*servers[1];
 } home_pool_t;
 
 
@@ -150,19 +157,19 @@ int realms_init(CONF_SECTION *config);
 void realms_free(void);
 REALM *realm_find(char const *name); /* name is from a packet */
 REALM *realm_find2(char const *name); /* ... with name taken from realm_find */
-  int realms_home_server_add(home_server *home, CONF_SECTION *cs, int dual);
+  int realms_home_server_add(home_server_t *home, CONF_SECTION *cs, int dual);
   int realms_pool_add(home_pool_t *pool, CONF_SECTION *cs);
   int realms_realm_add( REALM *r, CONF_SECTION *cs);
 
 
-void home_server_update_request(home_server *home, REQUEST *request);
-home_server *home_server_ldb(char const *realmname, home_pool_t *pool, REQUEST *request);
-home_server *home_server_find(fr_ipaddr_t *ipaddr, int port, int proto);
+void home_server_update_request(home_server_t *home, REQUEST *request);
+home_server_t *home_server_ldb(char const *realmname, home_pool_t *pool, REQUEST *request);
+home_server_t *home_server_find(fr_ipaddr_t *ipaddr, uint16_t port, int proto);
 #ifdef WITH_COA
-home_server *home_server_byname(char const *name, int type);
+home_server_t *home_server_byname(char const *name, int type);
 #endif
 #ifdef WITH_STATS
-home_server *home_server_bynumber(int number);
+home_server_t *home_server_bynumber(int number);
 #endif
 home_pool_t *home_pool_byname(char const *name, int type);
 

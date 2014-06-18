@@ -24,7 +24,9 @@ CREATE TABLE radacct (
 	NASPortId		text,
 	NASPortType		text,
 	AcctStartTime		timestamp with time zone,
+	AcctUpdateTime		timestamp with time zone,
 	AcctStopTime		timestamp with time zone,
+	AcctInterval		bigint,
 	AcctSessionTime		bigint,
 	AcctAuthentic		text,
 	ConnectInfo_start	text,
@@ -36,17 +38,26 @@ CREATE TABLE radacct (
 	AcctTerminateCause	text,
 	ServiceType		text,
 	FramedProtocol		text,
-	FramedIPAddress		inet,
-	AcctStartDelay		integer,
-	AcctStopDelay		integer
+	FramedIPAddress		inet
 );
 -- This index may be useful..
 -- CREATE UNIQUE INDEX radacct_whoson on radacct (AcctStartTime, nasipaddress);
 
--- For use by onoff-, update-, stop- and simul_* queries
-CREATE INDEX radacct_active_user_idx ON radacct (UserName, NASIPAddress, AcctSessionId) WHERE AcctStopTime IS NULL;
+-- For use by update-, stop- and simul_* queries
+CREATE INDEX radacct_active_session_idx ON radacct (AcctUniqueId) WHERE AcctStopTime IS NULL;
+
+-- Add if you you regularly have to replay packets
+-- CREATE INDEX radacct_session_idx ON radacct (AcctUniqueId);
+
+-- For backwards compatibility
+-- CREATE INDEX radacct_active_user_idx ON radacct (AcctSessionId, UserName, NASIPAddress) WHERE AcctStopTime IS NULL;
+
+-- For use by onoff-
+CREATE INDEX radacct_bulk_close ON radacct (NASIPAddress, AcctStartTime) WHERE AcctStopTime IS NULL;
+
 -- and for common statistic queries:
 CREATE INDEX radacct_start_user_idx ON radacct (AcctStartTime, UserName);
+
 -- and, optionally
 -- CREATE INDEX radacct_stop_user_idx ON radacct (acctStopTime, UserName);
 

@@ -2,7 +2,7 @@
 #  The list of files to install.
 #
 LOCAL_FILES :=		clients.conf dictionary templates.conf experimental.conf \
-			proxy.conf radiusd.conf trigger.conf README.rst
+			proxy.conf radiusd.conf trigger.conf README.rst panic.gdb
 
 DEFAULT_SITES :=	default inner-tunnel
 LOCAL_SITES :=		$(addprefix raddb/sites-enabled/,$(DEFAULT_SITES))
@@ -11,7 +11,7 @@ DEFAULT_MODULES :=	always attr_filter cache_eap chap \
 			detail detail.log digest dhcp dynamic_clients eap \
 			echo exec expiration expr files linelog logintime \
 			mschap ntlm_auth pap passwd preprocess radutmp realm \
-			replicate soh sradutmp unix utf8
+			replicate soh sradutmp unix unpack utf8
 
 LOCAL_MODULES :=	$(addprefix raddb/mods-enabled/,$(DEFAULT_MODULES))
 
@@ -32,10 +32,10 @@ INSTALL_RADDB_DIRS :=	$(R)$(raddbdir)/ $(addprefix $(R)$(raddbdir)/, $(RADDB_DIR
 
 # Grab files from the various subdirectories
 INSTALL_FILES := 	$(wildcard raddb/sites-available/* raddb/mods-available/*) \
-		 	$(addprefix raddb/,$(LOCAL_FILES)) \
-		 	$(addprefix raddb/certs/,$(LOCAL_CERT_FILES)) \
-		 	$(shell find raddb/mods-config -type f -print) \
-		 	$(shell find raddb/policy.d -type f -print)
+			$(addprefix raddb/,$(LOCAL_FILES)) \
+			$(addprefix raddb/certs/,$(LOCAL_CERT_FILES)) \
+			$(shell find raddb/mods-config -type f -print) \
+			$(shell find raddb/policy.d -type f -print)
 
 # Re-write local files to installed files, filtering out editor backups
 INSTALL_RADDB :=	$(patsubst raddb/%,$(R)$(raddbdir)/%,\

@@ -52,13 +52,14 @@ RCSID("$Id$")
  */
 typedef struct rlm_linelog_t {
 	CONF_SECTION	*cs;
-	char		*filename;
-	char		*syslog_facility;
+	char const	*filename;
+	char const	*syslog_facility;
 	int		facility;
-	int		permissions;
-	char		*group;
-	char		*line;
-	char		*reference;
+	uint32_t	permissions;
+	char const	*group;
+	char const	*line;
+	char const	*reference;
+	fr_logfile_t	*lf;
 } rlm_linelog_t;
 
 /*
@@ -71,18 +72,12 @@ typedef struct rlm_linelog_t {
  *	buffer over-flows.
  */
 static const CONF_PARSER module_config[] = {
-	{ "filename",  PW_TYPE_FILE_OUTPUT| PW_TYPE_REQUIRED,
-	  offsetof(rlm_linelog_t,filename), NULL,  NULL},
-	{ "syslog_facility",  PW_TYPE_STRING_PTR,
-	  offsetof(rlm_linelog_t,syslog_facility), NULL,  NULL},
-	{ "permissions",  PW_TYPE_INTEGER,
-	  offsetof(rlm_linelog_t,permissions), NULL,  "0600"},
-	{ "group",  PW_TYPE_STRING_PTR,
-	  offsetof(rlm_linelog_t,group), NULL,  NULL},
-	{ "format",  PW_TYPE_STRING_PTR,
-	  offsetof(rlm_linelog_t,line), NULL,  NULL},
-	{ "reference",  PW_TYPE_STRING_PTR,
-	  offsetof(rlm_linelog_t,reference), NULL,  NULL},
+	{ "filename", FR_CONF_OFFSET(PW_TYPE_FILE_OUTPUT| PW_TYPE_REQUIRED, rlm_linelog_t, filename), NULL },
+	{ "syslog_facility", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_linelog_t, syslog_facility), NULL },
+	{ "permissions", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_linelog_t, permissions), "0600" },
+	{ "group", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_linelog_t, group), NULL },
+	{ "format", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_linelog_t, line), NULL },
+	{ "reference", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_linelog_t, reference), NULL },
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
 
@@ -94,7 +89,10 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 {
 	rlm_linelog_t *inst = instance;
 
-	rad_assert(inst->filename && *inst->filename);
+	if (!inst->filename) {
+		cf_log_err_cs(conf, "No value provided for 'filename'");
+		return -1;
+	}
 
 #ifndef HAVE_SYSLOG_H
 	if (strcmp(inst->filename, "syslog") == 0) {
@@ -118,6 +116,12 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 
 	if (!inst->line) {
 		cf_log_err_cs(conf, "Must specify a log format");
+		return -1;
+	}
+
+	inst->lf = fr_logfile_init(inst);
+	if (!inst->lf) {
+		cf_log_err_cs(conf, "Failed creating log file context");
 		return -1;
 	}
 
@@ -176,7 +180,7 @@ static size_t linelog_escape_func(UNUSED REQUEST *request,
 
 		default:
 			if (outlen <= 4) break;
-			snprintf(out, outlen,  "\\%03o", *in);
+			snprintf(out, outlen,  "\\%03o", (uint8_t) *in);
 			in++;
 			out += 4;
 			outlen -= 4;
@@ -189,7 +193,7 @@ static size_t linelog_escape_func(UNUSED REQUEST *request,
 	return len;
 }
 
-static rlm_rcode_t do_linelog(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_do_linelog(void *instance, REQUEST *request)
 {
 	int fd = -1;
 	char buffer[4096];
@@ -204,14 +208,15 @@ static rlm_rcode_t do_linelog(void *instance, REQUEST *request)
 	char *endptr;
 #endif
 
+	line[0] = '\0';
+
 	if (inst->reference) {
 		CONF_ITEM *ci;
 		CONF_PAIR *cp;
 
 		p = line + 1;
 
-		if (radius_xlat(p, sizeof(line) - 2, request, inst->reference, linelog_escape_func,
-		    NULL) < 0) {
+		if (radius_xlat(p, sizeof(line) - 2, request, inst->reference, linelog_escape_func, NULL) < 0) {
 			return RLM_MODULE_FAIL;
 		}
 
@@ -260,16 +265,16 @@ static rlm_rcode_t do_linelog(void *instance, REQUEST *request)
 		if (p) {
 			*p = '\0';
 			if (rad_mkdir(buffer, 0700) < 0) {
-				RERROR("rlm_linelog: Failed to create directory %s: %s", buffer, strerror(errno));
+				RERROR("rlm_linelog: Failed to create directory %s: %s", buffer, fr_syserror(errno));
 				return RLM_MODULE_FAIL;
 			}
 			*p = '/';
 		}
 
-		fd = open(buffer, O_WRONLY | O_APPEND | O_CREAT, inst->permissions);
+		fd = fr_logfile_open(inst->lf, buffer, inst->permissions);
 		if (fd == -1) {
 			ERROR("rlm_linelog: Failed to open %s: %s",
-			       buffer, strerror(errno));
+			       buffer, fr_syserror(errno));
 			return RLM_MODULE_FAIL;
 		}
 
@@ -297,9 +302,9 @@ static rlm_rcode_t do_linelog(void *instance, REQUEST *request)
 	/*
 	 *	FIXME: Check length.
 	 */
-	if (radius_xlat(line, sizeof(line) - 1, request, value, linelog_escape_func, NULL) < 0) {
+	if (value && (radius_xlat(line, sizeof(line) - 1, request, value, linelog_escape_func, NULL) < 0)) {
 		if (fd > -1) {
-			close(fd);
+			fr_logfile_close(inst->lf, fd);
 		}
 
 		return RLM_MODULE_FAIL;
@@ -309,12 +314,12 @@ static rlm_rcode_t do_linelog(void *instance, REQUEST *request)
 		strcat(line, "\n");
 
 		if (write(fd, line, strlen(line)) < 0) {
-			EDEBUG("rlm_linelog: Failed writing: %s", strerror(errno));
-			close(fd);
+			ERROR("rlm_linelog: Failed writing: %s", fr_syserror(errno));
+			fr_logfile_close(inst->lf, fd);
 			return RLM_MODULE_FAIL;
 		}
 
-		close(fd);
+		fr_logfile_close(inst->lf, fd);
 
 #ifdef HAVE_SYSLOG_H
 	} else {
@@ -332,23 +337,23 @@ static rlm_rcode_t do_linelog(void *instance, REQUEST *request)
 module_t rlm_linelog = {
 	RLM_MODULE_INIT,
 	"linelog",
-	RLM_TYPE_CHECK_CONFIG_SAFE,   	/* type */
+	RLM_TYPE_HUP_SAFE,   	/* type */
 	sizeof(rlm_linelog_t),
 	module_config,
 	mod_instantiate,		/* instantiation */
 	NULL,				/* detach */
 	{
-		do_linelog,	/* authentication */
-		do_linelog,	/* authorization */
-		do_linelog,	/* preaccounting */
-		do_linelog,	/* accounting */
-		NULL,		/* checksimul */
-		do_linelog, 	/* pre-proxy */
-		do_linelog,	/* post-proxy */
-		do_linelog	/* post-auth */
+		mod_do_linelog,		/* authentication */
+		mod_do_linelog,		/* authorization */
+		mod_do_linelog,		/* preaccounting */
+		mod_do_linelog,		/* accounting */
+		NULL,			/* checksimul */
+		mod_do_linelog, 	/* pre-proxy */
+		mod_do_linelog,		/* post-proxy */
+		mod_do_linelog		/* post-auth */
 #ifdef WITH_COA
-		, do_linelog,	/* recv-coa */
-		do_linelog	/* send-coa */
+		, mod_do_linelog,	/* recv-coa */
+		mod_do_linelog		/* send-coa */
 #endif
 	},
 };

@@ -43,7 +43,7 @@ typedef struct ldap_instance {
 	char const	*server;			//!< Initial server to bind to.
 	int		is_url;				//!< Whether ldap_is_ldap_url says 'server' is an
 							//!< ldap[s]:// url.
-	int		port;				//!< Port to use when binding to the server.
+	uint16_t	port;				//!< Port to use when binding to the server.
 
 	char const	*admin_dn;			//!< DN we bind as when we need to query the LDAP
 							//!< directory.
@@ -60,11 +60,11 @@ typedef struct ldap_instance {
 							//!< referrals on the same server, but won't bind to other
 							//!< servers.
 
-	int		ldap_debug;			//!< Debug flag for the SDK.
+	uint32_t	ldap_debug;			//!< Debug flag for the SDK.
 
 	char const	*xlat_name;			//!< Instance name.
 
-	int		expect_password;		//!< True if the user_map included a mapping between an LDAP
+	bool		expect_password;		//!< True if the user_map included a mapping between an LDAP
 							//!< attribute and one of our password reference attributes.
 
 	/*
@@ -81,7 +81,7 @@ typedef struct ldap_instance {
 	int		userobj_scope;			//!< Search scope.
 
 	char const	*userobj_membership_attr;	//!< Attribute that describes groups the user is a member of.
-	char		*userobj_access_attr;		//!< Attribute to check to see if the user should be locked out.
+	char const	*userobj_access_attr;		//!< Attribute to check to see if the user should be locked out.
 	bool		access_positive;		//!< If true the presence of the attribute will allow access,
 							//!< else it will deny access.
 
@@ -110,6 +110,12 @@ typedef struct ldap_instance {
 							//!< memberships for the current user object, and perform any
 							//!< resolution necessary to determine the DNs of those groups,
 							//!< then right them to the control list (LDAP-GroupDN).
+
+	char const	*cache_attribute;		//!< Sets the attribute we use when creating and retrieving
+							//!< cached group memberships.
+
+	DICT_ATTR const	*cache_da;			//!< The DA associated with this specific version of the
+							//!< rlm_ldap module.
 
 	DICT_ATTR const	*group_da;			//!< The DA associated with this specific version of the
 							//!< rlm_ldap module.
@@ -180,17 +186,17 @@ typedef struct ldap_instance {
 	 *	Options
 	 */
 
-	int  		net_timeout;			//!< How long we wait for new connections to the LDAP server
+	uint32_t  	net_timeout;			//!< How long we wait for new connections to the LDAP server
 							//!< to be established.
-	int		res_timeout;			//!< How long we wait for a result from the server.
-	int		srv_timelimit;			//!< How long the server should spent on a single request
+	uint32_t	res_timeout;			//!< How long we wait for a result from the server.
+	uint32_t	srv_timelimit;			//!< How long the server should spent on a single request
 							//!< (also bounded by value on the server).
 
 #ifdef WITH_EDIR
- 	/*
+	/*
 	 *	eDir support
 	 */
-	bool		edir;				//!< If true attempt to retrieve the user's Cleartext password
+	bool		edir;				//!< If true attempt to retrieve the user's cleartext password
 							//!< using the Universal Password feature of Novell eDirectory.
 	bool		edir_autz;			//!< If true, and we have the Universal Password, bind with it
 							//!< to perform additional authorisation checks.
@@ -199,15 +205,15 @@ typedef struct ldap_instance {
 	 *	For keep-alives.
 	 */
 #ifdef LDAP_OPT_X_KEEPALIVE_IDLE
-	int		keepalive_idle;			//!< Number of seconds a connections needs to remain idle
+	uint32_t	keepalive_idle;			//!< Number of seconds a connections needs to remain idle
 							//!< before TCP starts sending keepalive probes.
 #endif
 #ifdef LDAP_OPT_X_KEEPALIVE_PROBES
-	int		keepalive_probes;		//!< Number of missed timeouts before the connection is
+	uint32_t	keepalive_probes;		//!< Number of missed timeouts before the connection is
 							//!< dropped.
 #endif
 #ifdef LDAP_OPT_X_KEEPALIVE_INTERVAL
-	int		keepalive_interval;		//!< Interval between keepalive probes.
+	uint32_t	keepalive_interval;		//!< Interval between keepalive probes.
 #endif
 
 } ldap_instance_t;
@@ -229,8 +235,9 @@ typedef struct rlm_ldap_map_xlat {
 } rlm_ldap_map_xlat_t;
 
 typedef struct rlm_ldap_result {
-	char	**values;
-	int	count;
+	struct berval	**values;			//!< libldap struct containing bv_val (char *)
+							//!< and length bv_len.
+	int		count;				//!< Number of values.
 } rlm_ldap_result_t;
 
 typedef enum {
@@ -278,6 +285,9 @@ typedef enum {
 #define LDAP_EXT() if (extra) LDAP_ERR(extra)
 #define LDAP_EXT_REQ() do { if (extra) { if (request) REDEBUG("%s", extra); else LDAP_ERR("%s", extra); }} while (0)
 
+extern FR_NAME_NUMBER const ldap_scope[];
+extern FR_NAME_NUMBER const ldap_tls_require_cert[];
+
 /*
  *	ldap.c - Wrappers arounds OpenLDAP functions.
  */
@@ -288,7 +298,7 @@ int rlm_ldap_is_dn(char const *str);
 ssize_t rlm_ldap_xlat_filter(REQUEST *request, char const **sub, size_t sublen, char *out, size_t outlen);
 
 ldap_rcode_t rlm_ldap_bind(ldap_instance_t const *inst, REQUEST *request, ldap_handle_t **pconn, char const *dn,
-			  char const *password, int retry);
+			  char const *password, bool retry);
 
 char const *rlm_ldap_error_str(ldap_handle_t const *conn);
 
@@ -348,7 +358,7 @@ void rlm_ldap_map_do(ldap_instance_t const *inst, REQUEST *request, LDAP *handle
 		     rlm_ldap_map_xlat_t const *expanded, LDAPMessage *entry);
 
 rlm_rcode_t rlm_ldap_map_profile(ldap_instance_t const *inst, REQUEST *request, ldap_handle_t **pconn,
-			    	 char const *profile, rlm_ldap_map_xlat_t const *expanded);
+				 char const *profile, rlm_ldap_map_xlat_t const *expanded);
 
 /*
  *	clients.c - Dynamic clients (bulk load).

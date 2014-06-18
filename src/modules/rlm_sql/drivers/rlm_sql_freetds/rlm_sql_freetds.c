@@ -76,7 +76,7 @@ static CS_RETCODE CS_PUBLIC clientmsg_callback(CS_CONTEXT *context, UNUSED CS_CO
 
 	if (this->error) TALLOC_FREE(this->error);
 
-	this->error = talloc_asprintf(this, "client error: severity(%ld), number(%ld), origin(%ld), layer(%ld): %s",
+	this->error = talloc_typed_asprintf(this, "client error: severity(%ld), number(%ld), origin(%ld), layer(%ld): %s",
 				      (long)CS_SEVERITY(emsgp->severity), (long)CS_NUMBER(emsgp->msgnumber),
 				      (long)CS_ORIGIN(emsgp->msgnumber), (long)CS_LAYER(emsgp->msgnumber),
 				      emsgp->msgstring);
@@ -120,7 +120,7 @@ static CS_RETCODE CS_PUBLIC csmsg_callback(CS_CONTEXT *context, CS_CLIENTMSG *em
 
 	if (this->error) TALLOC_FREE(this->error);
 
-	this->error = talloc_asprintf(this, "cs error: severity(%ld), number(%ld), origin(%ld), layer(%ld): %s",
+	this->error = talloc_typed_asprintf(this, "cs error: severity(%ld), number(%ld), origin(%ld), layer(%ld): %s",
 				      (long)CS_SEVERITY(emsgp->severity), (long)CS_NUMBER(emsgp->msgnumber),
 				      (long)CS_ORIGIN(emsgp->msgnumber), (long)CS_LAYER(emsgp->msgnumber),
 				      emsgp->msgstring);
@@ -169,12 +169,12 @@ static CS_RETCODE CS_PUBLIC servermsg_callback(UNUSED CS_CONTEXT *context, UNUSE
 	} else {
 		if (this->error) TALLOC_FREE(this->error);
 
-		this->error = talloc_asprintf(this, "server msg from \"%s\": severity(%ld), number(%ld), origin(%ld), "
-		     			      "layer(%ld), procedure \"%s\": %s",
-		     			      (msgp->svrnlen > 0) ? msgp->svrname : "unknown",
-		     			      (long)msgp->msgnumber, (long)msgp->severity, (long)msgp->state,
-		     			      (long)msgp->line,
-		     			      (msgp->proclen > 0) ? msgp->proc : "none", msgp->text);
+		this->error = talloc_typed_asprintf(this, "server msg from \"%s\": severity(%ld), number(%ld), origin(%ld), "
+					      "layer(%ld), procedure \"%s\": %s",
+					      (msgp->svrnlen > 0) ? msgp->svrname : "unknown",
+					      (long)msgp->msgnumber, (long)msgp->severity, (long)msgp->state,
+					      (long)msgp->line,
+					      (msgp->proclen > 0) ? msgp->proc : "none", msgp->text);
 	}
 
 	return CS_SUCCEED;
@@ -288,7 +288,7 @@ static sql_rcode_t sql_query(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *
 	case CS_FAIL: /* Serious failure, freetds requires us to cancel and maybe even close db */
 		ERROR("rlm_sql_freetds: failure retrieving query results");
 		if ((ret = ct_cancel(NULL, conn->command, CS_CANCEL_ALL)) == CS_FAIL) {
-			INFO("rlm_sql_freetds: cleaning up.");
+			INFO("rlm_sql_freetds: cleaning up");
 
 			return RLM_SQL_RECONNECT;
 		}
@@ -490,7 +490,7 @@ static sql_rcode_t sql_select_query(rlm_sql_handle_t *handle, rlm_sql_config_t *
 		ERROR("rlm_sql_freetds: failure retrieving query results");
 
 		if ((ret = ct_cancel(NULL, conn->command, CS_CANCEL_ALL)) == CS_FAIL) {
-			ERROR("rlm_sql_freetds: cleaning up.");
+			ERROR("rlm_sql_freetds: cleaning up");
 
 			return RLM_SQL_RECONNECT;
 		}
@@ -571,7 +571,7 @@ static sql_rcode_t sql_fetch_row(rlm_sql_handle_t *handle, UNUSED rlm_sql_config
 		 */
 		ERROR("rlm_sql_freetds: failure fetching row data");
 		if ((ret = ct_cancel(NULL, conn->command, CS_CANCEL_ALL)) == CS_FAIL) {
-			ERROR("rlm_sql_freetds: cleaning up.");
+			ERROR("rlm_sql_freetds: cleaning up");
 		} else {
 			conn->command = NULL;
 		}

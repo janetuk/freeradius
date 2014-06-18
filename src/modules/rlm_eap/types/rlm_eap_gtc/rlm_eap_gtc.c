@@ -41,13 +41,11 @@ typedef struct rlm_eap_gtc_t {
 } rlm_eap_gtc_t;
 
 static CONF_PARSER module_config[] = {
-	{ "challenge", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_eap_gtc_t, challenge), NULL, "Password: " },
+	{ "challenge", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_gtc_t, challenge), "Password: " },
 
-	{ "auth_type", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_eap_gtc_t, auth_type_name), NULL, "PAP" },
+	{ "auth_type", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_gtc_t, auth_type_name), "PAP" },
 
- 	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
+	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
 };
 
 
@@ -70,15 +68,18 @@ static int gtc_attach(CONF_SECTION *cs, void **instance)
 		return -1;
 	}
 
-	dval = dict_valbyname(PW_AUTH_TYPE, 0, inst->auth_type_name);
-	if (!dval) {
-		ERROR("rlm_eap_gtc: Unknown Auth-Type %s",
-		       inst->auth_type_name);
-		return -1;
+	if (inst->auth_type_name && *inst->auth_type_name) {
+		dval = dict_valbyname(PW_AUTH_TYPE, 0, inst->auth_type_name);
+		if (!dval) {
+			ERROR("rlm_eap_gtc: Unknown Auth-Type %s",
+			      inst->auth_type_name);
+			return -1;
+		}
+
+		inst->auth_type = dval->value;
+	} else {
+		inst->auth_type = PW_AUTHTYPE_LOCAL;
 	}
-
-	inst->auth_type = dval->value;
-
 	return 0;
 }
 
@@ -128,7 +129,7 @@ static int gtc_initiate(void *instance, eap_handler_t *handler)
 /*
  *	Authenticate a previously sent challenge.
  */
-static int mod_authenticate(void *instance, eap_handler_t *handler)
+static int CC_HINT(nonnull) mod_authenticate(void *instance, eap_handler_t *handler)
 {
 	VALUE_PAIR *vp;
 	EAP_DS *eap_ds = handler->eap_ds;
@@ -138,7 +139,6 @@ static int mod_authenticate(void *instance, eap_handler_t *handler)
 	/*
 	 *	Get the Cleartext-Password for this user.
 	 */
-	rad_assert(request != NULL);
 	rad_assert(handler->stage == AUTHENTICATE);
 
 	/*
@@ -170,11 +170,11 @@ static int mod_authenticate(void *instance, eap_handler_t *handler)
 	 */
 	if (inst->auth_type == PW_AUTHTYPE_LOCAL) {
 		/*
-		 *	For now, do clear-text password authentication.
+		 *	For now, do cleartext password authentication.
 		 */
 		vp = pairfind(request->config_items, PW_CLEARTEXT_PASSWORD, 0, TAG_ANY);
 		if (!vp) {
-			REDEBUG2("Cleartext-Password is required for authentication.");
+			REDEBUG2("Cleartext-Password is required for authentication");
 			eap_ds->request->code = PW_EAP_FAILURE;
 			return 0;
 		}

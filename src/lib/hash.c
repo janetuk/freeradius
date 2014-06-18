@@ -44,7 +44,7 @@ typedef struct fr_hash_entry_t {
 	struct fr_hash_entry_t *next;
 	uint32_t	reversed;
 	uint32_t	key;
- 	void const 	*data;
+	void const 	*data;
 } fr_hash_entry_t;
 
 
@@ -613,7 +613,7 @@ int fr_hash_table_walk(fr_hash_table_t *ht,
 
 			next = node->next;
 
-			memcpy(&arg, node->data, sizeof(arg));
+			memcpy(&arg, &node->data, sizeof(arg));
 			rcode = callback(context, arg);
 
 			if (rcode != 0) return rcode;
@@ -757,33 +757,6 @@ uint32_t fr_hash_update(void const *data, size_t size, uint32_t hash)
     return hash;
 
 }
-
-/*
- *	Return a "folded" hash, where the lower "bits" are the
- *	hash, and the upper bits are zero.
- *
- *	If you need a non-power-of-two hash, cope.
- */
-uint32_t fr_hash_fold(uint32_t hash, int bits)
-{
-	int count;
-	uint32_t result;
-
-	if ((bits <= 0) || (bits >= 32)) return hash;
-
-	result = hash;
-
-	/*
-	 *	Never use the same bits twice in an xor.
-	 */
-	for (count = 0; count < 32; count += bits) {
-		hash >>= bits;
-		result ^= hash;
-	}
-
-	return result & (((uint32_t) (1 << bits)) - 1);
-}
-
 
 /*
  *	Hash a C string, so we loop over it once.

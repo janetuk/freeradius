@@ -14,18 +14,17 @@ RCSIDH(rlm_sql_h, "$Id$")
 #include	<freeradius-devel/connection.h>
 #include	<freeradius-devel/modpriv.h>
 
-#define MAX_QUERY_LEN		4096
-
 #define PW_ITEM_CHECK		0
 #define PW_ITEM_REPLY		1
 
 
 /* SQL Errors */
 typedef enum {
-	RLM_SQL_QUERY_ERROR = -3,
-	RLM_SQL_ERROR = -2,
-	RLM_SQL_OK = 0,
-	RLM_SQL_RECONNECT = 1
+	RLM_SQL_QUERY_ERROR = -3,	//!< Query syntax error
+	RLM_SQL_ERROR = -2,		//!< General connection/server error
+	RLM_SQL_OK = 0,			//!< Success
+	RLM_SQL_RECONNECT = 1,		//!< Stale connection, should reconnect
+	RLM_SQL_DUPLICATE = 2		//!< Key constraint violation
 } sql_rcode_t;
 
 typedef char **rlm_sql_row_t;
@@ -56,6 +55,8 @@ typedef struct sql_config {
 	char const	*default_profile;
 
 	char const	*client_query;
+
+	char const	*open_query;
 	char const	*authorize_check_query;
 	char const 	*authorize_reply_query;
 	char const	*authorize_group_check_query;
@@ -64,13 +65,13 @@ typedef struct sql_config {
 	char const	*simul_verify_query;
 	char const 	*groupmemb_query;
 
-	bool const	do_clients;
-	bool const	read_groups;
+	bool		do_clients;
+	bool		read_groups;
 	char const	*logfile;
 
-	bool const	deletestalesessions;
+	bool		deletestalesessions;
 	char const	*allowed_chars;
-	int const	query_timeout;
+	uint32_t	query_timeout;
 
 	void		*driver;	//!< Where drivers should write a
 					//!< pointer to their configurations.
@@ -90,9 +91,9 @@ typedef struct sql_config {
 typedef struct sql_inst rlm_sql_t;
 
 typedef struct rlm_sql_handle {
-	void	*conn;
-	rlm_sql_row_t row;
-	rlm_sql_t *inst;
+	void		*conn;	//!< Database specific connection handle.
+	rlm_sql_row_t	row;	//!< Row data from the last query.
+	rlm_sql_t	*inst;	//!< The rlm_sql instance this connection belongs to.
 } rlm_sql_handle_t;
 
 typedef struct rlm_sql_module_t {
@@ -121,6 +122,7 @@ struct sql_inst {
 
 	DICT_ATTR const		*sql_user;	//!< Cached pointer to SQL-User-Name
 						//!< dictionary attribute.
+	fr_logfile_t		*lf;
 
 	void *handle;
 	rlm_sql_module_t *module;
@@ -139,21 +141,20 @@ typedef struct sql_grouplist {
 	struct sql_grouplist	*next;
 } rlm_sql_grouplist_t;
 
-int     sql_socket_pool_init(rlm_sql_t *inst);
-void    sql_poolfree(rlm_sql_t *inst);
-int     sql_close_socket(rlm_sql_t *inst, rlm_sql_handle_t *handle);
+int		sql_socket_pool_init(rlm_sql_t *inst);
+void		sql_poolfree(rlm_sql_t *inst);
+int		sql_close_socket(rlm_sql_t *inst, rlm_sql_handle_t *handle);
 rlm_sql_handle_t *sql_get_socket(rlm_sql_t *inst);
-int     sql_release_socket(rlm_sql_t *inst, rlm_sql_handle_t *handle);
-int     sql_userparse(TALLOC_CTX *ctx, VALUE_PAIR **first_pair, rlm_sql_row_t row);
-int     sql_read_realms(rlm_sql_handle_t *handle);
-int     sql_getvpdata(rlm_sql_t *inst, rlm_sql_handle_t **handle, TALLOC_CTX *ctx, VALUE_PAIR **pair, char const *query);
-int     sql_read_naslist(rlm_sql_handle_t *handle);
-int     sql_read_clients(rlm_sql_handle_t *handle);
-int     sql_dict_init(rlm_sql_handle_t *handle);
-void 	rlm_sql_query_log(rlm_sql_t *inst, REQUEST *request,
-	       		  sql_acct_section_t *section, char const *query);
-int	rlm_sql_select_query(rlm_sql_handle_t **handle, rlm_sql_t *inst, char const *query);
-int	rlm_sql_query(rlm_sql_handle_t **handle, rlm_sql_t *inst, char const *query);
-int	rlm_sql_fetch_row(rlm_sql_handle_t **handle, rlm_sql_t *inst);
-int	sql_set_user(rlm_sql_t *inst, REQUEST *request, char const *username);
+int		sql_release_socket(rlm_sql_t *inst, rlm_sql_handle_t *handle);
+int		sql_userparse(TALLOC_CTX *ctx, VALUE_PAIR **first_pair, rlm_sql_row_t row);
+int		sql_read_realms(rlm_sql_handle_t *handle);
+int		sql_getvpdata(rlm_sql_t *inst, rlm_sql_handle_t **handle, TALLOC_CTX *ctx, VALUE_PAIR **pair, char const *query);
+int		sql_read_naslist(rlm_sql_handle_t *handle);
+int		sql_read_clients(rlm_sql_handle_t *handle);
+int		sql_dict_init(rlm_sql_handle_t *handle);
+void 		CC_HINT(nonnull (1, 2, 4)) rlm_sql_query_log(rlm_sql_t *inst, REQUEST *request, sql_acct_section_t *section, char const *query);
+sql_rcode_t	CC_HINT(nonnull) rlm_sql_select_query(rlm_sql_handle_t **handle, rlm_sql_t *inst, char const *query);
+sql_rcode_t	CC_HINT(nonnull) rlm_sql_query(rlm_sql_handle_t **handle, rlm_sql_t *inst, char const *query);
+int		rlm_sql_fetch_row(rlm_sql_handle_t **handle, rlm_sql_t *inst);
+int		sql_set_user(rlm_sql_t *inst, REQUEST *request, char const *username);
 #endif
