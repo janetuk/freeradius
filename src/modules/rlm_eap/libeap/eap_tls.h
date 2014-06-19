@@ -43,10 +43,6 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 #include <sys/time.h>
 #include <arpa/inet.h>
 
-#ifdef HAVE_LIMITS_H
-#include <limits.h>
-#endif
-
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif
@@ -61,9 +57,9 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
  */
 fr_tls_status_t eaptls_process(eap_handler_t *handler);
 
-int 		eaptls_success(eap_handler_t *handler, int peap_flag);
-int 		eaptls_fail(eap_handler_t *handler, int peap_flag);
-int 		eaptls_request(EAP_DS *eap_ds, tls_session_t *ssn);
+int 		eaptls_success(eap_handler_t *handler, int peap_flag) CC_HINT(nonnull);
+int 		eaptls_fail(eap_handler_t *handler, int peap_flag) CC_HINT(nonnull);
+int 		eaptls_request(EAP_DS *eap_ds, tls_session_t *ssn) CC_HINT(nonnull);
 
 
 /* MPPE key generation */

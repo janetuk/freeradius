@@ -102,6 +102,44 @@ const section_type_value_t section_type_value[RLM_COMPONENT_COUNT] = {
 #define LD_LIBRARY_PATH "LD_LIBRARY_PATH"
 #endif
 
+/** Check if the magic number in the module matches the one in the library
+ *
+ * This is used to detect potential ABI issues caused by running with modules which
+ * were built for a different version of the server.
+ *
+ * @param cs being parsed.
+ * @param module being loaded.
+ * @returns 0 on success, -1 if prefix mismatch, -2 if version mismatch, -3 if commit mismatch.
+ */
+static int check_module_magic(CONF_SECTION *cs, module_t const *module)
+{
+	if (MAGIC_PREFIX(module->magic) != MAGIC_PREFIX(RADIUSD_MAGIC_NUMBER)) {
+		cf_log_err_cs(cs, "Application and rlm_%s magic number (prefix) mismatch."
+			      "  application: %x module: %x", module->name,
+			      MAGIC_PREFIX(RADIUSD_MAGIC_NUMBER),
+			      MAGIC_PREFIX(module->magic));
+		return -1;
+	}
+
+	if (MAGIC_VERSION(module->magic) != MAGIC_VERSION(RADIUSD_MAGIC_NUMBER)) {
+		cf_log_err_cs(cs, "Application and rlm_%s magic number (version) mismatch."
+			      "  application: %lx module: %lx", module->name,
+			      (unsigned long) MAGIC_VERSION(RADIUSD_MAGIC_NUMBER),
+			      (unsigned long) MAGIC_VERSION(module->magic));
+		return -2;
+	}
+
+	if (MAGIC_COMMIT(module->magic) != MAGIC_COMMIT(RADIUSD_MAGIC_NUMBER)) {
+		cf_log_err_cs(cs, "Application and rlm_%s magic number (commit) mismatch."
+			      "  application: %lx module: %lx", module->name,
+			      (unsigned long) MAGIC_COMMIT(RADIUSD_MAGIC_NUMBER),
+			      (unsigned long) MAGIC_COMMIT(module->magic));
+		return -3;
+	}
+
+	return 0;
+}
+
 /*
  *	Because dlopen produces really shitty and inaccurate error messages
  */
@@ -109,13 +147,13 @@ static void check_lib_access(char const *name)
 {
 	if (access(name, R_OK) < 0) switch (errno) {
 		case EACCES:
-			WDEBUG("Library \"%s\" exists, but we don't have permission to read", name);
+			WARN("Library \"%s\" exists, but we don't have permission to read", name);
 			break;
 		case ENOENT:
 			DEBUG4("Library not found at path \"%s\"", name);
 			break;
 		default:
-			DEBUG4("Possible issue accessing Library \"%s\": %s", name, strerror(errno));
+			DEBUG4("Possible issue accessing Library \"%s\": %s", name, fr_syserror(errno));
 			break;
 	}
 }
@@ -125,6 +163,7 @@ lt_dlhandle lt_dlopenext(char const *name)
 	int flags = RTLD_NOW;
 	void *handle;
 	char buffer[2048];
+	char *env;
 
 #ifdef RTLD_GLOBAL
 	if (strcmp(name, "rlm_perl") == 0) {
@@ -133,18 +172,54 @@ lt_dlhandle lt_dlopenext(char const *name)
 #endif
 		flags |= RTLD_LOCAL;
 
+#ifndef NDEBUG
+	/*
+	 *	Bind all the symbols *NOW* so we don't hit errors later
+	 */
+	flags |= RTLD_NOW;
+#endif
 	/*
 	 *	Prefer loading our libraries by absolute path.
 	 */
 	snprintf(buffer, sizeof(buffer), "%s/%s%s", radlib_dir, name, LT_SHREXT);
 
-	check_lib_access(buffer);
+	DEBUG4("Loading library using absolute path");
 
 	handle = dlopen(buffer, flags);
-	if (handle) return handle;
+	if (handle) {
+		return handle;
+	}
+	check_lib_access(buffer);
+
+	DEBUG4("Falling back to linker search path(s)");
+	if (DEBUG_ENABLED4) {
+#ifdef __APPLE__
+		env = getenv("LD_LIBRARY_PATH");
+		if (env) {
+			DEBUG4("LD_LIBRARY_PATH            : %s", env);
+		}
+		env = getenv("DYLD_LIBRARY_PATH");
+		if (env) {
+			DEBUG4("DYLB_LIBRARY_PATH          : %s", env);
+		}
+		env = getenv("DYLD_FALLBACK_LIBRARY_PATH");
+		if (env) {
+			DEBUG4("DYLD_FALLBACK_LIBRARY_PATH : %s", env);
+		}
+		env = getcwd(buffer, sizeof(buffer));
+		if (env) {
+			DEBUG4("Current directory          : %s", env);
+		}
+#else
+		env = getenv("LD_LIBRARY_PATH");
+		if (env) {
+			DEBUG4("LD_LIBRARY_PATH  : %s", env);
+		}
+		DEBUG4("Defaults         : /lib:/usr/lib");
+#endif
+	}
 
 	strlcpy(buffer, name, sizeof(buffer));
-
 	/*
 	 *	FIXME: Make this configurable...
 	 */
@@ -354,7 +429,7 @@ static int module_entry_free(module_entry_t *this)
 	 *	debugging.  This removes the symbols needed by
 	 *	valgrind.
 	 */
-	if (!mainconfig.debug_memory)
+	if (!main_config.debug_memory)
 #endif
 		dlclose(this->handle);	/* ignore any errors */
 	return 0;
@@ -364,7 +439,7 @@ static int module_entry_free(module_entry_t *this)
 /*
  *	Remove the module lists.
  */
-int detach_modules(void)
+int modules_free(void)
 {
 	rbtree_free(instance_tree);
 	rbtree_free(module_tree);
@@ -430,13 +505,9 @@ static module_entry_t *linkto_module(char const *module_name,
 	/*
 	 *	Before doing anything else, check if it's sane.
 	 */
-	if (module->magic != RLM_MODULE_MAGIC_NUMBER) {
+	if (check_module_magic(cs, module) < 0) {
 		dlclose(handle);
-		cf_log_err_cs(cs,
-			   "Invalid version in module '%s'",
-			   module_name);
 		return NULL;
-
 	}
 
 	/* make room for the module type */
@@ -580,7 +651,7 @@ module_instance_t *find_module_instance(CONF_SECTION *modules,
 	}
 
 	if (check_config && (node->entry->module->instantiate) &&
-	    (node->entry->module->type & RLM_TYPE_CHECK_CONFIG_SAFE) == 0) {
+	    (node->entry->module->type & RLM_TYPE_CHECK_CONFIG_UNSAFE) != 0) {
 		char const *value = NULL;
 		CONF_PAIR *cp;
 
@@ -718,7 +789,7 @@ rlm_rcode_t indexed_modcall(rlm_components_t comp, int idx, REQUEST *request)
 
 	if (idx == 0) {
 		list = server->mc[comp];
-		if (!list) RWDEBUG2("Empty %s section.  Using default return values.", section_type_value[comp].section);
+		if (!list) RDEBUG3("Empty %s section.  Using default return values.", section_type_value[comp].section);
 
 	} else {
 		indexed_modcallable *this;
@@ -727,7 +798,7 @@ rlm_rcode_t indexed_modcall(rlm_components_t comp, int idx, REQUEST *request)
 		if (this) {
 			list = this->modulelist;
 		} else {
-			RWDEBUG2("Unknown value specified for %s.  Cannot perform requested action.",
+			RDEBUG3("%s sub-section not found.  Ignoring.",
 				section_type_value[comp].typename);
 		}
 	}
@@ -757,7 +828,7 @@ rlm_rcode_t indexed_modcall(rlm_components_t comp, int idx, REQUEST *request)
  */
 static int load_subcomponent_section(modcallable *parent, CONF_SECTION *cs,
 				     rbtree_t *components,
-				     DICT_ATTR const *dattr, rlm_components_t comp)
+				     DICT_ATTR const *da, rlm_components_t comp)
 {
 	indexed_modcallable *subcomp;
 	modcallable *ml;
@@ -785,7 +856,7 @@ static int load_subcomponent_section(modcallable *parent, CONF_SECTION *cs,
 	 *	automatically.  If it isn't found, it's a serious
 	 *	error.
 	 */
-	dval = dict_valbyname(dattr->attr, dattr->vendor, name2);
+	dval = dict_valbyname(da->attr, da->vendor, name2);
 	if (!dval) {
 		cf_log_err_cs(cs,
 			   "%s %s Not previously configured",
@@ -804,7 +875,7 @@ static int load_subcomponent_section(modcallable *parent, CONF_SECTION *cs,
 	return 1;		/* OK */
 }
 
-static int define_type(CONF_SECTION *cs, DICT_ATTR const *dattr, char const *name)
+static int define_type(CONF_SECTION *cs, DICT_ATTR const *da, char const *name)
 {
 	uint32_t value;
 	DICT_VALUE *dval;
@@ -813,7 +884,7 @@ static int define_type(CONF_SECTION *cs, DICT_ATTR const *dattr, char const *nam
 	 *	If the value already exists, don't
 	 *	create it again.
 	 */
-	dval = dict_valbyname(dattr->attr, dattr->vendor, name);
+	dval = dict_valbyname(da->attr, da->vendor, name);
 	if (dval) return 1;
 
 	/*
@@ -825,16 +896,23 @@ static int define_type(CONF_SECTION *cs, DICT_ATTR const *dattr, char const *nam
 	 */
 	do {
 		value = fr_rand() & 0x00ffffff;
-	} while (dict_valbyattr(dattr->attr, dattr->vendor, value));
+	} while (dict_valbyattr(da->attr, da->vendor, value));
 
-	cf_log_module(cs, "Creating %s = %s", dattr->name, name);
-	if (dict_addvalue(name, dattr->name, value) < 0) {
+	cf_log_module(cs, "Creating %s = %s", da->name, name);
+	if (dict_addvalue(name, da->name, value) < 0) {
 		ERROR("%s", fr_strerror());
 		return 0;
 	}
 
 	return 1;
 }
+
+/*
+ *	Don't complain too often.
+ */
+#define MAX_IGNORED (32)
+static int last_ignored = -1;
+static char const *ignored[MAX_IGNORED];
 
 static int load_component_section(CONF_SECTION *cs,
 				  rbtree_t *components, rlm_components_t comp)
@@ -844,14 +922,13 @@ static int load_component_section(CONF_SECTION *cs,
 	int idx;
 	indexed_modcallable *subcomp;
 	char const *modname;
-	char const *visiblename;
-	DICT_ATTR const *dattr;
+	DICT_ATTR const *da;
 
 	/*
 	 *	Find the attribute used to store VALUEs for this section.
 	 */
-	dattr = dict_attrbyvalue(section_type_value[comp].attr, 0);
-	if (!dattr) {
+	da = dict_attrbyvalue(section_type_value[comp].attr, 0);
+	if (!da) {
 		cf_log_err_cs(cs,
 			   "No such attribute %s",
 			   section_type_value[comp].typename);
@@ -878,8 +955,9 @@ static int load_component_section(CONF_SECTION *cs,
 				   section_type_value[comp].typename) == 0) {
 				if (!load_subcomponent_section(NULL, scs,
 							       components,
-							       dattr,
+							       da,
 							       comp)) {
+
 					return -1; /* FIXME: memleak? */
 				}
 				continue;
@@ -887,68 +965,11 @@ static int load_component_section(CONF_SECTION *cs,
 
 			cp = NULL;
 
-			/*
-			 *	Skip commented-out sections.
-			 *
-			 *	We skip an "if" ONLY when there's no
-			 *	"else" after it, as the run-time
-			 *	interpretor needs the results of the
-			 *	previous "if".
-			 */
-			if (strcmp(name1, "if") == 0) {
-				fr_cond_t const *c;
-				CONF_ITEM *next_ci;
-
-				next_ci = cf_item_find_next(scs, modref);
-				if (next_ci && cf_item_is_section(next_ci)) {
-					char const *next_name;
-					CONF_SECTION *next_cs;
-
-					next_cs = cf_itemtosection(next_ci);
-					next_name = cf_section_name1(next_cs);
-					if ((strcmp(next_name, "else") == 0) ||
-					    (strcmp(next_name, "elseif") == 0)) {
-						c = NULL;
-					} else {
-						c = cf_data_find(scs, "if");
-					}
-				} else {
-					c = cf_data_find(scs, "if");
-				}
-
-				if (c && c->type == COND_TYPE_FALSE) {
-					DEBUG(" # Skipping contents of '%s' at %s:%d as it statically evaluates to 'false'",
-					     name1, cf_section_filename(scs), cf_section_lineno(scs));
-					continue;
-				}
-			}
-
-
 		} else if (cf_item_is_pair(modref)) {
 			cp = cf_itemtopair(modref);
 
 		} else {
 			continue; /* ignore it */
-		}
-
-		/*
-		 *	Try to compile one entry.
-		 */
-		this = compile_modsingle(NULL, comp, modref, &modname);
-
-		/*
-		 *	It's OK for the module to not exist.
-		 */
-		if (!this && modname && (modname[0] == '-')) {
-			WDEBUG("Ignoring \"%s\" (see raddb/mods-available/README.rst)", modname + 1);
-			continue;
-		}
-
-		if (!this) {
-			cf_log_err_cs(cs,
-				   "Errors parsing %s section.\n",
-				   cf_section_name1(cs));
-			return -1;
 		}
 
 		/*
@@ -967,7 +988,6 @@ static int load_component_section(CONF_SECTION *cs,
 			} else {
 				modrefname = cf_section_name2(scs);
 				if (!modrefname) {
-					modcallable_free(&this);
 					cf_log_err_cs(cs,
 						   "Errors parsing %s sub-section.\n",
 						   cf_section_name1(scs));
@@ -981,7 +1001,6 @@ static int load_component_section(CONF_SECTION *cs,
 				 *	It's a section, but nothing we
 				 *	recognize.  Die!
 				 */
-				modcallable_free(&this);
 				cf_log_err_cs(cs,
 					   "Unknown Auth-Type \"%s\" in %s sub-section.",
 					   modrefname, section_type_value[comp].section);
@@ -995,19 +1014,53 @@ static int load_component_section(CONF_SECTION *cs,
 		}
 
 		subcomp = new_sublist(cs, components, comp, idx);
-		if (subcomp == NULL) {
-			modcallable_free(&this);
+		if (!subcomp) continue;
+
+		/*
+		 *	Try to compile one entry.
+		 */
+		this = compile_modsingle(&subcomp->modulelist, comp, modref, &modname);
+
+		/*
+		 *	It's OK for the module to not exist.
+		 */
+		if (!this && modname && (modname[0] == '-')) {
+			int i;
+
+			if (last_ignored < 0) {
+			save_complain:
+				last_ignored++;
+				ignored[last_ignored] = modname;
+
+			complain:
+				WARN("Ignoring \"%s\" (see raddb/mods-available/README.rst)", modname + 1);
+				continue;
+			}
+
+			if (last_ignored >= MAX_IGNORED) goto complain;
+
+			for (i = 0; i <= last_ignored; i++) {
+				if (strcmp(ignored[i], modname) == 0) {
+					break;
+				}
+			}
+
+			if (i > last_ignored) goto save_complain;
 			continue;
 		}
 
-		/* If subcomp->modulelist is NULL, add_to_modcallable will
-		 * create it */
-		visiblename = cf_section_name2(cs);
-		if (visiblename == NULL)
-			visiblename = cf_section_name1(cs);
-		add_to_modcallable(&subcomp->modulelist, this,
-				   comp, visiblename);
+		if (!this) {
+			cf_log_err_cs(cs,
+				   "Errors parsing %s section.\n",
+				   cf_section_name1(cs));
+			return -1;
+		}
+
+		if (debug_flag > 2) modcall_debug(this, 2);
+
+		add_to_modcallable(subcomp->modulelist, this);
 	}
+
 
 	return 0;
 }
@@ -1047,7 +1100,7 @@ static int load_byserver(CONF_SECTION *cs)
 	for (comp = 0; comp < RLM_COMPONENT_COUNT; ++comp) {
 		CONF_SECTION *subcs;
 		CONF_ITEM *modref;
-		DICT_ATTR const *dattr;
+		DICT_ATTR const *da;
 
 		subcs = cf_section_sub_find(cs,
 					    section_type_value[comp].section);
@@ -1058,8 +1111,8 @@ static int load_byserver(CONF_SECTION *cs)
 		/*
 		 *	Find the attribute used to store VALUEs for this section.
 		 */
-		dattr = dict_attrbyvalue(section_type_value[comp].attr, 0);
-		if (!dattr) {
+		da = dict_attrbyvalue(section_type_value[comp].attr, 0);
+		if (!da) {
 			cf_log_err_cs(subcs,
 				   "No such attribute %s",
 				   section_type_value[comp].typename);
@@ -1090,7 +1143,7 @@ static int load_byserver(CONF_SECTION *cs)
 			if ((section_type_value[comp].attr == PW_AUTH_TYPE) &&
 			    cf_item_is_pair(modref)) {
 				CONF_PAIR *cp = cf_itemtopair(modref);
-				if (!define_type(cs, dattr, cf_pair_attr(cp))) {
+				if (!define_type(cs, da, cf_pair_attr(cp))) {
 					goto error;
 				}
 
@@ -1103,7 +1156,7 @@ static int load_byserver(CONF_SECTION *cs)
 			name1 = cf_section_name1(subsubcs);
 
 			if (strcmp(name1, section_type_value[comp].typename) == 0) {
-			  if (!define_type(cs, dattr,
+			  if (!define_type(cs, da,
 					   cf_section_name2(subsubcs))) {
 					goto error;
 				}
@@ -1125,16 +1178,13 @@ static int load_byserver(CONF_SECTION *cs)
 
 		if (cf_item_find_next(subcs, NULL) == NULL) continue;
 
-		cf_log_module(cs, "Loading %s {...}",
-			      section_type_value[comp].section);
-
 		/*
 		 *	Skip pre/post-proxy sections if we're not
 		 *	proxying.
 		 */
 		if (
 #ifdef WITH_PROXY
-		    !mainconfig.proxy_requests &&
+		    !main_config.proxy_requests &&
 #endif
 		    ((comp == RLM_COMPONENT_PRE_PROXY) ||
 		     (comp == RLM_COMPONENT_POST_PROXY))) {
@@ -1149,8 +1199,19 @@ static int load_byserver(CONF_SECTION *cs)
 		if (comp == RLM_COMPONENT_SESS) continue;
 #endif
 
+		if (debug_flag <= 3) {
+			cf_log_module(cs, "Loading %s {...}",
+				      section_type_value[comp].section);
+		} else {
+			DEBUG(" %s {", section_type_value[comp].section);
+		}
+
 		if (load_component_section(subcs, components, comp) < 0) {
 			goto error;
+		}
+
+		if (debug_flag > 3) {
+			DEBUG(" } # %s", section_type_value[comp].section);
 		}
 
 		/*
@@ -1172,14 +1233,17 @@ static int load_byserver(CONF_SECTION *cs)
 	 *	This is a bit of a hack...
 	 */
 	if (!found) do {
+#if defined(WITH_VMPS) || defined(WITH_DHCP)
 		CONF_SECTION *subcs;
+#endif
 #ifdef WITH_DHCP
-		DICT_ATTR const *dattr;
+		DICT_ATTR const *da;
 #endif
 
+#ifdef WITH_VMPS
 		subcs = cf_section_sub_find(cs, "vmps");
 		if (subcs) {
-			cf_log_module(cs, "Checking vmps {...} for more modules to load");
+			cf_log_module(cs, "Loading vmps {...}");
 			if (load_component_section(subcs, components,
 						   RLM_COMPONENT_POST_AUTH) < 0) {
 				goto error;
@@ -1190,16 +1254,16 @@ static int load_byserver(CONF_SECTION *cs)
 			found = 1;
 			break;
 		}
+#endif
 
 #ifdef WITH_DHCP
+		/*
+		 *	It's OK to not have DHCP.
+		 */
 		subcs = cf_subsection_find_next(cs, NULL, "dhcp");
-		dattr = dict_attrbyname("DHCP-Message-Type");
-		if (!dattr && subcs) {
-			cf_log_err_cs(subcs, "Found a 'dhcp' section, but no DHCP dictionaries have been loaded");
-			goto error;
-		}
+		if (!subcs) break;
 
-		if (!dattr) break;
+		da = dict_attrbyname("DHCP-Message-Type");
 
 		/*
 		 *	Handle each DHCP Message type separately.
@@ -1207,10 +1271,14 @@ static int load_byserver(CONF_SECTION *cs)
 		while (subcs) {
 			char const *name2 = cf_section_name2(subcs);
 
-			DEBUG2(" Module: Checking dhcp %s {...} for more modules to load", name2);
+			if (name2) {
+				cf_log_module(cs, "Loading dhcp %s {...}", name2);
+			} else {
+				cf_log_module(cs, "Loading dhcp {...}");
+			}
 			if (!load_subcomponent_section(NULL, subcs,
 						       components,
-						       dattr,
+						       da,
 						       RLM_COMPONENT_POST_AUTH)) {
 				goto error; /* FIXME: memleak? */
 			}
@@ -1231,7 +1299,7 @@ static int load_byserver(CONF_SECTION *cs)
 	}
 
 	if (!found && name) {
-		WDEBUG("Server %s is empty, and will do nothing!",
+		WARN("Server %s is empty, and will do nothing!",
 		      name);
 	}
 
@@ -1267,6 +1335,15 @@ static int load_byserver(CONF_SECTION *cs)
 }
 
 
+static int pass2_cb(UNUSED void *ctx, void *data)
+{
+	indexed_modcallable *this = data;
+
+	if (!modcall_pass2(this->modulelist)) return -1;
+
+	return 0;
+}
+
 /*
  *	Load all of the virtual servers.
  */
@@ -1274,9 +1351,9 @@ int virtual_servers_load(CONF_SECTION *config)
 {
 	CONF_SECTION *cs;
 	virtual_server_t *server;
-	static int first_time = true;
+	static bool first_time = true;
 
-	DEBUG2("%s: #### Loading Virtual Servers ####", mainconfig.name);
+	DEBUG2("%s: #### Loading Virtual Servers ####", main_config.name);
 
 	/*
 	 *	If we have "server { ...}", then there SHOULD NOT be
@@ -1350,6 +1427,13 @@ int virtual_servers_load(CONF_SECTION *config)
 
 		for (i = RLM_COMPONENT_AUTH; i < RLM_COMPONENT_COUNT; i++) {
 			if (!modcall_pass2(server->mc[i])) return -1;
+
+		}
+
+		if (server->components &&
+		    (rbtree_walk(server->components, RBTREE_IN_ORDER,
+				 pass2_cb, NULL) != 0)) {
+			return -1;
 		}
 	}
 
@@ -1418,7 +1502,7 @@ int module_hup_module(CONF_SECTION *cs, module_instance_t *node, time_t when)
 }
 
 
-int module_hup(CONF_SECTION *modules)
+int modules_hup(CONF_SECTION *modules)
 {
 	time_t when;
 	CONF_ITEM *ci;
@@ -1460,37 +1544,27 @@ int module_hup(CONF_SECTION *modules)
 /*
  *	Parse the module config sections, and load
  *	and call each module's init() function.
- *
- *	Libtool makes your life a LOT easier, especially with libltdl.
- *	see: http://www.gnu.org/software/libtool/
  */
-int setup_modules(int reload, CONF_SECTION *config)
+int modules_init(CONF_SECTION *config)
 {
 	CONF_ITEM	*ci, *next;
 	CONF_SECTION	*cs, *modules;
 	rad_listen_t	*listener;
 
-	if (reload) return 0;
-
 	/*
-	 *	If necessary, initialize libltdl.
+	 *	Set up the internal module struct.
 	 */
-	if (!reload) {
-		/*
-		 *	Set up the internal module struct.
-		 */
-		module_tree = rbtree_create(module_entry_cmp, NULL, 0);
-		if (!module_tree) {
-			ERROR("Failed to initialize modules\n");
-			return -1;
-		}
+	module_tree = rbtree_create(module_entry_cmp, NULL, 0);
+	if (!module_tree) {
+		ERROR("Failed to initialize modules\n");
+		return -1;
+	}
 
-		instance_tree = rbtree_create(module_instance_cmp,
-					      module_instance_free, 0);
-		if (!instance_tree) {
-			ERROR("Failed to initialize modules\n");
-			return -1;
-		}
+	instance_tree = rbtree_create(module_instance_cmp,
+				      module_instance_free, 0);
+	if (!instance_tree) {
+		ERROR("Failed to initialize modules\n");
+		return -1;
 	}
 
 	memset(virtual_servers, 0, sizeof(virtual_servers));
@@ -1503,7 +1577,71 @@ int setup_modules(int reload, CONF_SECTION *config)
 		WARN("Cannot find a \"modules\" section in the configuration file!");
 	}
 
-	DEBUG2("%s: #### Instantiating modules ####", mainconfig.name);
+#if defined(WITH_VMPS) || defined(WITH_DHCP)
+	/*
+	 *	Load dictionaries.
+	 */
+	for (cs = cf_subsection_find_next(config, NULL, "server");
+	     cs != NULL;
+	     cs = cf_subsection_find_next(config, cs, "server")) {
+		CONF_SECTION *subcs;
+		DICT_ATTR const *da;
+
+#ifdef WITH_VMPS
+		/*
+		 *	Auto-load the VMPS/VQP dictionary.
+		 */
+		subcs = cf_section_sub_find(cs, "vmps");
+		if (subcs) {
+			da = dict_attrbyname("VQP-Packet-Type");
+			if (!da) {
+				if (dict_read(main_config.dictionary_dir, "dictionary.vqp") < 0) {
+					ERROR("Failed reading dictionary.vqp: %s",
+					      fr_strerror());
+					return -1;
+				}
+				cf_log_module(cs, "Loading dictionary.vqp");
+
+				da = dict_attrbyname("VQP-Packet-Type");
+				if (!da) {
+					ERROR("No VQP-Packet-Type in dictionary.vqp");
+					return -1;
+				}
+			}
+		}
+#endif
+
+#ifdef WITH_DHCP
+		/*
+		 *	Auto-load the DHCP dictionary.
+		 */
+		subcs = cf_subsection_find_next(cs, NULL, "dhcp");
+		if (subcs) {
+			da = dict_attrbyname("DHCP-Message-Type");
+			if (!da) {
+				cf_log_module(cs, "Loading dictionary.dhcp");
+				if (dict_read(main_config.dictionary_dir, "dictionary.dhcp") < 0) {
+					ERROR("Failed reading dictionary.dhcp: %s",
+					      fr_strerror());
+					return -1;
+				}
+
+				da = dict_attrbyname("DHCP-Message-Type");
+				if (!da) {
+					ERROR("No DHCP-Message-Type in dictionary.dhcp");
+					return -1;
+				}
+			}
+		}
+#endif
+		/*
+		 *	Else it's a RADIUS virtual server, and the
+		 *	dictionaries are already loaded.
+		 */
+	}
+#endif
+
+	DEBUG2("%s: #### Instantiating modules ####", main_config.name);
 
 	/*
 	 *	Loop over module definitions, looking for duplicates.
@@ -1614,7 +1752,7 @@ int setup_modules(int reload, CONF_SECTION *config)
 	 *	Loop over the listeners, figuring out which sections
 	 *	to load.
 	 */
-	for (listener = mainconfig.listen;
+	for (listener = main_config.listen;
 	     listener != NULL;
 	     listener = listener->next) {
 		char buffer[256];

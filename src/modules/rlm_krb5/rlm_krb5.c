@@ -32,12 +32,12 @@ RCSID("$Id$")
 #include "krb5.h"
 
 static const CONF_PARSER module_config[] = {
-	{ "keytab", PW_TYPE_STRING_PTR, offsetof(rlm_krb5_t, keytabname), NULL, NULL },
-	{ "service_principal", PW_TYPE_STRING_PTR, offsetof(rlm_krb5_t,service_princ), NULL, NULL },
+	{ "keytab", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_krb5_t, keytabname), NULL },
+	{ "service_principal", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_krb5_t, service_princ), NULL },
 	{ NULL, -1, 0, NULL, NULL }
 };
 
-static int krb5_detach(void *instance)
+static int mod_detach(void *instance)
 {
 	rlm_krb5_t *inst = instance;
 
@@ -66,7 +66,7 @@ static int krb5_detach(void *instance)
 	return 0;
 }
 
-static int krb5_instantiate(CONF_SECTION *conf, void *instance)
+static int mod_instantiate(CONF_SECTION *conf, void *instance)
 {
 	rlm_krb5_t *inst = instance;
 	krb5_error_code ret;
@@ -82,15 +82,32 @@ static int krb5_instantiate(CONF_SECTION *conf, void *instance)
 	DEBUG("Using MIT Kerberos library");
 #endif
 
-#ifndef KRB5_IS_THREAD_SAFE
 	if (!krb5_is_thread_safe()) {
-		DEBUGI("libkrb5 is not threadsafe, recompile it, and the server with thread support enabled");
-		WDEBUG("rlm_krb5 will run in single threaded mode, performance may be degraded");
+/*
+ *	rlm_krb5 was built as threadsafe
+ */
+#ifdef KRB5_IS_THREAD_SAFE
+		ERROR("Build time libkrb5 was threadsafe, but run time library claims not to be");
+		ERROR("Modify runtime linker path (LD_LIBRARY_PATH on most systems), to prefer threadsafe libkrb5");
+		return -1;
+/*
+ *	rlm_krb5 was not built as threadsafe
+ */
+#else
+		WARN("libkrb5 is not threadsafe, recompile it with thread support enabled ("
+#  ifdef HEIMDAL_KRB5
+		       "--enable-pthread-support"
+#  else
+		       "--disable-thread-support=no"
+#  endif
+		       ")");
+		WARN("rlm_krb5 will run in single threaded mode, performance may be degraded");
 	} else {
-		WDEBUG("Build time libkrb5 was not threadsafe, but run time library claims to be");
-		WDEBUG("Reconfigure and recompile rlm_krb5 to enable thread support");
-	}
+		WARN("Build time libkrb5 was not threadsafe, but run time library claims to be");
+		WARN("Reconfigure and recompile rlm_krb5 to enable thread support");
 #endif
+	}
+
 	inst->xlat_name = cf_section_name2(conf);
 	if (!inst->xlat_name) {
 		inst->xlat_name = cf_section_name1(conf);
@@ -255,7 +272,7 @@ static rlm_rcode_t krb5_parse_user(krb5_principal *client, REQUEST *request, krb
 	 */
 	if (request->password->da->attr != PW_USER_PASSWORD) {
 		REDEBUG("Attribute \"User-Password\" is required for authentication.  Cannot use \"%s\".",
-		        request->password->da->name);
+			request->password->da->name);
 
 		return RLM_MODULE_INVALID;
 	}
@@ -277,12 +294,46 @@ static rlm_rcode_t krb5_parse_user(krb5_principal *client, REQUEST *request, krb
 	return RLM_MODULE_OK;
 }
 
+/** Log error message and return appropriate rcode
+ *
+ * Translate kerberos error codes into return codes.
+ * @param request Current request.
+ * @param ret code from kerberos.
+ * @param conn used in the last operation.
+ */
+static rlm_rcode_t krb5_process_error(REQUEST *request, rlm_krb5_handle_t *conn, int ret)
+{
+	rad_assert(ret != 0);
+	rad_assert(conn);	/* Silences warnings */
+
+	switch (ret) {
+	case KRB5_LIBOS_BADPWDMATCH:
+	case KRB5KRB_AP_ERR_BAD_INTEGRITY:
+		REDEBUG("Provided password was incorrect (%i): %s", ret, rlm_krb5_error(conn->context, ret));
+		return RLM_MODULE_REJECT;
+
+	case KRB5KDC_ERR_KEY_EXP:
+	case KRB5KDC_ERR_CLIENT_REVOKED:
+	case KRB5KDC_ERR_SERVICE_REVOKED:
+		REDEBUG("Account has been locked out (%i): %s", ret, rlm_krb5_error(conn->context, ret));
+		return RLM_MODULE_USERLOCK;
+
+	case KRB5KDC_ERR_C_PRINCIPAL_UNKNOWN:
+		RDEBUG("User not found (%i): %s", ret, rlm_krb5_error(conn->context, ret));
+		return RLM_MODULE_NOTFOUND;
+
+	default:
+		REDEBUG("Error verifying credentials (%i): %s", ret, rlm_krb5_error(conn->context, ret));
+		return RLM_MODULE_FAIL;
+	}
+}
+
 #ifdef HEIMDAL_KRB5
 
 /*
  *	Validate user/pass (Heimdal)
  */
-static rlm_rcode_t krb5_auth(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *request)
 {
 	rlm_krb5_t *inst = instance;
 	rlm_rcode_t rcode;
@@ -294,11 +345,7 @@ static rlm_rcode_t krb5_auth(void *instance, REQUEST *request)
 
 #ifdef KRB5_IS_THREAD_SAFE
 	conn = fr_connection_get(inst->pool);
-	if (!conn) {
-		REDEBUG("All krb5 contexts are in use");
-
-		return RLM_MODULE_FAIL;
-	}
+	if (!conn) return RLM_MODULE_FAIL;
 #else
 	conn = inst->conn;
 #endif
@@ -316,34 +363,34 @@ static rlm_rcode_t krb5_auth(void *instance, REQUEST *request)
 	 */
 	ret = krb5_verify_user_opt(conn->context, client, request->password->vp_strvalue, &conn->options);
 	if (ret) {
-		switch (ret) {
-		case KRB5_LIBOS_BADPWDMATCH:
-		case KRB5KRB_AP_ERR_BAD_INTEGRITY:
-			REDEBUG("Provided password was incorrect (%i): %s", ret, rlm_krb5_error(conn->context, ret));
-			rcode = RLM_MODULE_REJECT;
-			break;
-
-		case KRB5KDC_ERR_KEY_EXP:
-		case KRB5KDC_ERR_CLIENT_REVOKED:
-		case KRB5KDC_ERR_SERVICE_REVOKED:
-			REDEBUG("Account has been locked out (%i): %s", ret, rlm_krb5_error(conn->context, ret));
-			rcode = RLM_MODULE_USERLOCK;
-			break;
-
-		case KRB5KDC_ERR_C_PRINCIPAL_UNKNOWN:
-			RDEBUG("User not found: %s (%i)", ret, rlm_krb5_error(conn->context, ret));
-			rcode = RLM_MODULE_NOTFOUND;
-
-		default:
-			REDEBUG("Error verifying credentials (%i): %s", ret, rlm_krb5_error(conn->context, ret));
-			rcode = RLM_MODULE_FAIL;
-			break;
-		}
-
+		rcode = krb5_process_error(request, conn, ret);
 		goto cleanup;
 	}
 
-	cleanup:
+	/*
+	 *	krb5_verify_user_opt adds the credentials to the ccache
+	 *	we specified with krb5_verify_opt_set_ccache.
+	 *
+	 *	To make sure we don't accumulate thousands of sets of
+	 *	credentials, remove them again here.
+	 *
+	 * @todo This should definitely be optional, which means writing code for the MIT
+	 *	 variant as well.
+	 */
+	{
+		krb5_cc_cursor cursor;
+		krb5_creds cred;
+
+		krb5_cc_start_seq_get(conn->context, conn->ccache, &cursor);
+		for ((ret = krb5_cc_next_cred(conn->context, conn->ccache, &cursor, &cred));
+		     ret == 0;
+		     (ret = krb5_cc_next_cred(conn->context, conn->ccache, &cursor, &cred))) {
+		     krb5_cc_remove_cred(conn->context, conn->ccache, 0, &cred);
+		}
+		krb5_cc_end_seq_get(conn->context, conn->ccache, &cursor);
+	}
+
+cleanup:
 	if (client) {
 		krb5_free_principal(conn->context, client);
 	}
@@ -359,7 +406,7 @@ static rlm_rcode_t krb5_auth(void *instance, REQUEST *request)
 /*
  *  Validate userid/passwd (MIT)
  */
-static rlm_rcode_t krb5_auth(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *request)
 {
 	rlm_krb5_t *inst = instance;
 	rlm_rcode_t rcode;
@@ -375,11 +422,7 @@ static rlm_rcode_t krb5_auth(void *instance, REQUEST *request)
 
 #ifdef KRB5_IS_THREAD_SAFE
 	conn = fr_connection_get(inst->pool);
-	if (!conn) {
-		REDEBUG("All krb5 contexts are in use");
-
-		return RLM_MODULE_FAIL;
-	}
+	if (!conn) return RLM_MODULE_FAIL;
 #else
 	conn = inst->conn;
 #endif
@@ -401,45 +444,21 @@ static rlm_rcode_t krb5_auth(void *instance, REQUEST *request)
 	 * 	Retrieve the TGT from the TGS/KDC and check we can decrypt it.
 	 */
 	memcpy(&password, &request->password->vp_strvalue, sizeof(password));
+	RDEBUG("Retrieving and decrypting TGT");
 	ret = krb5_get_init_creds_password(conn->context, &init_creds, client, password,
 					   NULL, NULL, 0, NULL, inst->gic_options);
 	if (ret) {
-		error:
-		switch (ret) {
-		case KRB5_LIBOS_BADPWDMATCH:
-		case KRB5KRB_AP_ERR_BAD_INTEGRITY:
-			REDEBUG("Provided password was incorrect (%i): %s", ret, rlm_krb5_error(conn->context, ret));
-			rcode = RLM_MODULE_REJECT;
-			break;
-
-		case KRB5KDC_ERR_KEY_EXP:
-		case KRB5KDC_ERR_CLIENT_REVOKED:
-		case KRB5KDC_ERR_SERVICE_REVOKED:
-			REDEBUG("Account has been locked out (%i): %s", ret, rlm_krb5_error(conn->context, ret));
-			rcode = RLM_MODULE_USERLOCK;
-			break;
-
-		case KRB5KDC_ERR_C_PRINCIPAL_UNKNOWN:
-			REDEBUG("User not found (%i): %s", ret,  rlm_krb5_error(conn->context, ret));
-			rcode = RLM_MODULE_NOTFOUND;
-			break;
-
-		default:
-			REDEBUG("Error retrieving or verifying credentials (%i): %s", ret,
-				rlm_krb5_error(conn->context, ret));
-			rcode = RLM_MODULE_FAIL;
-			break;
-		}
-
+		rcode = krb5_process_error(request, conn, ret);
 		goto cleanup;
 	}
 
-	RDEBUG("Successfully retrieved and decrypted TGT");
-
+	RDEBUG("Attempting to authenticate against service principal");
 	ret = krb5_verify_init_creds(conn->context, &init_creds, inst->server, conn->keytab, NULL, inst->vic_options);
-	if (ret) goto error;
+	if (ret) {
+		rcode = krb5_process_error(request, conn, ret);
+	}
 
-	cleanup:
+cleanup:
 	if (client) {
 		krb5_free_principal(conn->context, client);
 	}
@@ -456,17 +475,17 @@ static rlm_rcode_t krb5_auth(void *instance, REQUEST *request)
 module_t rlm_krb5 = {
 	RLM_MODULE_INIT,
 	"krb5",
-	RLM_TYPE_CHECK_CONFIG_SAFE | RLM_TYPE_HUP_SAFE
+	RLM_TYPE_HUP_SAFE
 #ifdef KRB5_IS_THREAD_SAFE
 	| RLM_TYPE_THREAD_SAFE
 #endif
 	,
 	sizeof(rlm_krb5_t),
 	module_config,
-	krb5_instantiate,   		/* instantiation */
-	krb5_detach,			/* detach */
+	mod_instantiate,   		/* instantiation */
+	mod_detach,			/* detach */
 	{
-		krb5_auth,		/* authenticate */
+		mod_authenticate,	/* authenticate */
 		NULL,			/* authorize */
 		NULL,			/* pre-accounting */
 		NULL,			/* accounting */

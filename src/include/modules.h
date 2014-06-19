@@ -29,30 +29,11 @@
 RCSIDH(modules_h, "$Id$")
 
 #include <freeradius-devel/conffile.h>
+#include <freeradius-devel/features.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/** Return codes indicating the result of the module call
- *
- * All module functions must return one of the codes listed below (apart from
- * RLM_MODULE_NUMCODES, which is used to check for validity).
- */
-typedef enum rlm_rcodes {
-	RLM_MODULE_REJECT = 0,	//!< Immediately reject the request.
-	RLM_MODULE_FAIL,	//!< Module failed, don't reply.
-	RLM_MODULE_OK,		//!< The module is OK, continue.
-	RLM_MODULE_HANDLED,	//!< The module handled the request, so stop.
-	RLM_MODULE_INVALID,	//!< The module considers the request invalid.
-	RLM_MODULE_USERLOCK,	//!< Reject the request (user is locked out).
-	RLM_MODULE_NOTFOUND,	//!< User not found.
-	RLM_MODULE_NOOP,	//!< Module succeeded without doing anything.
-	RLM_MODULE_UPDATED,	//!< OK (pairs modified).
-	RLM_MODULE_NUMCODES,	//!< How many valid return codes there are.
-	RLM_MODULE_UNKNOWN	//!< Error resolving rcode (should not be
-				//!< returned by modules).
-} rlm_rcode_t;
 
 /** The different section components of the server
  *
@@ -95,8 +76,8 @@ extern const section_type_value_t section_type_value[];
 #define RLM_TYPE_THREAD_UNSAFE	(1 << 0) 	//!< Module is not threadsafe.
 						//!< Server will protect calls
 						//!< with mutex.
-#define RLM_TYPE_CHECK_CONFIG_SAFE (1 << 1) 	//!< Instantiate module on -C.
-						//!< Module will be
+#define RLM_TYPE_CHECK_CONFIG_UNSAFE (1 << 1) 	//!< Don't instantiate module on -C.
+						//!< Module will NOT be
 						//!< instantiated if the server
 						//!< is started in config
 						//!< check mode.
@@ -105,8 +86,9 @@ extern const section_type_value_t section_type_value[];
 						//!< new instance, and then
 						//!< destroy old instance.
 
-#define RLM_MODULE_MAGIC_NUMBER ((uint32_t) (0xf4ee4ad3))
-#define RLM_MODULE_INIT RLM_MODULE_MAGIC_NUMBER
+
+/* Stop people using different module/library/server versions together */
+#define RLM_MODULE_INIT RADIUSD_MAGIC_NUMBER
 
 /** Module section callback
  *
@@ -151,7 +133,7 @@ typedef int (*detach_t)(void *instance);
  * within the module to different sections.
  */
 typedef struct module_t {
-	uint32_t 		magic;				//!< Used to validate module struct.
+	uint64_t 		magic;				//!< Used to validate module struct.
 	char const		*name;				//!< The name of the module (without rlm_ prefix).
 	int			type;				//!< One or more of the RLM_TYPE_* constants.
 	size_t			inst_size;			//!< Size of the instance data
@@ -164,9 +146,9 @@ typedef struct module_t {
 
 } module_t;
 
-int setup_modules(int, CONF_SECTION *);
-int detach_modules(void);
-int module_hup(CONF_SECTION *modules);
+int modules_init(CONF_SECTION *);
+int modules_free(void);
+int modules_hup(CONF_SECTION *modules);
 rlm_rcode_t process_authorize(int type, REQUEST *request);
 rlm_rcode_t process_authenticate(int type, REQUEST *request);
 rlm_rcode_t module_preacct(REQUEST *request);

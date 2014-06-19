@@ -34,15 +34,15 @@ typedef struct rlm_exec_t {
 	char const	*xlat_name;
 	int		bare;
 	bool		wait;
-	char		*program;
-	char		*input;
-	char		*output;
+	char const	*program;
+	char const	*input;
+	char const	*output;
 	pair_lists_t	input_list;
 	pair_lists_t	output_list;
-	char		*packet_type;
+	char const	*packet_type;
 	unsigned int	packet_code;
 	bool		shell_escape;
-	int		timeout;
+	uint32_t	timeout;
 } rlm_exec_t;
 
 /*
@@ -55,13 +55,13 @@ typedef struct rlm_exec_t {
  *	buffer over-flows.
  */
 static const CONF_PARSER module_config[] = {
-	{ "wait", PW_TYPE_BOOLEAN, offsetof(rlm_exec_t,wait), NULL, "yes" },
-	{ "program",  PW_TYPE_STRING_PTR, offsetof(rlm_exec_t,program), NULL, NULL },
-	{ "input_pairs", PW_TYPE_STRING_PTR, offsetof(rlm_exec_t,input), NULL, NULL },
-	{ "output_pairs",  PW_TYPE_STRING_PTR, offsetof(rlm_exec_t,output), NULL, NULL },
-	{ "packet_type", PW_TYPE_STRING_PTR, offsetof(rlm_exec_t,packet_type), NULL, NULL },
-	{ "shell_escape", PW_TYPE_BOOLEAN,  offsetof(rlm_exec_t,shell_escape), NULL, "yes" },
-	{ "timeout", PW_TYPE_INTEGER,  offsetof(rlm_exec_t,timeout), NULL, NULL },
+	{ "wait", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_exec_t, wait), "yes" },
+	{ "program", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_exec_t, program), NULL },
+	{ "input_pairs", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_exec_t, input), NULL },
+	{ "output_pairs", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_exec_t, output), NULL },
+	{ "packet_type", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_exec_t, packet_type), NULL },
+	{ "shell_escape", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_exec_t, shell_escape), "yes" },
+	{ "timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_exec_t, timeout), NULL },
 
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
@@ -178,7 +178,8 @@ static ssize_t exec_xlat(void *instance, REQUEST *request, char const *fmt, char
 	}
 
 	/*
-	 *	FIXME: Do xlat of program name?
+	 *	This function does it's own xlat of the input program
+	 *	to execute.
 	 */
 	result = radius_exec_program(request, fmt, inst->wait, inst->shell_escape,
 				     out, outlen, inst->timeout,
@@ -217,10 +218,6 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	}
 
 	xlat_register(inst->xlat_name, exec_xlat, rlm_exec_shell_escape, inst);
-
-	/*
-	 *	Check whether program actually exists
-	 */
 
 	if (inst->input) {
 		p = inst->input;
@@ -292,7 +289,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 /*
  *  Dispatch an exec method
  */
-static rlm_rcode_t exec_dispatch(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_exec_dispatch(void *instance, REQUEST *request)
 {
 	rlm_exec_t	*inst = (rlm_exec_t *)instance;
 	rlm_rcode_t	rcode;
@@ -345,17 +342,11 @@ static rlm_rcode_t exec_dispatch(void *instance, REQUEST *request)
 	/*
 	 *	This function does it's own xlat of the input program
 	 *	to execute.
-	 *
-	 *	FIXME: if inst->program starts with %{, then
-	 *	do an xlat ourselves.  This will allow us to do
-	 *	program = %{Exec-Program}, which this module
-	 *	xlat's into it's string value, and then the
-	 *	exec program function xlat's it's string value
-	 *	into something else.
 	 */
 	status = radius_exec_program(request, inst->program, inst->wait, inst->shell_escape,
 				     out, sizeof(out), inst->timeout,
-				     input_pairs ? *input_pairs : NULL, &answer);
+				     inst->input ? *input_pairs : NULL,
+				     inst->output ? &answer : NULL);
 	rcode = rlm_exec_status2rcode(request, out, strlen(out), status);
 
 	/*
@@ -363,7 +354,7 @@ static rlm_rcode_t exec_dispatch(void *instance, REQUEST *request)
 	 *
 	 *	If we're not waiting, then there are no output pairs.
 	 */
-	if (output_pairs) {
+	if (inst->output) {
 		pairmove(request, output_pairs, &answer);
 	}
 	pairfree(&answer);
@@ -377,7 +368,7 @@ static rlm_rcode_t exec_dispatch(void *instance, REQUEST *request)
  *
  *	Then, call exec_dispatch.
  */
-static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *request)
 {
 	rlm_exec_t	*inst = (rlm_exec_t *) instance;
 	rlm_rcode_t 	rcode;
@@ -398,7 +389,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 			return RLM_MODULE_NOOP;
 		}
 
-		rcode = exec_dispatch(instance, request);
+		rcode = mod_exec_dispatch(instance, request);
 		goto finish;
 	}
 
@@ -419,7 +410,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 		case RLM_MODULE_FAIL:
 		case RLM_MODULE_INVALID:
 		case RLM_MODULE_REJECT:
-			request->reply->code = PW_AUTHENTICATION_REJECT;
+			request->reply->code = PW_CODE_AUTHENTICATION_REJECT;
 			break;
 		default:
 			break;
@@ -433,7 +424,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
  *
  *	Then, call exec_dispatch.
  */
-static  rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *request)
 {
 	rlm_exec_t	*inst = (rlm_exec_t *) instance;
 	int		status;
@@ -447,7 +438,7 @@ static  rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 	 *	Exec-Program and Exec-Program-Wait.
 	 */
 	if (!inst->bare) {
-		return exec_dispatch(instance, request);
+		return mod_exec_dispatch(instance, request);
 	}
 
 	vp = pairfind(request->reply->vps, PW_EXEC_PROGRAM, 0, TAG_ANY);
@@ -478,23 +469,23 @@ static  rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 module_t rlm_exec = {
 	RLM_MODULE_INIT,
 	"exec",				/* Name */
-	RLM_TYPE_CHECK_CONFIG_SAFE,   	/* type */
+	RLM_TYPE_THREAD_SAFE,   	/* type */
 	sizeof(rlm_exec_t),
 	module_config,
 	mod_instantiate,		/* instantiation */
 	NULL,				/* detach */
 	{
-		exec_dispatch,		/* authentication */
-		exec_dispatch,		/* authorization */
-		exec_dispatch,		/* pre-accounting */
+		mod_exec_dispatch,	/* authentication */
+		mod_exec_dispatch,	/* authorization */
+		mod_exec_dispatch,	/* pre-accounting */
 		mod_accounting,		/* accounting */
 		NULL,			/* check simul */
-		exec_dispatch,		/* pre-proxy */
-		exec_dispatch,		/* post-proxy */
+		mod_exec_dispatch,	/* pre-proxy */
+		mod_exec_dispatch,	/* post-proxy */
 		mod_post_auth		/* post-auth */
 #ifdef WITH_COA
-		, exec_dispatch,
-		exec_dispatch
+		, mod_exec_dispatch,
+		mod_exec_dispatch
 #endif
 	},
 };

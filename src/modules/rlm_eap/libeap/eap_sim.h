@@ -52,6 +52,9 @@ RCSIDH(eap_sim_h, "$Id$")
 #define ATTRIBUTE_EAP_SIM_KC2	   1213
 #define ATTRIBUTE_EAP_SIM_KC3	   1214
 
+#define ATTRIBUTE_EAP_SIM_KI		1215
+#define ATTRIBUTE_EAP_SIM_ALGO_VERSION	1216
+
 enum eapsim_subtype {
   eapsim_start       = 10,
   eapsim_challenge   = 11,
@@ -79,25 +82,6 @@ enum eapsim_serverstates {
   eapsim_server_maxstates
 };
 
-#define PW_EAP_SIM_RAND		 1
-#define PW_EAP_SIM_PADDING	      6
-#define PW_EAP_SIM_NONCE_MT	     7
-#define PW_EAP_SIM_PERMANENT_ID_REQ    10
-#define PW_EAP_SIM_MAC		 11
-#define PW_EAP_SIM_NOTIFICATION	12
-#define PW_EAP_SIM_ANY_ID_REQ	  13
-#define PW_EAP_SIM_IDENTITY	    14
-#define PW_EAP_SIM_VERSION_LIST	15
-#define PW_EAP_SIM_SELECTED_VERSION    16
-#define PW_EAP_SIM_FULLAUTH_ID_REQ     17
-#define PW_EAP_SIM_COUNTER	     19
-#define PW_EAP_SIM_COUNTER_TOO_SMALL   20
-#define PW_EAP_SIM_NONCE_S	     21
-#define PW_EAP_SIM_IV		 129
-#define PW_EAP_SIM_ENCR_DATA	  130
-#define PW_EAP_SIM_NEXT_PSEUDONUM     132
-#define PW_EAP_SIM_NEXT_REAUTH_ID     133
-#define PW_EAP_SIM_CHECKCODE	  134
 
 /*
  * interfaces in eapsimlib.c
@@ -120,7 +104,7 @@ extern int unmap_eapsim_basictypes(RADIUS_PACKET *r,
 
 #define EAPSIM_SRES_SIZE 4
 #define EAPSIM_RAND_SIZE 16
-#define EAPSIM_Kc_SIZE   8
+#define EAPSIM_KC_SIZE   8
 #define EAPSIM_CALCMAC_SIZE 20
 #define EAPSIM_NONCEMT_SIZE 16
 #define EAPSIM_AUTH_SIZE    16
@@ -132,7 +116,7 @@ struct eapsim_keys {
   unsigned char nonce_mt[EAPSIM_NONCEMT_SIZE];
   unsigned char rand[3][EAPSIM_RAND_SIZE];
   unsigned char sres[3][EAPSIM_SRES_SIZE];
-  unsigned char Kc[3][EAPSIM_Kc_SIZE];
+  unsigned char Kc[3][EAPSIM_KC_SIZE];
   unsigned char versionlist[MAX_STRING_LEN];
   unsigned char versionlistlen;
   unsigned char versionselect[2];

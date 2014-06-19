@@ -25,6 +25,7 @@
 
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/modules.h>
+#include <ctype.h>
 #include <time.h>
 
 typedef struct rlm_date_t {
@@ -33,7 +34,7 @@ typedef struct rlm_date_t {
 } rlm_date_t;
 
 static const CONF_PARSER module_config[] = {
-	{"format", PW_TYPE_STRING_PTR, offsetof(rlm_date_t, fmt), NULL, "%b %e %Y %H:%M:%S %Z"},
+	{ "format", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_date_t, fmt), "%b %e %Y %H:%M:%S %Z" },
 	{NULL, -1, 0, NULL, NULL}
 };
 
@@ -116,7 +117,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 module_t rlm_date = {
 	RLM_MODULE_INIT,
 	"date",				/* Name */
-	RLM_TYPE_CHECK_CONFIG_SAFE,   	/* type */
+	0,   	/* type */
 	sizeof(rlm_date_t),
 	module_config,
 	mod_instantiate,		/* instantiation */

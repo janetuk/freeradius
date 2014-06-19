@@ -127,7 +127,7 @@ void request_stats_final(REQUEST *request)
 	    (request->listener->type != RAD_LISTEN_AUTH)) return;
 
 	/* don't count statistic requests */
-	if (request->packet->code == PW_STATUS_SERVER)
+	if (request->packet->code == PW_CODE_STATUS_SERVER)
 		return;
 
 #undef INC_AUTH
@@ -163,8 +163,8 @@ void request_stats_final(REQUEST *request)
 	 *	deleted, because only the main server thread calls
 	 *	this function, which makes it thread-safe.
 	 */
-	if (request->reply) switch (request->reply->code) {
-	case PW_AUTHENTICATION_ACK:
+	if (request->reply && (request->packet->code != PW_CODE_STATUS_SERVER)) switch (request->reply->code) {
+	case PW_CODE_AUTHENTICATION_ACK:
 		INC_AUTH(total_access_accepts);
 
 		auth_stats:
@@ -184,16 +184,16 @@ void request_stats_final(REQUEST *request)
 			   &request->reply->timestamp);
 		break;
 
-	case PW_AUTHENTICATION_REJECT:
+	case PW_CODE_AUTHENTICATION_REJECT:
 		INC_AUTH(total_access_rejects);
 		goto auth_stats;
 
-	case PW_ACCESS_CHALLENGE:
+	case PW_CODE_ACCESS_CHALLENGE:
 		INC_AUTH(total_access_challenges);
 		goto auth_stats;
 
 #ifdef WITH_ACCOUNTING
-	case PW_ACCOUNTING_RESPONSE:
+	case PW_CODE_ACCOUNTING_RESPONSE:
 		INC_ACCT(total_responses);
 		stats_time(&radius_acct_stats,
 			   &request->packet->timestamp,
@@ -205,7 +205,7 @@ void request_stats_final(REQUEST *request)
 #endif
 
 #ifdef WITH_COA
-	case PW_COA_ACK:
+	case PW_CODE_COA_ACK:
 		INC_COA(total_access_accepts);
 	  coa_stats:
 		INC_COA(total_responses);
@@ -214,11 +214,11 @@ void request_stats_final(REQUEST *request)
 			   &request->reply->timestamp);
 		break;
 
-	case PW_COA_NAK:
+	case PW_CODE_COA_NAK:
 		INC_COA(total_access_rejects);
 		goto coa_stats;
 
-	case PW_DISCONNECT_ACK:
+	case PW_CODE_DISCONNECT_ACK:
 		INC_DSC(total_access_accepts);
 	  dsc_stats:
 		INC_DSC(total_responses);
@@ -227,7 +227,7 @@ void request_stats_final(REQUEST *request)
 			   &request->reply->timestamp);
 		break;
 
-	case PW_DISCONNECT_NAK:
+	case PW_CODE_DISCONNECT_NAK:
 		INC_DSC(total_access_rejects);
 		goto dsc_stats;
 #endif
@@ -237,13 +237,13 @@ void request_stats_final(REQUEST *request)
 		 *	authenticator.
 		 */
 	case 0:
-		if (request->packet->code == PW_AUTHENTICATION_REQUEST) {
+		if (request->packet->code == PW_CODE_AUTHENTICATION_REQUEST) {
 			if (request->reply->offset == -2) {
 				INC_AUTH(total_bad_authenticators);
 			} else {
 				INC_AUTH(total_packets_dropped);
 			}
-		} else if (request->packet->code == PW_ACCOUNTING_REQUEST) {
+		} else if (request->packet->code == PW_CODE_ACCOUNTING_REQUEST) {
 			if (request->reply->offset == -2) {
 				INC_ACCT(total_bad_authenticators);
 			} else {
@@ -260,14 +260,14 @@ void request_stats_final(REQUEST *request)
 	if (!request->proxy || !request->proxy_listener) goto done;	/* simplifies formatting */
 
 	switch (request->proxy->code) {
-	case PW_AUTHENTICATION_REQUEST:
+	case PW_CODE_AUTHENTICATION_REQUEST:
 		proxy_auth_stats.total_requests += request->num_proxied_requests;
 		request->proxy_listener->stats.total_requests += request->num_proxied_requests;
 		request->home_server->stats.total_requests += request->num_proxied_requests;
 		break;
 
 #ifdef WITH_ACCOUNTING
-	case PW_ACCOUNTING_REQUEST:
+	case PW_CODE_ACCOUNTING_REQUEST:
 		proxy_acct_stats.total_requests++;
 		request->proxy_listener->stats.total_requests += request->num_proxied_requests;
 		request->home_server->stats.total_requests += request->num_proxied_requests;
@@ -284,7 +284,7 @@ void request_stats_final(REQUEST *request)
 #define INC(_x) proxy_auth_stats._x += request->num_proxied_responses; request->proxy_listener->stats._x += request->num_proxied_responses; request->home_server->stats._x += request->num_proxied_responses;
 
 	switch (request->proxy_reply->code) {
-	case PW_AUTHENTICATION_ACK:
+	case PW_CODE_AUTHENTICATION_ACK:
 		INC(total_access_accepts);
 	proxy_stats:
 		INC(total_responses);
@@ -296,16 +296,16 @@ void request_stats_final(REQUEST *request)
 			   &request->proxy_reply->timestamp);
 		break;
 
-	case PW_AUTHENTICATION_REJECT:
+	case PW_CODE_AUTHENTICATION_REJECT:
 		INC(total_access_rejects);
 		goto proxy_stats;
 
-	case PW_ACCESS_CHALLENGE:
+	case PW_CODE_ACCESS_CHALLENGE:
 		INC(total_access_challenges);
 		goto proxy_stats;
 
 #ifdef WITH_ACCOUNTING
-	case PW_ACCOUNTING_RESPONSE:
+	case PW_CODE_ACCOUNTING_RESPONSE:
 		proxy_acct_stats.total_responses++;
 		request->proxy_listener->stats.total_responses++;
 		request->home_server->stats.total_responses++;
@@ -438,7 +438,7 @@ static void request_stats_addvp(REQUEST *request,
 	VALUE_PAIR *vp;
 
 	for (i = 0; table[i].attribute != 0; i++) {
-		vp = radius_paircreate(request, &request->reply->vps,
+		vp = radius_paircreate(request->reply, &request->reply->vps,
 				       table[i].attribute, VENDORPEC_FREERADIUS);
 		if (!vp) continue;
 
@@ -455,7 +455,7 @@ void request_stats_reply(REQUEST *request)
 	/*
 	 *	Statistics are available ONLY on a "status" port.
 	 */
-	rad_assert(request->packet->code == PW_STATUS_SERVER);
+	rad_assert(request->packet->code == PW_CODE_STATUS_SERVER);
 	rad_assert(request->listener->type == RAD_LISTEN_NONE);
 
 	flag = pairfind(request->packet->vps, 127, VENDORPEC_FREERADIUS, TAG_ANY);
@@ -503,10 +503,10 @@ void request_stats_reply(REQUEST *request)
 	 *	Internal server statistics
 	 */
 	if ((flag->vp_integer & 0x10) != 0) {
-		vp = radius_paircreate(request, &request->reply->vps,
+		vp = radius_paircreate(request->reply, &request->reply->vps,
 				       176, VENDORPEC_FREERADIUS);
 		if (vp) vp->vp_date = start_time.tv_sec;
-		vp = radius_paircreate(request, &request->reply->vps,
+		vp = radius_paircreate(request->reply, &request->reply->vps,
 				       177, VENDORPEC_FREERADIUS);
 		if (vp) vp->vp_date = hup_time.tv_sec;
 
@@ -516,7 +516,7 @@ void request_stats_reply(REQUEST *request)
 		thread_pool_queue_stats(array, pps);
 
 		for (i = 0; i <= 4; i++) {
-			vp = radius_paircreate(request, &request->reply->vps,
+			vp = radius_paircreate(request->reply, &request->reply->vps,
 					       162 + i, VENDORPEC_FREERADIUS);
 
 			if (!vp) continue;
@@ -524,7 +524,7 @@ void request_stats_reply(REQUEST *request)
 		}
 
 		for (i = 0; i < 2; i++) {
-			vp = radius_paircreate(request, &request->reply->vps,
+			vp = radius_paircreate(request->reply, &request->reply->vps,
 					       181 + i, VENDORPEC_FREERADIUS);
 
 			if (!vp) continue;
@@ -595,19 +595,19 @@ void request_stats_reply(REQUEST *request)
 			 */
 			if ((vp->da->type == PW_TYPE_INTEGER) &&
 			    (client->ipaddr.af == AF_INET)) {
-				vp = radius_paircreate(request,
+				vp = radius_paircreate(request->reply,
 						       &request->reply->vps,
 						       167, VENDORPEC_FREERADIUS);
 				if (vp) {
 					vp->vp_ipaddr = client->ipaddr.ipaddr.ip4addr.s_addr;
 				}
 
-				if (client->prefix != 32) {
-					vp = radius_paircreate(request,
+				if (client->ipaddr.prefix != 32) {
+					vp = radius_paircreate(request->reply,
 							       &request->reply->vps,
 							       169, VENDORPEC_FREERADIUS);
 					if (vp) {
-						vp->vp_integer = client->prefix;
+						vp->vp_integer = client->ipaddr.prefix;
 					}
 				}
 			}
@@ -690,7 +690,7 @@ void request_stats_reply(REQUEST *request)
 	 */
 	if (((flag->vp_integer & 0x80) != 0) &&
 	    ((flag->vp_integer & 0x03) != 0)) {
-		home_server *home;
+		home_server_t *home;
 		VALUE_PAIR *server_ip, *server_port;
 		fr_ipaddr_t ipaddr;
 
@@ -722,32 +722,32 @@ void request_stats_reply(REQUEST *request)
 		pairadd(&request->reply->vps,
 			paircopyvp(request->reply, server_port));
 
-		vp = radius_paircreate(request, &request->reply->vps,
+		vp = radius_paircreate(request->reply, &request->reply->vps,
 				       172, VENDORPEC_FREERADIUS);
 		if (vp) vp->vp_integer = home->currently_outstanding;
 
-		vp = radius_paircreate(request, &request->reply->vps,
+		vp = radius_paircreate(request->reply, &request->reply->vps,
 				       173, VENDORPEC_FREERADIUS);
 		if (vp) vp->vp_integer = home->state;
 
 		if ((home->state == HOME_STATE_ALIVE) &&
 		    (home->revive_time.tv_sec != 0)) {
-			vp = radius_paircreate(request, &request->reply->vps,
+			vp = radius_paircreate(request->reply, &request->reply->vps,
 					       175, VENDORPEC_FREERADIUS);
 			if (vp) vp->vp_date = home->revive_time.tv_sec;
 		}
 
 		if ((home->state == HOME_STATE_ALIVE) &&
 		    (home->ema.window > 0)) {
-				vp = radius_paircreate(request,
+				vp = radius_paircreate(request->reply,
 						       &request->reply->vps,
 						       178, VENDORPEC_FREERADIUS);
 				if (vp) vp->vp_integer = home->ema.window;
-				vp = radius_paircreate(request,
+				vp = radius_paircreate(request->reply,
 						       &request->reply->vps,
 						       179, VENDORPEC_FREERADIUS);
 				if (vp) vp->vp_integer = home->ema.ema1 / EMA_SCALE;
-				vp = radius_paircreate(request,
+				vp = radius_paircreate(request->reply,
 						       &request->reply->vps,
 						       180, VENDORPEC_FREERADIUS);
 				if (vp) vp->vp_integer = home->ema.ema10 / EMA_SCALE;
@@ -755,7 +755,7 @@ void request_stats_reply(REQUEST *request)
 		}
 
 		if (home->state == HOME_STATE_IS_DEAD) {
-			vp = radius_paircreate(request, &request->reply->vps,
+			vp = radius_paircreate(request->reply, &request->reply->vps,
 					       174, VENDORPEC_FREERADIUS);
 			if (vp) vp->vp_date = home->zombie_period_start.tv_sec + home->zombie_period;
 		}
@@ -765,11 +765,11 @@ void request_stats_reply(REQUEST *request)
 		 *
 		 *	FIXME: do this for clients, too!
 		 */
-		vp = radius_paircreate(request, &request->reply->vps,
+		vp = radius_paircreate(request->reply, &request->reply->vps,
 				       184, VENDORPEC_FREERADIUS);
 		if (vp) vp->vp_date = home->last_packet_recv;
 
-		vp = radius_paircreate(request, &request->reply->vps,
+		vp = radius_paircreate(request->reply, &request->reply->vps,
 				       185, VENDORPEC_FREERADIUS);
 		if (vp) vp->vp_date = home->last_packet_sent;
 

@@ -23,7 +23,6 @@
 
 #ifdef WITH_COMMAND_SOCKET
 
-#include <freeradius-devel/modpriv.h>
 #include <freeradius-devel/parser.h>
 
 #ifdef HAVE_INTTYPES_H
@@ -67,23 +66,23 @@ struct fr_command_table_t {
 #define COMMAND_BUFFER_SIZE (1024)
 
 typedef struct fr_cs_buffer_t {
-	int	auth;
-	int	mode;
-	ssize_t offset;
-	ssize_t next;
-	char buffer[COMMAND_BUFFER_SIZE];
+	int		auth;
+	int		mode;
+	ssize_t		offset;
+	ssize_t		next;
+	char		buffer[COMMAND_BUFFER_SIZE];
 } fr_cs_buffer_t;
 
 #define COMMAND_SOCKET_MAGIC (0xffdeadee)
 typedef struct fr_command_socket_t {
-	uint32_t magic;
-	char	*path;
-	char	*copy;		/* <sigh> */
-	uid_t	uid;
-	gid_t	gid;
-	char	*uid_name;
-	char	*gid_name;
-	char	*mode_name;
+	uint32_t	magic;
+	char const	*path;
+	char		*copy;		/* <sigh> */
+	uid_t		uid;
+	gid_t		gid;
+	char const	*uid_name;
+	char const	*gid_name;
+	char const	*mode_name;
 	char user[256];
 
 	/*
@@ -92,7 +91,7 @@ typedef struct fr_command_socket_t {
 	 */
 	fr_ipaddr_t	src_ipaddr; /* src_port is always 0 */
 	fr_ipaddr_t	dst_ipaddr;
-	int		dst_port;
+	uint16_t	dst_port;
 	rad_listen_t	*inject_listener;
 	RADCLIENT	*inject_client;
 
@@ -100,16 +99,12 @@ typedef struct fr_command_socket_t {
 } fr_command_socket_t;
 
 static const CONF_PARSER command_config[] = {
-  { "socket",  PW_TYPE_STRING_PTR,
-    offsetof(fr_command_socket_t, path), NULL, "${run_dir}/radiusd.sock"},
-  { "uid",  PW_TYPE_STRING_PTR,
-    offsetof(fr_command_socket_t, uid_name), NULL, NULL},
-  { "gid",  PW_TYPE_STRING_PTR,
-    offsetof(fr_command_socket_t, gid_name), NULL, NULL},
-  { "mode",  PW_TYPE_STRING_PTR,
-    offsetof(fr_command_socket_t, mode_name), NULL, NULL},
+	{ "socket", FR_CONF_OFFSET(PW_TYPE_STRING, fr_command_socket_t, path), "${run_dir}/radiusd.sock" },
+	{ "uid", FR_CONF_OFFSET(PW_TYPE_STRING, fr_command_socket_t, uid_name), NULL },
+	{ "gid", FR_CONF_OFFSET(PW_TYPE_STRING, fr_command_socket_t, gid_name), NULL },
+	{ "mode", FR_CONF_OFFSET(PW_TYPE_STRING, fr_command_socket_t, mode_name), NULL },
 
-  { NULL, -1, 0, NULL, NULL }		/* end the list */
+	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
 
 static FR_NAME_NUMBER mode_names[] = {
@@ -120,12 +115,7 @@ static FR_NAME_NUMBER mode_names[] = {
 	{ NULL, 0 }
 };
 
-
-static ssize_t cprintf(rad_listen_t *listener, char const *fmt, ...)
-#ifdef __GNUC__
-		__attribute__ ((format (printf, 2, 3)))
-#endif
-;
+extern const FR_NAME_NUMBER mod_rcode_table[];
 
 #ifndef HAVE_GETPEEREID
 static int getpeereid(int s, uid_t *euid, gid_t *egid)
@@ -157,19 +147,19 @@ static int fr_server_domain_socket(char const *path)
 	struct stat buf;
 
 	if (!path) {
-		ERROR("No path provided, was NULL.");
+		ERROR("No path provided, was NULL");
 		return -1;
 	}
 
 	len = strlen(path);
 	if (len >= sizeof(salocal.sun_path)) {
-		ERROR("Path too long in socket filename.");
+		ERROR("Path too long in socket filename");
 		return -1;
 	}
 
 	if ((sockfd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0) {
 		ERROR("Failed creating socket: %s",
-			strerror(errno));
+			fr_syserror(errno));
 		return -1;
 	}
 
@@ -185,7 +175,7 @@ static int fr_server_domain_socket(char const *path)
 	if (stat(path, &buf) < 0) {
 		if (errno != ENOENT) {
 			ERROR("Failed to stat %s: %s",
-			       path, strerror(errno));
+			       path, fr_syserror(errno));
 			close(sockfd);
 			return -1;
 		}
@@ -214,16 +204,16 @@ static int fr_server_domain_socket(char const *path)
 		}
 
 		if (unlink(path) < 0) {
-			ERROR("Failed to delete %s: %s",
-			       path, strerror(errno));
-			close(sockfd);
-			return -1;
+		       ERROR("Failed to delete %s: %s",
+			     path, fr_syserror(errno));
+		       close(sockfd);
+		       return -1;
 		}
 	}
 
 	if (bind(sockfd, (struct sockaddr *)&salocal, socklen) < 0) {
 		ERROR("Failed binding to %s: %s",
-			path, strerror(errno));
+			path, fr_syserror(errno));
 		close(sockfd);
 		return -1;
 	}
@@ -234,14 +224,14 @@ static int fr_server_domain_socket(char const *path)
 	 */
 	if (chmod(path, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP) < 0) {
 		ERROR("Failed setting permissions on %s: %s",
-		       path, strerror(errno));
+		       path, fr_syserror(errno));
 		close(sockfd);
 		return -1;
 	}
 
 	if (listen(sockfd, 8) < 0) {
 		ERROR("Failed listening to %s: %s",
-			path, strerror(errno));
+			path, fr_syserror(errno));
 		close(sockfd);
 		return -1;
 	}
@@ -252,7 +242,7 @@ static int fr_server_domain_socket(char const *path)
 
 		if ((flags = fcntl(sockfd, F_GETFL, NULL)) < 0)  {
 			ERROR("Failure getting socket flags: %s",
-				strerror(errno));
+				fr_syserror(errno));
 			close(sockfd);
 			return -1;
 		}
@@ -260,7 +250,7 @@ static int fr_server_domain_socket(char const *path)
 		flags |= O_NONBLOCK;
 		if( fcntl(sockfd, F_SETFL, flags) < 0) {
 			ERROR("Failure setting socket flags: %s",
-				strerror(errno));
+				fr_syserror(errno));
 			close(sockfd);
 			return -1;
 		}
@@ -279,11 +269,10 @@ static void command_close_socket(rad_listen_t *this)
 	 *	This removes the socket from the event fd, so no one
 	 *	will be calling us any more.
 	 */
-	event_new_fd(this);
+	radius_update_listener(this);
 }
 
-
-static ssize_t cprintf(rad_listen_t *listener, char const *fmt, ...)
+static ssize_t CC_HINT(format (printf, 2, 3)) cprintf(rad_listen_t *listener, char const *fmt, ...)
 {
 	ssize_t len;
 	va_list ap;
@@ -382,7 +371,7 @@ static int command_show_config(rad_listen_t *listener, int argc, char *argv[])
 		return 0;
 	}
 
-	ci = cf_reference_item(mainconfig.config, mainconfig.config, argv[0]);
+	ci = cf_reference_item(main_config.config, main_config.config, argv[0]);
 	if (!ci) return 0;
 
 	if (!cf_item_is_pair(ci)) return 0;
@@ -406,11 +395,9 @@ static void cprint_conf_parser(rad_listen_t *listener, int indent, CONF_SECTION 
 
 {
 	int i;
-	void const *data;
 	char const *name1 = cf_section_name1(cs);
 	char const *name2 = cf_section_name2(cs);
 	CONF_PARSER const *variables = cf_section_parse_table(cs);
-	char buffer[256];
 
 	if (name2) {
 		cprintf(listener, "%.*s%s %s {\n", indent, tabs, name1, name2);
@@ -424,6 +411,9 @@ static void cprint_conf_parser(rad_listen_t *listener, int indent, CONF_SECTION 
 	 *	Print
 	 */
 	if (variables) for (i = 0; variables[i].name != NULL; i++) {
+		void const *data;
+		char buffer[256];
+
 		/*
 		 *	No base struct offset, data must be the pointer.
 		 *	If data doesn't exist, ignore the entry, there
@@ -454,11 +444,11 @@ static void cprint_conf_parser(rad_listen_t *listener, int indent, CONF_SECTION 
 				variables[i].name, *(int const *) data);
 			break;
 
-		case PW_TYPE_IPADDR:
+		case PW_TYPE_IPV4_ADDR:
 			inet_ntop(AF_INET, data, buffer, sizeof(buffer));
 			break;
 
-		case PW_TYPE_IPV6ADDR:
+		case PW_TYPE_IPV6_ADDR:
 			inet_ntop(AF_INET6, data, buffer, sizeof(buffer));
 			break;
 
@@ -468,7 +458,7 @@ static void cprint_conf_parser(rad_listen_t *listener, int indent, CONF_SECTION 
 				((*(bool const *) data) == false) ? "no" : "yes");
 			break;
 
-		case PW_TYPE_STRING_PTR:
+		case PW_TYPE_STRING:
 		case PW_TYPE_FILE_INPUT:
 		case PW_TYPE_FILE_OUTPUT:
 			/*
@@ -584,12 +574,41 @@ static int command_show_module_flags(rad_listen_t *listener, int argc, char *arg
 		cprintf(listener, "\tthread-unsafe\n");
 
 
-	if ((mod->type & RLM_TYPE_CHECK_CONFIG_SAFE) != 0)
-		cprintf(listener, "\twill-check-config\n");
+	if ((mod->type & RLM_TYPE_CHECK_CONFIG_UNSAFE) != 0)
+		cprintf(listener, "\tno-check-config\n");
 
 
 	if ((mod->type & RLM_TYPE_HUP_SAFE) != 0)
 		cprintf(listener, "\treload-on-hup\n");
+
+	return 1;		/* success */
+}
+
+static int command_show_module_status(rad_listen_t *listener, int argc, char *argv[])
+{
+	CONF_SECTION *cs;
+	const module_instance_t *mi;
+
+	if (argc != 1) {
+		cprintf(listener, "ERROR: No module name was given\n");
+		return 0;
+	}
+
+	cs = cf_section_find("modules");
+	if (!cs) return 0;
+
+	mi = find_module_instance(cs, argv[0], 0);
+	if (!mi) {
+		cprintf(listener, "ERROR: No such module \"%s\"\n", argv[0]);
+		return 0;
+	}
+
+	if (!mi->force) {
+		cprintf(listener, "alive\n");
+	} else {
+		cprintf(listener, "%s\n", fr_int2str(mod_rcode_table, mi->code, "<invalid>"));
+	}
+
 
 	return 1;		/* success */
 }
@@ -632,7 +651,7 @@ static int command_show_modules(rad_listen_t *listener, UNUSED int argc, UNUSED 
 static int command_show_home_servers(rad_listen_t *listener, UNUSED int argc, UNUSED char *argv[])
 {
 	int i;
-	home_server *home;
+	home_server_t *home;
 	char const *type, *state, *proto;
 
 	char buffer[256];
@@ -688,11 +707,11 @@ static int command_show_home_servers(rad_listen_t *listener, UNUSED int argc, UN
 			 *	The *reported* state changes because
 			 *	the internal state machine NEEDS THE
 			 *	RIGHT STATE.  However, reporting that
-			 *	to the admin will confuse him.  So...
-			 *	we lie.  Yes, that dress doesn't make
-			 *	you look fat.
+			 *	to the admin will confuse them.
+			 *	So... we lie.  No, that dress doesn't
+			 *	make you look fat...
 			 */
-			if ((home->last_packet_recv + home->ping_interval) >= now) {
+			if ((home->last_packet_recv + (int)home->ping_interval) >= now) {
 				state = "alive";
 			} else {
 				state = "unknown";
@@ -723,10 +742,10 @@ static int command_show_clients(rad_listen_t *listener, UNUSED int argc, UNUSED 
 		ip_ntoh(&client->ipaddr, buffer, sizeof(buffer));
 
 		if (((client->ipaddr.af == AF_INET) &&
-		     (client->prefix != 32)) ||
+		     (client->ipaddr.prefix != 32)) ||
 		    ((client->ipaddr.af == AF_INET6) &&
-		     (client->prefix != 128))) {
-			cprintf(listener, "\t%s/%d\n", buffer, client->prefix);
+		     (client->ipaddr.prefix != 128))) {
+			cprintf(listener, "\t%s/%d\n", buffer, client->ipaddr.prefix);
 		} else {
 			cprintf(listener, "\t%s\n", buffer);
 		}
@@ -735,51 +754,6 @@ static int command_show_clients(rad_listen_t *listener, UNUSED int argc, UNUSED 
 	return 0;
 }
 
-
-static int command_show_xml(rad_listen_t *listener, UNUSED int argc, UNUSED char *argv[])
-{
-	int fd;
-	CONF_ITEM *ci;
-	FILE *fp;
-
-	fd = dup(listener->fd);
-	if (fd < 0) return 0;
-
-	fp = fdopen(fd, "a");
-	if (!fp) {
-		cprintf(listener, "ERROR: Can't dup %s\n", strerror(errno));
-		return 0;
-	}
-
-	if (argc == 0) {
-		cprintf(listener, "ERROR: <reference> is required\n");
-		fclose(fp);
-		return 0;
-	}
-
-	ci = cf_reference_item(mainconfig.config, mainconfig.config, argv[0]);
-	if (!ci) {
-		cprintf(listener, "ERROR: No such item <reference>\n");
-		fclose(fp);
-		return 0;
-	}
-
-	if (cf_item_is_section(ci)) {
-		cf_section2xml(fp, cf_itemtosection(ci));
-
-	} else if (cf_item_is_pair(ci)) {
-		cf_pair2xml(fp, cf_itemtopair(ci));
-
-	} else {
-		cprintf(listener, "ERROR: No such item <reference>\n");
-		fclose(fp);
-		return 0;
-	}
-
-	fclose(fp);
-
-	return 1;		/* success */
-}
 
 static int command_show_version(rad_listen_t *listener, UNUSED int argc, UNUSED char *argv[])
 {
@@ -811,7 +785,7 @@ static char debug_log_file_buffer[1024];
 
 static int command_debug_file(rad_listen_t *listener, int argc, char *argv[])
 {
-	if (debug_flag && default_log.dest == L_DST_STDOUT) {
+	if (debug_flag && default_log.dst == L_DST_STDOUT) {
 		cprintf(listener, "ERROR: Cannot redirect debug logs to a file when already in debugging mode.\n");
 		return -1;
 	}
@@ -844,27 +818,83 @@ static int command_debug_file(rad_listen_t *listener, int argc, char *argv[])
 extern fr_cond_t *debug_condition;
 static int command_debug_condition(UNUSED rad_listen_t *listener, int argc, char *argv[])
 {
+	int i;
 	char const *error;
-
-	/*
-	 *	Delete old condition.
-	 *
-	 *	This is thread-safe because the condition is evaluated
-	 *	in the main server thread, along with code.
-	 */
-	talloc_free(debug_condition);
-	debug_condition = NULL;
+	fr_cond_t *new_condition = NULL;
+	char *p, buffer[1024];
 
 	/*
 	 *	Disable it.
 	 */
 	if (argc == 0) {
+		talloc_free(debug_condition);
+		debug_condition = NULL;
 		return 0;
 	}
 
-	if (fr_condition_tokenize(NULL, NULL, argv[0], &debug_condition, &error, FR_COND_ONE_PASS) < 0) {
-		ERROR("Failed parsing condition '%s': %s", argv[0], error);
+	if (!((argc == 1) &&
+	      ((argv[0][0] == '"') || (argv[0][0] == '\'')))) {
+		p = buffer;
+		*p = '\0';
+		for (i = 0; i < argc; i++) {
+			size_t len;
+
+			len = strlcpy(p, argv[i], buffer + sizeof(buffer) - p);
+			p += len;
+			*(p++) = ' ';
+			*p = '\0';
+		}
+
+	} else {
+		/*
+		 *	Backwards compatibility.  De-escape the string.
+		 */
+		char quote;
+		char *q;
+
+		p = argv[0];
+		q = buffer;
+
+		quote = *(p++);
+
+		while (true) {
+			if (!*p) {
+				ERROR("Failed parsing condition '%s': Unexpected end of string", argv[0]);
+				return 0;
+			}
+
+			if (*p == quote) {
+				if (p[1]) {
+					ERROR("Failed parsing condition '%s': Unexpected text after end of string", argv[0]);
+					return 0;
+				}
+				*q = '\0';
+				break;
+			}
+
+			if (*p == '\\') {
+				*(q++) = p[1];
+				p += 2;
+				continue;
+			}
+
+			*(q++) = *(p++);
+		}
 	}
+
+	if (fr_condition_tokenize(NULL, NULL, buffer, &new_condition, &error, FR_COND_ONE_PASS) < 0) {
+		ERROR("Failed parsing condition '%s': %s", buffer, error);
+		return 0;
+	}
+
+	/*
+	 *	Delete old condition.
+	 *
+	 *	This is thread-safe because the condition is evaluated
+	 *	in the main server thread, along with this code.
+	 */
+	talloc_free(debug_condition);
+	debug_condition = new_condition;
 
 	return 0;
 }
@@ -912,7 +942,7 @@ static RADCLIENT *get_client(rad_listen_t *listener, int argc, char *argv[])
 		return NULL;
 	}
 
-	if (ip_hton(argv[0], AF_UNSPEC, &ipaddr) < 0) {
+	if (ip_hton(&ipaddr, AF_UNSPEC, argv[0], false) < 0) {
 		cprintf(listener, "ERROR: Failed parsing IP address; %s\n",
 			fr_strerror());
 		return NULL;
@@ -943,40 +973,12 @@ static RADCLIENT *get_client(rad_listen_t *listener, int argc, char *argv[])
 	return client;
 }
 
-
-static int command_show_client_config(rad_listen_t *listener, int argc, char *argv[])
-{
-	int fd;
-	RADCLIENT *client;
-	FILE *fp;
-
-	client = get_client(listener, argc, argv);
-	if (!client) {
-		return 0;
-	}
-
-	if (!client->cs) return 1;
-	fd = dup(listener->fd);
-	if (fd < 0) return 0;
-
-	fp = fdopen(fd, "a");
-	if (!fp) {
-		cprintf(listener, "ERROR: Can't dup %s\n", strerror(errno));
-		return 0;
-	}
-
-	cf_section2file(fp, client->cs);
-	fclose(fp);
-
-	return 1;
-}
-
 #ifdef WITH_PROXY
-static home_server *get_home_server(rad_listen_t *listener, int argc,
+static home_server_t *get_home_server(rad_listen_t *listener, int argc,
 				    char *argv[], int *last)
 {
-	home_server *home;
-	int port;
+	home_server_t *home;
+	uint16_t port;
 	int proto = IPPROTO_UDP;
 	fr_ipaddr_t ipaddr;
 
@@ -985,7 +987,7 @@ static home_server *get_home_server(rad_listen_t *listener, int argc,
 		return NULL;
 	}
 
-	if (ip_hton(argv[0], AF_UNSPEC, &ipaddr) < 0) {
+	if (ip_hton(&ipaddr, AF_UNSPEC, argv[0], false) < 0) {
 		cprintf(listener, "ERROR: Failed parsing IP address; %s\n",
 			fr_strerror());
 		return NULL;
@@ -1016,37 +1018,10 @@ static home_server *get_home_server(rad_listen_t *listener, int argc,
 	return home;
 }
 
-static int command_show_home_server_config(rad_listen_t *listener, int argc, char *argv[])
-{
-	int fd;
-	home_server *home;
-	FILE *fp;
-
-	home = get_home_server(listener, argc, argv, NULL);
-	if (!home) {
-		return 0;
-	}
-
-	if (!home->cs) return 1;
-	fd = dup(listener->fd);
-	if (fd < 0) return 0;
-
-	fp = fdopen(fd, "a");
-	if (!fp) {
-		cprintf(listener, "ERROR: Can't dup %s\n", strerror(errno));
-		return 0;
-	}
-
-	cf_section2file(fp, home->cs);
-	fclose(fp);
-
-	return 1;
-}
-
 static int command_set_home_server_state(rad_listen_t *listener, int argc, char *argv[])
 {
 	int last;
-	home_server *home;
+	home_server_t *home;
 
 	if (argc < 3) {
 		cprintf(listener, "ERROR: Must specify <ipaddr> <port> [proto] <state>\n");
@@ -1077,7 +1052,7 @@ static int command_set_home_server_state(rad_listen_t *listener, int argc, char 
 
 static int command_show_home_server_state(rad_listen_t *listener, int argc, char *argv[])
 {
-	home_server *home;
+	home_server_t *home;
 
 	home = get_home_server(listener, argc, argv, NULL);
 	if (!home) {
@@ -1123,7 +1098,6 @@ static int null_socket_send(UNUSED rad_listen_t *listener, REQUEST *request)
 	vp_cursor_t cursor;
 	char *output_file;
 	FILE *fp;
-	VALUE_PAIR *vp;
 
 	output_file = request_data_reference(request, null_socket_send, 0);
 	if (!output_file) {
@@ -1134,12 +1108,13 @@ static int null_socket_send(UNUSED rad_listen_t *listener, REQUEST *request)
 	fp = fopen(output_file, "w");
 	if (!fp) {
 		ERROR("Failed to send injected file to %s: %s",
-		       output_file, strerror(errno));
+		       output_file, fr_syserror(errno));
 		return 0;
 	}
 
 	if (request->reply->code != 0) {
 		char const *what = "reply";
+		VALUE_PAIR *vp;
 		char buffer[1024];
 
 		if (request->reply->code < FR_MAX_PACKET_CODE) {
@@ -1156,9 +1131,9 @@ static int null_socket_send(UNUSED rad_listen_t *listener, REQUEST *request)
 					 request->reply->code, request->reply->id);
 		}
 
-		for (vp = paircursor(&cursor, &request->reply->vps);
+		for (vp = fr_cursor_init(&cursor, &request->reply->vps);
 		     vp;
-		     vp = pairnext(&cursor)) {
+		     vp = fr_cursor_next(&cursor)) {
 			vp_prints(buffer, sizeof(buffer), vp);
 			fprintf(fp, "%s\n", buffer);
 			if (debug_flag) {
@@ -1175,7 +1150,7 @@ static rad_listen_t *get_socket(rad_listen_t *listener, int argc,
 			       char *argv[], int *last)
 {
 	rad_listen_t *sock;
-	int port;
+	uint16_t port;
 	int proto = IPPROTO_UDP;
 	fr_ipaddr_t ipaddr;
 
@@ -1184,7 +1159,7 @@ static rad_listen_t *get_socket(rad_listen_t *listener, int argc,
 		return NULL;
 	}
 
-	if (ip_hton(argv[0], AF_UNSPEC, &ipaddr) < 0) {
+	if (ip_hton(&ipaddr, AF_UNSPEC, argv[0], false) < 0) {
 		cprintf(listener, "ERROR: Failed parsing IP address; %s\n",
 			fr_strerror());
 		return NULL;
@@ -1251,7 +1226,7 @@ static int command_inject_from(rad_listen_t *listener, int argc, char *argv[])
 	}
 
 	sock->src_ipaddr.af = AF_UNSPEC;
-	if (ip_hton(argv[0], AF_UNSPEC, &sock->src_ipaddr) < 0) {
+	if (ip_hton(&sock->src_ipaddr, AF_UNSPEC, argv[0], false) < 0) {
 		cprintf(listener, "ERROR: Failed parsing IP address; %s\n",
 			fr_strerror());
 		return 0;
@@ -1271,7 +1246,8 @@ static int command_inject_from(rad_listen_t *listener, int argc, char *argv[])
 static int command_inject_file(rad_listen_t *listener, int argc, char *argv[])
 {
 	static int inject_id = 0;
-	int filedone;
+	int ret;
+	bool filedone;
 	fr_command_socket_t *sock = listener->data;
 	rad_listen_t *fake;
 	RADIUS_PACKET *packet;
@@ -1304,13 +1280,13 @@ static int command_inject_file(rad_listen_t *listener, int argc, char *argv[])
 	fp = fopen(argv[0], "r");
 	if (!fp ) {
 		cprintf(listener, "ERROR: Failed opening %s: %s\n",
-			argv[0], strerror(errno));
+			argv[0], fr_syserror(errno));
 		return 0;
 	}
 
-	vp = readvp2(NULL, fp, &filedone, "");
+	ret = readvp2(&vp, NULL, fp, &filedone);
 	fclose(fp);
-	if (!vp) {
+	if (ret < 0) {
 		cprintf(listener, "ERROR: Failed reading attributes from %s: %s\n",
 			argv[0], fr_strerror());
 		return 0;
@@ -1336,12 +1312,12 @@ static int command_inject_file(rad_listen_t *listener, int argc, char *argv[])
 	packet->id = inject_id++;
 
 	if (fake->type == RAD_LISTEN_AUTH) {
-		packet->code = PW_AUTHENTICATION_REQUEST;
+		packet->code = PW_CODE_AUTHENTICATION_REQUEST;
 		fun = rad_authenticate;
 
 	} else {
 #ifdef WITH_ACCOUNTING
-		packet->code = PW_ACCOUNTING_REQUEST;
+		packet->code = PW_CODE_ACCOUNTING_REQUEST;
 		fun = rad_accounting;
 #else
 		cprintf(listener, "ERROR: This server was built without accounting support.\n");
@@ -1359,14 +1335,14 @@ static int command_inject_file(rad_listen_t *listener, int argc, char *argv[])
 					  buffer, sizeof(buffer)),
 				packet->code, packet->id);
 
-		for (vp = paircursor(&cursor, &packet->vps);
+		for (vp = fr_cursor_init(&cursor, &packet->vps);
 		     vp;
-		     vp = pairnext(&cursor)) {
+		     vp = fr_cursor_next(&cursor)) {
 			vp_prints(buffer, sizeof(buffer), vp);
 			DEBUG("\t%s", buffer);
 		}
 
-		WDEBUG("INJECTION IS LEAKING MEMORY!");
+		WARN("INJECTION IS LEAKING MEMORY!");
 	}
 
 	if (!request_receive(fake, packet, sock->inject_client, fun)) {
@@ -1381,7 +1357,7 @@ static int command_inject_file(rad_listen_t *listener, int argc, char *argv[])
 	 *	Remember what the output file is, and remember to
 	 *	delete the fake listener when done.
 	 */
-	request_data_add(request, null_socket_send, 0, talloc_strdup(NULL, buffer), true);
+	request_data_add(request, null_socket_send, 0, talloc_typed_strdup(NULL, buffer), true);
 	request_data_add(request, null_socket_send, 1, fake, true);
 
 #endif
@@ -1451,18 +1427,14 @@ static fr_command_table_t command_table_show_module[] = {
 	{ "methods", FR_READ,
 	  "show module methods <module> - show sections where <module> may be used",
 	  command_show_module_methods, NULL },
+	{ "status", FR_READ,
+	  "show module status <module> - show the module status",
+	  command_show_module_status, NULL },
 
 	{ NULL, 0, NULL, NULL, NULL }
 };
 
 static fr_command_table_t command_table_show_client[] = {
-	{ "config", FR_READ,
-	  "show client config <ipaddr> "
-#ifdef WITH_TCP
-	  "[proto] "
-#endif
-	  "- show configuration for given client",
-	  command_show_client_config, NULL },
 	{ "list", FR_READ,
 	  "show client list - shows list of global clients",
 	  command_show_clients, NULL },
@@ -1472,9 +1444,6 @@ static fr_command_table_t command_table_show_client[] = {
 
 #ifdef WITH_PROXY
 static fr_command_table_t command_table_show_home[] = {
-	{ "config", FR_READ,
-	  "show home_server config <ipaddr> <port> [proto] - show configuration for given home server",
-	  command_show_home_server_config, NULL },
 	{ "list", FR_READ,
 	  "show home_server list - shows list of home servers",
 	  command_show_home_servers, NULL },
@@ -1511,9 +1480,6 @@ static fr_command_table_t command_table_show[] = {
 	{ "version", FR_READ,
 	  "show version - Prints version of the running server",
 	  command_show_version, NULL },
-	{ "xml", FR_READ,
-	  "show xml <reference> - Prints out configuration as XML",
-	  command_show_xml, NULL },
 	{ NULL, 0, NULL, NULL, NULL }
 };
 
@@ -1596,8 +1562,7 @@ static int command_set_module_config(rad_listen_t *listener, int argc, char *arg
 	 */
 	cf_pair_replace(mi->cs, cp, argv[2]);
 
-	rcode = cf_item_parse(mi->cs, argv[1], variables[i].type,
-			      data, argv[2]);
+	rcode = cf_item_parse(mi->cs, argv[1], variables[i].type, data, argv[2]);
 	if (rcode < 0) {
 		cprintf(listener, "ERROR: Failed to parse value\n");
 		return 0;
@@ -1627,14 +1592,23 @@ static int command_set_module_status(rad_listen_t *listener, int argc, char *arg
 
 
 	if (strcmp(argv[1], "alive") == 0) {
-		mi->dead = false;
+		mi->force = false;
 
 	} else if (strcmp(argv[1], "dead") == 0) {
-		mi->dead = true;
+		mi->code = RLM_MODULE_FAIL;
+		mi->force = true;
 
 	} else {
-		cprintf(listener, "ERROR: Unknown status \"%s\"\n", argv[2]);
-		return 0;
+		int rcode;
+
+		rcode = fr_str2int(mod_rcode_table, argv[1], -1);
+		if (rcode < 0) {
+			cprintf(listener, "ERROR: Unknown status \"%s\"\n", argv[1]);
+			return 0;
+		}
+
+		mi->code = rcode;
+		mi->force = true;
 	}
 
 	return 1;		/* success */
@@ -1723,7 +1697,7 @@ static int command_stats_detail(rad_listen_t *listener, int argc, char *argv[])
 	}
 
 	data = NULL;
-	for (this = mainconfig.listen; this != NULL; this = this->next) {
+	for (this = main_config.listen; this != NULL; this = this->next) {
 		if (this->type != RAD_LISTEN_DETAIL) continue;
 
 		data = this->data;
@@ -1768,7 +1742,7 @@ static int command_stats_detail(rad_listen_t *listener, int argc, char *argv[])
 #ifdef WITH_PROXY
 static int command_stats_home_server(rad_listen_t *listener, int argc, char *argv[])
 {
-	home_server *home;
+	home_server_t *home;
 
 	if (argc == 0) {
 		cprintf(listener, "ERROR: Must specify [auth/acct] OR <ipaddr> <port>\n");
@@ -1805,7 +1779,7 @@ static int command_stats_home_server(rad_listen_t *listener, int argc, char *arg
 
 static int command_stats_client(rad_listen_t *listener, int argc, char *argv[])
 {
-	int auth = true;
+	bool auth = true;
 	fr_stats_t *stats;
 	RADCLIENT *client, fake;
 
@@ -1893,7 +1867,7 @@ static int command_stats_client(rad_listen_t *listener, int argc, char *argv[])
 
 static int command_stats_socket(rad_listen_t *listener, int argc, char *argv[])
 {
-	int auth = true;
+	bool auth = true;
 	rad_listen_t *sock;
 
 	sock = get_socket(listener, argc, argv, NULL);
@@ -1908,6 +1882,7 @@ static int command_stats_socket(rad_listen_t *listener, int argc, char *argv[])
 #endif	/* WITH_STATS */
 
 
+#ifdef WITH_DYNAMIC_CLIENTS
 static int command_add_client_file(rad_listen_t *listener, int argc, char *argv[])
 {
 	RADCLIENT *c;
@@ -1938,7 +1913,6 @@ static int command_add_client_file(rad_listen_t *listener, int argc, char *argv[
 
 static int command_del_client(rad_listen_t *listener, int argc, char *argv[])
 {
-#ifdef WITH_DYNAMIC_CLIENTS
 	RADCLIENT *client;
 
 	client = get_client(listener, argc, argv);
@@ -1958,9 +1932,6 @@ static int command_del_client(rad_listen_t *listener, int argc, char *argv[])
 	 *	structure will stick around for a while.  Oh well...
 	 */
 	client->lifetime = 1;
-#else
-	cprintf(listener, "ERROR: Dynamic clients are not supported.\n");
-#endif
 
 	return 1;
 }
@@ -2000,7 +1971,7 @@ static fr_command_table_t command_table_add[] = {
 
 	{ NULL, 0, NULL, NULL, NULL }
 };
-
+#endif
 
 #ifdef WITH_PROXY
 static fr_command_table_t command_table_set_home[] = {
@@ -2018,7 +1989,7 @@ static fr_command_table_t command_table_set_module[] = {
 	  command_set_module_config, NULL },
 
 	{ "status", FR_WRITE,
-	  "set module status [alive|dead] - set the module to be alive or dead (always return \"fail\")",
+	  "set module status <module> [alive|...] - set the module status to be alive (operating normally), or force a particular code (ok,fail, etc.)",
 	  command_set_module_status, NULL },
 
 	{ NULL, 0, NULL, NULL, NULL }
@@ -2074,11 +2045,15 @@ static fr_command_table_t command_table_stats[] = {
 #endif
 
 static fr_command_table_t command_table[] = {
+#ifdef WITH_DYNAMIC_CLIENTS
 	{ "add", FR_WRITE, NULL, NULL, command_table_add },
+#endif
 	{ "debug", FR_WRITE,
 	  "debug <command> - debugging commands",
 	  NULL, command_table_debug },
+#ifdef WITH_DYNAMIC_CLIENTS
 	{ "del", FR_WRITE, NULL, NULL, command_table_del },
+#endif
 	{ "hup", FR_WRITE,
 	  "hup [module] - sends a HUP signal to the server, or optionally to one module",
 	  command_hup, NULL },
@@ -2136,7 +2111,7 @@ static int command_socket_parse_unix(CONF_SECTION *cs, rad_listen_t *this)
 
 	sock->magic = COMMAND_SOCKET_MAGIC;
 	sock->copy = NULL;
-	if (sock->path) sock->copy = talloc_strdup(sock, sock->path);
+	if (sock->path) sock->copy = talloc_typed_strdup(sock, sock->path);
 
 #if defined(HAVE_GETPEEREID) || defined (SO_PEERCRED)
 	if (sock->uid_name) {
@@ -2145,7 +2120,7 @@ static int command_socket_parse_unix(CONF_SECTION *cs, rad_listen_t *this)
 		pw = getpwnam(sock->uid_name);
 		if (!pw) {
 			ERROR("Failed getting uid for %s: %s",
-			       sock->uid_name, strerror(errno));
+			       sock->uid_name, fr_syserror(errno));
 			return -1;
 		}
 
@@ -2160,7 +2135,7 @@ static int command_socket_parse_unix(CONF_SECTION *cs, rad_listen_t *this)
 		gr = getgrnam(sock->gid_name);
 		if (!gr) {
 			ERROR("Failed getting gid for %s: %s",
-			       sock->gid_name, strerror(errno));
+			       sock->gid_name, fr_syserror(errno));
 			return -1;
 		}
 		sock->gid = gr->gr_gid;
@@ -2207,7 +2182,7 @@ static int command_socket_parse_unix(CONF_SECTION *cs, rad_listen_t *this)
 		fr_suid_up();
 		if (fchown(this->fd, sock->uid, sock->gid) < 0) {
 			ERROR("Failed setting ownership of %s: %s",
-			       sock->path, strerror(errno));
+			       sock->path, fr_syserror(errno));
 			fr_suid_down();
 			return -1;
 		}
@@ -2268,8 +2243,6 @@ static int command_socket_print(rad_listen_t const *this, char *buffer, size_t b
 static int str2argvX(char *str, char **argv, int max_argc)
 {
 	int argc = 0;
-	size_t len;
-	char buffer[1024];
 
 	while (*str) {
 		if (argc >= max_argc) return argc;
@@ -2289,29 +2262,31 @@ static int str2argvX(char *str, char **argv, int max_argc)
 
 		if (!*str) return argc;
 
+		argv[argc++] = str;
+
 		if ((*str == '\'') || (*str == '"')) {
-			char const *p = str;
-			FR_TOKEN token;
+			char quote = *str;
+			char *p = str + 1;
 
-			token = gettoken(&p, buffer, sizeof(buffer));
-			if ((token != T_SINGLE_QUOTED_STRING) &&
-			    (token != T_DOUBLE_QUOTED_STRING)) {
-				return -1;
+			while (true) {
+				if (!*p) return -1;
+
+				if (*p == quote) {
+					str = p + 1;
+					break;
+				}
+
+				/*
+				 *	Handle \" and nothing else.
+				 */
+				if (*p == '\\') {
+					p += 2;
+					continue;
+				}
+
+				p++;
 			}
-
-			len = strlen(buffer);
-			if (len >= (size_t) (p - str)) {
-				return -1;
-			}
-
-			memcpy(str, buffer, len + 1);
-			argv[argc] = str;
-
-			memcpy(&str, &p, sizeof(str));
-		} else {
-			argv[argc] = str;
 		}
-		argc++;
 
 		while (*str &&
 		       (*str != ' ') &&
@@ -2491,8 +2466,7 @@ static int command_domain_recv_co(rad_listen_t *listener, fr_cs_buffer_t *co)
 			}
 
 			len = 1;
-			rcode = table[i].func(listener,
-					      argc - 1, argv + 1);
+			table[i].func(listener, argc - 1, argv + 1);
 			break;
 		}
 	}
@@ -2545,7 +2519,7 @@ static int command_write_magic(int newfd, listen_socket_t *sock)
 	magic = htonl(0xf7eead15);
 	if (write(newfd, &magic, 4) < 0) {
 		ERROR("Failed writing initial data to socket: %s",
-		       strerror(errno));
+		       fr_syserror(errno));
 		return -1;
 	}
 
@@ -2555,7 +2529,7 @@ static int command_write_magic(int newfd, listen_socket_t *sock)
 		magic = htonl(1);
 	}
 	if (write(newfd, &magic, 4) < 0) {
-		ERROR("Failed writing initial data to socket: %s", strerror(errno));
+		ERROR("Failed writing initial data to socket: %s", fr_syserror(errno));
 		return -1;
 	}
 
@@ -2577,7 +2551,7 @@ static int command_write_magic(int newfd, listen_socket_t *sock)
 		 *	FIXME: EINTR, etc.
 		 */
 		if (write(newfd, co->buffer, 16) < 0) {
-			ERROR("Failed writing version data to socket: %s", strerror(errno));
+			ERROR("Failed writing version data to socket: %s", fr_syserror(errno));
 			return -1;
 		}
 	}
@@ -2617,7 +2591,7 @@ static int command_tcp_recv(rad_listen_t *this)
 				if (errno == EINTR) return 0;
 
 				ERROR("Failed reading from control socket; %s",
-				       strerror(errno));
+				       fr_syserror(errno));
 				goto close_socket;
 			}
 
@@ -2668,7 +2642,7 @@ static int command_domain_accept(rad_listen_t *listener)
 
 	salen = sizeof(src);
 
-	DEBUG2(" ... new connection request on command socket.");
+	DEBUG2(" ... new connection request on command socket");
 
 	newfd = accept(listener->fd, (struct sockaddr *) &src, &salen);
 	if (newfd < 0) {
@@ -2679,7 +2653,7 @@ static int command_domain_accept(rad_listen_t *listener)
 			return 0;
 		}
 
-		DEBUG2(" ... failed to accept connection.");
+		DEBUG2(" ... failed to accept connection");
 		return 0;
 	}
 
@@ -2693,7 +2667,7 @@ static int command_domain_accept(rad_listen_t *listener)
 
 		if (getpeereid(newfd, &uid, &gid) < 0) {
 			ERROR("Failed getting peer credentials for %s: %s",
-			       sock->path, strerror(errno));
+			       sock->path, fr_syserror(errno));
 			close(newfd);
 			return 0;
 		}
@@ -2760,7 +2734,7 @@ static int command_domain_accept(rad_listen_t *listener)
 	/*
 	 *	Tell the event loop that we have a new FD
 	 */
-	event_new_fd(this);
+	radius_update_listener(this);
 
 	return 0;
 }

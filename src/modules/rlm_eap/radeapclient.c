@@ -46,13 +46,17 @@ static float timeout = 3;
 static char const *secret = NULL;
 static int do_output = 1;
 static int do_summary = 0;
-static int filedone = 0;
+static bool filedone = false;
 static int totalapp = 0;
 static int totaldeny = 0;
 static char filesecret[256];
 char const *radius_dir = NULL;
+char const *dict_dir = NULL;
 char const *progname = "radeapclient";
 /* fr_randctx randctx; */
+
+struct main_config_t main_config;
+char const *radiusd_version = "";
 
 #ifdef WITH_TLS
 #include <freeradius-devel/tls.h>
@@ -74,13 +78,17 @@ void debug_pair_list(UNUSED VALUE_PAIR *vp)
 {
 	return;
 }
+int rad_virtual_server(REQUEST UNUSED *request)
+{
+  /*We're not the server so we cannot do this*/
+  abort();
+}
 
 static void NEVER_RETURNS usage(void)
 {
 	fprintf(stderr, "Usage: radeapclient [options] server[:port] <command> [<secret>]\n");
 
 	fprintf(stderr, "  <command>    One of auth, acct, status, or disconnect.\n");
-	fprintf(stderr, "  -c count    Send each packet 'count' times.\n");
 	fprintf(stderr, "  -d raddb    Set dictionary directory.\n");
 	fprintf(stderr, "  -f file     Read packets from file, not stdin.\n");
 	fprintf(stderr, "  -r retries  If timeout, retry sending the packet 'retries' times.\n");
@@ -98,12 +106,10 @@ static void NEVER_RETURNS usage(void)
 	exit(1);
 }
 
-int radlog(log_type_t lvl, char const *fmt, ...)
+int radlog(UNUSED log_type_t lvl, char const *fmt, ...)
 {
 	va_list ap;
 	int r;
-
-	r = lvl; /* shut up compiler */
 
 	va_start(ap, fmt);
 	r = vfprintf(stderr, fmt, ap);
@@ -113,18 +119,14 @@ int radlog(log_type_t lvl, char const *fmt, ...)
 	return r;
 }
 
-void radlog_request(UNUSED log_type_t lvl, UNUSED log_debug_t priority,
-		    UNUSED REQUEST *request, char const *msg, ...)
+void vradlog_request(UNUSED log_type_t lvl, UNUSED log_debug_t priority,
+		     UNUSED REQUEST *request, char const *msg, va_list ap)
 {
-	va_list ap;
-
-	va_start(ap, msg);
 	vfprintf(stderr, msg, ap);
-	va_end(ap);
 	fputc('\n', stderr);
 }
 
-static int getport(char const *name)
+static uint16_t getport(char const *name)
 {
 	struct	servent		*svp;
 
@@ -144,7 +146,7 @@ static void debug_packet(RADIUS_PACKET *packet, int direction)
 	char buffer[1024];
 	char const *received, *from;
 	fr_ipaddr_t const *ip;
-	int port;
+	uint16_t port;
 
 	if (!packet) return;
 
@@ -167,7 +169,7 @@ static void debug_packet(RADIUS_PACKET *packet, int direction)
 	 *
 	 *	This really belongs in a utility library
 	 */
-	if ((packet->code > 0) && (packet->code < FR_MAX_PACKET_CODE)) {
+	if (is_radius_code(packet->code)) {
 		printf("%s %s packet %s host %s port %d, id=%d, length=%d\n",
 		       received, fr_packet_codes[packet->code], from,
 		       inet_ntop(ip->af, &ip->ipaddr, buffer, sizeof(buffer)),
@@ -193,12 +195,17 @@ static int send_packet(RADIUS_PACKET *req, RADIUS_PACKET **rep)
 	int i;
 	struct timeval	tv;
 
+	if (!req || !rep || !*rep) return -1;
+
 	for (i = 0; i < retries; i++) {
 		fd_set		rdfdesc;
 
 		debug_packet(req, R_SENT);
 
-		rad_send(req, NULL, secret);
+		if (rad_send(req, NULL, secret) < 0) {
+			fr_perror("radeapclient");
+			exit(1);
+		}
 
 		/* And wait for reply, timing out as necessary */
 		FD_ZERO(&rdfdesc);
@@ -237,7 +244,7 @@ static int send_packet(RADIUS_PACKET *req, RADIUS_PACKET **rep)
 			}
 			break;
 		} else {	/* NULL: couldn't receive the packet */
-			fr_perror("radclient:");
+			fr_perror("radclient");
 			exit(1);
 		}
 	}
@@ -253,7 +260,7 @@ static int send_packet(RADIUS_PACKET *req, RADIUS_PACKET **rep)
 	 *
 	 *	Hmm... we should really be using eapol_test, which does
 	 *	a lot more than radeapclient.
-       	 */
+	 */
 	if (rad_verify(*rep, req, secret) != 0) {
 		fr_perror("rad_verify");
 		exit(1);
@@ -268,9 +275,9 @@ static int send_packet(RADIUS_PACKET *req, RADIUS_PACKET **rep)
 	if (!fr_debug_flag && do_output) {
 		debug_packet(*rep, R_RECV);
 	}
-	if((*rep)->code == PW_AUTHENTICATION_ACK) {
+	if((*rep)->code == PW_CODE_AUTHENTICATION_ACK) {
 		totalapp++;
-	} else if ((*rep)->code == PW_AUTHENTICATION_REJECT) {
+	} else if ((*rep)->code == PW_CODE_AUTHENTICATION_REJECT) {
 		totaldeny++;
 	}
 
@@ -405,32 +412,38 @@ static int process_eap_start(RADIUS_PACKET *req,
 	pairreplace(&(rep->vps), newvp);
 
 	/* insert selected version into response. */
-	newvp = paircreate(rep, ATTRIBUTE_EAP_SIM_BASE+PW_EAP_SIM_SELECTED_VERSION, 0);
-	versions = (uint16_t const *)newvp->vp_strvalue;
-	versions[0] = htons(selectedversion);
-	newvp->length = 2;
-	pairreplace(&(rep->vps), newvp);
+	{
+		uint16_t no_versions;
 
-	/* record the selected version */
-	memcpy(eapsim_mk.versionselect, (unsigned char const *)versions, 2);
+		no_versions = htons(selectedversion);
+
+		newvp = paircreate(rep, ATTRIBUTE_EAP_SIM_BASE + PW_EAP_SIM_SELECTED_VERSION, 0);
+		pairmemcpy(newvp, (uint8_t *) &no_versions, 2);
+		pairreplace(&(rep->vps), newvp);
+
+		/* record the selected version */
+		memcpy(eapsim_mk.versionselect, &no_versions, 2);
+	}
 
 	vp = newvp = NULL;
 
 	{
 		uint32_t nonce[4];
+		uint8_t *p;
 		/*
 		 * insert a nonce_mt that we make up.
 		 */
-		newvp = paircreate(rep, ATTRIBUTE_EAP_SIM_BASE+PW_EAP_SIM_NONCE_MT, 0);
-		newvp->vp_octets[0]=0;
-		newvp->vp_octets[1]=0;
-		newvp->length = 18;  /* 16 bytes of nonce + padding */
-
 		nonce[0]=fr_rand();
 		nonce[1]=fr_rand();
 		nonce[2]=fr_rand();
 		nonce[3]=fr_rand();
-		memcpy(&newvp->vp_octets[2], nonce, 16);
+
+		newvp = paircreate(rep, ATTRIBUTE_EAP_SIM_BASE+PW_EAP_SIM_NONCE_MT, 0);
+
+		p = talloc_zero_array(newvp, uint8_t, 18); /* 18 = 16 bytes of nonce + padding */
+		memcpy(&p[2], nonce, 16);
+		pairmemsteal(newvp, p);
+
 		pairreplace(&(rep->vps), newvp);
 
 		/* also keep a copy of the nonce! */
@@ -438,7 +451,9 @@ static int process_eap_start(RADIUS_PACKET *req,
 	}
 
 	{
-		uint16_t *pidlen, idlen;
+		uint16_t idlen;
+		uint8_t *p;
+		uint16_t no_idlen;
 
 		/*
 		 * insert the identity here.
@@ -450,12 +465,14 @@ static int process_eap_start(RADIUS_PACKET *req,
 			return 0;
 		}
 		newvp = paircreate(rep, ATTRIBUTE_EAP_SIM_BASE+PW_EAP_SIM_IDENTITY, 0);
-		idlen = strlen(vp->vp_strvalue);
-		pidlen = (uint16_t *)newvp->vp_strvalue;
-		*pidlen = htons(idlen);
-		newvp->length = idlen + 2;
 
-		memcpy(&newvp->vp_strvalue[2], vp->vp_strvalue, idlen);
+		idlen = strlen(vp->vp_strvalue);
+		p = talloc_zero_array(newvp, uint8_t, idlen + 2);
+		no_idlen = htons(idlen);
+		memcpy(p, &no_idlen, 2);
+		memcpy(p + 2, vp->vp_strvalue, idlen);
+		pairmemsteal(newvp, p);
+
 		pairreplace(&(rep->vps), newvp);
 
 		/* record it */
@@ -499,7 +516,7 @@ static int process_eap_challenge(RADIUS_PACKET *req,
 	 */
 	{
 	  VALUE_PAIR *randcfgvp[3];
-	  uint8_t *randcfg[3];
+	  uint8_t const *randcfg[3];
 
 	  randcfg[0] = &randvp->vp_octets[2];
 	  randcfg[1] = &randvp->vp_octets[2+EAPSIM_RAND_SIZE];
@@ -623,20 +640,26 @@ static int process_eap_challenge(RADIUS_PACKET *req,
 	newvp->vp_integer = eapsim_challenge;
 	pairreplace(&(rep->vps), newvp);
 
-	/*
-	 * fill the SIM_MAC with a field that will in fact get appended
-	 * to the packet before the MAC is calculated
-	 */
-	newvp = paircreate(rep, ATTRIBUTE_EAP_SIM_BASE+PW_EAP_SIM_MAC, 0);
-	memcpy(newvp->vp_strvalue+EAPSIM_SRES_SIZE*0, sres1->vp_strvalue, EAPSIM_SRES_SIZE);
-	memcpy(newvp->vp_strvalue+EAPSIM_SRES_SIZE*1, sres2->vp_strvalue, EAPSIM_SRES_SIZE);
-	memcpy(newvp->vp_strvalue+EAPSIM_SRES_SIZE*2, sres3->vp_strvalue, EAPSIM_SRES_SIZE);
-	newvp->length = EAPSIM_SRES_SIZE*3;
-	pairreplace(&(rep->vps), newvp);
+	{
+		uint8_t *p;
+		/*
+		 * fill the SIM_MAC with a field that will in fact get appended
+		 * to the packet before the MAC is calculated
+		 */
+		newvp = paircreate(rep, ATTRIBUTE_EAP_SIM_BASE+PW_EAP_SIM_MAC, 0);
+
+		p = talloc_zero_array(newvp, uint8_t, EAPSIM_SRES_SIZE*3);
+		memcpy(p+EAPSIM_SRES_SIZE * 0, sres1->vp_strvalue, EAPSIM_SRES_SIZE);
+		memcpy(p+EAPSIM_SRES_SIZE * 1, sres2->vp_strvalue, EAPSIM_SRES_SIZE);
+		memcpy(p+EAPSIM_SRES_SIZE * 2, sres3->vp_strvalue, EAPSIM_SRES_SIZE);
+		pairmemsteal(newvp, p);
+
+		pairreplace(&(rep->vps), newvp);
+	}
 
 	newvp = paircreate(rep, ATTRIBUTE_EAP_SIM_KEY, 0);
-	memcpy(newvp->vp_strvalue,    eapsim_mk.K_aut, EAPSIM_AUTH_SIZE);
-	newvp->length = EAPSIM_AUTH_SIZE;
+	pairmemcpy(newvp, eapsim_mk.K_aut, EAPSIM_AUTH_SIZE);
+
 	pairreplace(&(rep->vps), newvp);
 
 	return 1;
@@ -756,10 +779,9 @@ static int respond_eap_md5(RADIUS_PACKET *req,
 			   RADIUS_PACKET *rep)
 {
 	VALUE_PAIR *vp, *id, *state;
-	size_t valuesize, namesize;
+	size_t valuesize;
 	uint8_t identifier;
 	uint8_t const *value;
-	uint8_t const *name;
 	FR_MD5_CTX	context;
 	uint8_t    response[16];
 
@@ -787,8 +809,6 @@ static int respond_eap_md5(RADIUS_PACKET *req,
 	/* got the details of the MD5 challenge */
 	valuesize = vp->vp_octets[0];
 	value = &vp->vp_octets[1];
-	name  = &vp->vp_octets[valuesize+1];
-	namesize = vp->length - (valuesize + 1);
 
 	/* sanitize items */
 	if(valuesize > vp->length)
@@ -808,11 +828,19 @@ static int respond_eap_md5(RADIUS_PACKET *req,
 	fr_MD5Update(&context, value, valuesize);
 	fr_MD5Final(response, &context);
 
-	vp = paircreate(rep, ATTRIBUTE_EAP_BASE+PW_EAP_MD5, 0);
-	vp->vp_octets[0]=16;
-	memcpy(&vp->vp_strvalue[1], response, 16);
-	vp->length = 17;
+	{
+		uint8_t *p;
+		uint8_t lg_response;
 
+		vp = paircreate(rep, ATTRIBUTE_EAP_BASE+PW_EAP_MD5, 0);
+		vp->length = 17;
+
+		p = talloc_zero_array(vp, uint8_t, 17);
+		lg_response = 16;
+		memcpy(p, &lg_response, 1);
+		memcpy(p + 1, response, 16);
+		pairmemsteal(vp, p);
+	}
 	pairreplace(&(rep->vps), vp);
 
 	pairreplace(&(rep->vps), id);
@@ -831,11 +859,8 @@ static int sendrecv_eap(RADIUS_PACKET *rep)
 	VALUE_PAIR *vp, *vpnext;
 	int tried_eap_md5 = 0;
 
-	if (vp->length > sizeof(password)) {
-		fprintf(stderr, "radeapclient: Password buffer too small have %zu bytes need %zu bytes\n",
-			sizeof(password), vp->length);
-		return 0;
-	}
+	if (!rep) return -1;
+
 	/*
 	 *	Keep a copy of the the User-Password attribute.
 	 */
@@ -881,11 +906,37 @@ static int sendrecv_eap(RADIUS_PACKET *rep)
 		case PW_DIGEST_NONCE_COUNT:
 		case PW_DIGEST_USER_NAME:
 			/* overlapping! */
-			memmove(&vp->vp_strvalue[2], &vp->vp_octets[0], vp->length);
-			vp->vp_octets[0] = vp->da->attr - PW_DIGEST_REALM + 1;
-			vp->length += 2;
-			vp->vp_octets[1] = vp->length;
-			vp->da->attr = PW_DIGEST_ATTRIBUTES;
+			{
+				DICT_ATTR const *da;
+				uint8_t *p, *q;
+
+				p = talloc_array(vp, uint8_t, vp->length + 2);
+
+				memcpy(p + 2, vp->vp_octets, vp->length);
+				p[0] = vp->da->attr - PW_DIGEST_REALM + 1;
+				vp->length += 2;
+				p[1] = vp->length;
+
+				da = dict_attrbyvalue(PW_DIGEST_ATTRIBUTES, 0);
+				vp->da = da;
+
+				/*
+				 *	Re-do pairmemsteal ourselves,
+				 *	because we play games with
+				 *	vp->da, and pairmemsteal goes
+				 *	to GREAT lengths to sanitize
+				 *	and fix and change and
+				 *	double-check the various
+				 *	fields.
+				 */
+				memcpy(&q, &vp->vp_octets, sizeof(q));
+				talloc_free(q);
+
+				vp->vp_octets = talloc_steal(vp, p);
+				vp->type = VT_DATA;
+
+				VERIFY_VP(vp);
+			}
 			break;
 		}
 	}
@@ -913,13 +964,17 @@ static int sendrecv_eap(RADIUS_PACKET *rep)
 		} else if ((vp = pairfind(rep->vps, PW_CHAP_PASSWORD, 0, TAG_ANY)) != NULL) {
 			pairstrcpy(vp, password);
 
-			rad_chap_encode(rep, vp->vp_octets, rep->id, vp);
-			vp->length = 17;
+			uint8_t *p;
+			p = talloc_zero_array(vp, uint8_t, 17);
+			rad_chap_encode(rep, p, rep->id, vp);
+			pairmemsteal(vp, p);
 		}
 	} /* there WAS a password */
 
 	/* send the response, wait for the next request */
 	send_packet(rep, &req);
+
+	if (!req) return -1;
 
 	/* okay got back the packet, go and decode the EAP-Message. */
 	unmap_eap_methods(req);
@@ -955,24 +1010,45 @@ static int sendrecv_eap(RADIUS_PACKET *rep)
 }
 
 
+void set_radius_dir(TALLOC_CTX *ctx, char const *path)
+{
+	if (radius_dir) {
+		char *p;
+
+		memcpy(&p, &radius_dir, sizeof(p));
+		talloc_free(p);
+		radius_dir = NULL;
+	}
+	if (path) radius_dir = talloc_strdup(ctx, path);
+}
+
+
 int main(int argc, char **argv)
 {
 	RADIUS_PACKET *req;
 	char *p;
 	int c;
-	int port = 0;
+	uint16_t port = 0;
 	char *filename = NULL;
 	FILE *fp;
-	int count = 1;
 	int id;
 	int force_af = AF_UNSPEC;
+
+	/*
+	 *	We probably don't want to free the talloc autofree context
+	 *	directly, so we'll allocate a new context beneath it, and
+	 *	free that before any leak reports.
+	 */
+	TALLOC_CTX *autofree = talloc_init("main");
 
 	id = ((int)getpid() & 0xff);
 	fr_debug_flag = 0;
 
 	radlog_dest = L_DST_STDERR;
 
-	while ((c = getopt(argc, argv, "46c:d:f:hi:qst:r:S:xXv")) != EOF)
+	set_radius_dir(autofree, RADIUS_DIR);
+
+	while ((c = getopt(argc, argv, "46c:d:D:f:hi:qst:r:S:xXv")) != EOF)
 	{
 		switch(c) {
 		case '4':
@@ -981,13 +1057,11 @@ int main(int argc, char **argv)
 		case '6':
 			force_af = AF_INET6;
 			break;
-		case 'c':
-			if (!isdigit((int) *optarg))
-				usage();
-			count = atoi(optarg);
-			break;
 		case 'd':
-			radius_dir = strdup(optarg);
+			set_radius_dir(autofree, optarg);
+			break;
+		case 'D':
+			main_config.dictionary_dir = talloc_typed_strdup(NULL, optarg);
 			break;
 		case 'f':
 			filename = optarg;
@@ -1030,19 +1104,19 @@ int main(int argc, char **argv)
 			timeout = atof(optarg);
 			break;
 		case 'v':
-			printf("radclient: $Id$ built on " __DATE__ " at " __TIME__ "\n");
+			printf("radeapclient: $Id$ built on " __DATE__ " at " __TIME__ "\n");
 			exit(0);
 			break;
 	       case 'S':
 		       fp = fopen(optarg, "r");
 		       if (!fp) {
 			       fprintf(stderr, "radclient: Error opening %s: %s\n",
-				       optarg, strerror(errno));
+				       optarg, fr_syserror(errno));
 			       exit(1);
 		       }
 		       if (fgets(filesecret, sizeof(filesecret), fp) == NULL) {
 			       fprintf(stderr, "radclient: Error reading %s: %s\n",
-				       optarg, strerror(errno));
+				       optarg, fr_syserror(errno));
 			       exit(1);
 		       }
 		       fclose(fp);
@@ -1075,11 +1149,38 @@ int main(int argc, char **argv)
 		usage();
 	}
 
-	if (!radius_dir) radius_dir = strdup(RADDBDIR);
+	if (!main_config.dictionary_dir) {
+		main_config.dictionary_dir = DICTDIR;
+	}
 
-	if (dict_init(radius_dir, RADIUS_DICTIONARY) < 0) {
-		fr_perror("radclient");
-		return 1;
+	/*
+	 *	Read the distribution dictionaries first, then
+	 *	the ones in raddb.
+	 */
+	DEBUG2("including dictionary file %s/%s", main_config.dictionary_dir, RADIUS_DICTIONARY);
+	if (dict_init(main_config.dictionary_dir, RADIUS_DICTIONARY) != 0) {
+		ERROR("Errors reading dictionary: %s",
+		      fr_strerror());
+		exit(1);
+	}
+
+	/*
+	 *	It's OK if this one doesn't exist.
+	 */
+	int rcode = dict_read(radius_dir, RADIUS_DICTIONARY);
+	if (rcode == -1) {
+		ERROR("Errors reading %s/%s: %s", radius_dir, RADIUS_DICTIONARY,
+		      fr_strerror());
+		exit(1);
+	}
+
+	/*
+	 *	We print this after reading it.  That way if
+	 *	it doesn't exist, it's OK, and we don't print
+	 *	anything.
+	 */
+	if (rcode == 0) {
+		DEBUG2("including dictionary file %s/%s", radius_dir, RADIUS_DICTIONARY);
 	}
 
 	req = rad_alloc(NULL, 1);
@@ -1136,8 +1237,8 @@ int main(int argc, char **argv)
 			portname = NULL;
 		}
 
-		if (ip_hton(hostname, force_af, &req->dst_ipaddr) < 0) {
-			fprintf(stderr, "radclient: Failed to find IP address for host %s: %s\n", hostname, strerror(errno));
+		if (ip_hton(&req->dst_ipaddr, force_af, hostname, false) < 0) {
+			fprintf(stderr, "radclient: Failed to find IP address for host %s: %s\n", hostname, fr_syserror(errno));
 			exit(1);
 		}
 
@@ -1153,22 +1254,22 @@ int main(int argc, char **argv)
 	if (strcmp(argv[2], "auth") == 0) {
 		if (port == 0) port = getport("radius");
 		if (port == 0) port = PW_AUTH_UDP_PORT;
-		req->code = PW_AUTHENTICATION_REQUEST;
+		req->code = PW_CODE_AUTHENTICATION_REQUEST;
 
 	} else if (strcmp(argv[2], "acct") == 0) {
 		if (port == 0) port = getport("radacct");
 		if (port == 0) port = PW_ACCT_UDP_PORT;
-		req->code = PW_ACCOUNTING_REQUEST;
+		req->code = PW_CODE_ACCOUNTING_REQUEST;
 		do_summary = 0;
 
 	} else if (strcmp(argv[2], "status") == 0) {
 		if (port == 0) port = getport("radius");
 		if (port == 0) port = PW_AUTH_UDP_PORT;
-		req->code = PW_STATUS_SERVER;
+		req->code = PW_CODE_STATUS_SERVER;
 
 	} else if (strcmp(argv[2], "disconnect") == 0) {
 		if (port == 0) port = PW_POD_UDP_PORT;
-		req->code = PW_DISCONNECT_REQUEST;
+		req->code = PW_CODE_DISCONNECT_REQUEST;
 
 	} else if (isdigit((int) argv[2][0])) {
 		if (port == 0) port = getport("radius");
@@ -1193,7 +1294,7 @@ int main(int argc, char **argv)
 		fp = fopen(filename, "r");
 		if (!fp) {
 			fprintf(stderr, "radclient: Error opening %s: %s\n",
-				filename, strerror(errno));
+				filename, fr_syserror(errno));
 			exit(1);
 		}
 	} else {
@@ -1209,21 +1310,22 @@ int main(int argc, char **argv)
 	}
 
 	while(!filedone) {
-		if(req->vps) pairfree(&req->vps);
-
-		if ((req->vps = readvp2(NULL, fp, &filedone, "radeapclient:"))
-		    == NULL) {
+		if (req->vps) pairfree(&req->vps);
+		if (readvp2(&req->vps, NULL, fp, &filedone) < 0) {
+			fr_perror("radeapclient");
 			break;
 		}
 
 		sendrecv_eap(req);
 	}
 
-	free(radius_dir);
 	if(do_summary) {
 		printf("\n\t   Total approved auths:  %d\n", totalapp);
 		printf("\t     Total denied auths:  %d\n", totaldeny);
 	}
+
+	talloc_free(autofree);
+
 	return 0;
 }
 
@@ -1243,8 +1345,9 @@ static void map_eap_methods(RADIUS_PACKET *req)
 {
 	VALUE_PAIR *vp, *vpnext;
 	int id, eapcode;
-	eap_packet_t ep;
 	int eap_method;
+
+	eap_packet_t *pt_ep = talloc_zero(req, eap_packet_t);
 
 	vp = pairfind(req->vps, ATTRIBUTE_EAP_ID, 0, TAG_ANY);
 	if(!vp) {
@@ -1259,7 +1362,6 @@ static void map_eap_methods(RADIUS_PACKET *req)
 	} else {
 		eapcode = vp->vp_integer;
 	}
-
 
 	for(vp = req->vps; vp != NULL; vp = vpnext) {
 		/* save it in case it changes! */
@@ -1297,13 +1399,15 @@ static void map_eap_methods(RADIUS_PACKET *req)
 		/* nuke any existing EAP-Messages */
 		pairdelete(&req->vps, PW_EAP_MESSAGE, 0, TAG_ANY);
 
-		memset(&ep, 0, sizeof(ep));
-		ep.code = eapcode;
-		ep.id   = id;
-		ep.type.num = eap_method;
-		ep.type.length = vp->length;
-		ep.type.data = vp->vp_octets; /* no need for copy */
-		eap_basic_compose(req, &ep);
+		pt_ep->code = eapcode;
+		pt_ep->id = id;
+		pt_ep->type.num = eap_method;
+		pt_ep->type.length = vp->length;
+
+		pt_ep->type.data = talloc_memdup(vp, vp->vp_octets, vp->length);
+		talloc_set_type(pt_ep->type.data, uint8_t);
+
+		eap_basic_compose(req, pt_ep);
 	}
 }
 
@@ -1317,6 +1421,8 @@ static void unmap_eap_methods(RADIUS_PACKET *rep)
 	eap_packet_raw_t *e;
 	int len;
 	int type;
+
+	if (!rep) return;
 
 	/* find eap message */
 	e = eap_vp2packet(NULL, rep->vps);
@@ -1363,13 +1469,13 @@ static void unmap_eap_methods(RADIUS_PACKET *rep)
 		type += ATTRIBUTE_EAP_BASE;
 		len -= 5;
 
-		if(len > MAX_STRING_LEN) {
+		if (len > MAX_STRING_LEN) {
 			len = MAX_STRING_LEN;
 		}
 
 		eap1 = paircreate(rep, type, 0);
-		memcpy(eap1->vp_strvalue, &e->data[1], len);
-		eap1->length = len;
+		pairmemcpy(eap1, e->data + 1, len);
+
 		pairadd(&(rep->vps), eap1);
 		break;
 	}
@@ -1380,15 +1486,17 @@ static void unmap_eap_methods(RADIUS_PACKET *rep)
 
 static int map_eapsim_types(RADIUS_PACKET *r)
 {
-	eap_packet_t ep;
 	int ret;
 
-	memset(&ep, 0, sizeof(ep));
-	ret = map_eapsim_basictypes(r, &ep);
+	eap_packet_t *pt_ep = talloc_zero(r, eap_packet_t);
+
+	ret = map_eapsim_basictypes(r, pt_ep);
+
 	if(ret != 1) {
 		return ret;
 	}
-	eap_basic_compose(r, &ep);
+
+	eap_basic_compose(r, pt_ep);
 
 	return 1;
 }
@@ -1396,6 +1504,8 @@ static int map_eapsim_types(RADIUS_PACKET *r)
 static int unmap_eapsim_types(RADIUS_PACKET *r)
 {
 	VALUE_PAIR	     *esvp;
+	uint8_t *eap_data;
+	int rcode_unmap;
 
 	esvp = pairfind(r->vps, ATTRIBUTE_EAP_BASE+PW_EAP_SIM, 0, TAG_ANY);
 	if (!esvp) {
@@ -1403,7 +1513,13 @@ static int unmap_eapsim_types(RADIUS_PACKET *r)
 		return 0;
 	}
 
-	return unmap_eapsim_basictypes(r, esvp->vp_octets, esvp->length);
+	eap_data = talloc_memdup(esvp, esvp->vp_octets, esvp->length);
+	talloc_set_type(eap_data, uint8_t);
+
+	rcode_unmap = unmap_eapsim_basictypes(r, eap_data, esvp->length);
+
+	talloc_free(eap_data);
+	return rcode_unmap;
 }
 
 #ifdef TEST_CASE
@@ -1458,10 +1574,11 @@ main(int argc, char *argv[])
 	}
 
 	while(!filedone) {
-		if(req->vps) pairfree(&req->vps);
-		if(req2->vps) pairfree(&req2->vps);
+		if (req->vps) pairfree(&req->vps);
+		if (req2->vps) pairfree(&req2->vps);
 
-		if ((req->vps = readvp2(NULL, stdin, &filedone, "eapsimlib:")) == NULL) {
+		if (readvp2(&req->vps, NULL, stdin, &filedone) < 0) {
+			fr_perror("radeapclient");
 			break;
 		}
 
@@ -1529,5 +1646,8 @@ main(int argc, char *argv[])
 		fflush(stdout);
 	}
 }
+
+
+  
 #endif
 

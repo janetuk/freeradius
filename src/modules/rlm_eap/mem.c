@@ -132,7 +132,7 @@ typedef struct check_handler_t {
 
 static int check_opaque_free(check_handler_t *check)
 {
-	int do_warning = false;
+	bool do_warning = false;
 	uint8_t state[8];
 
 	if (!check->inst || !check->handler) {
@@ -176,15 +176,15 @@ done:
 	PTHREAD_MUTEX_UNLOCK(&(check->inst->handler_mutex));
 
 	if (do_warning) {
-		WDEBUG("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-		WDEBUG("!! EAP session with state 0x%02x%02x%02x%02x%02x%02x%02x%02x did not finish!  !!",
+		WARN("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+		WARN("!! EAP session with state 0x%02x%02x%02x%02x%02x%02x%02x%02x did not finish!  !!",
 		      state[0], state[1],
 		      state[2], state[3],
 		      state[4], state[5],
 		      state[6], state[7]);
 
-		WDEBUG("!! Please read http://wiki.freeradius.org/guide/Certificate_Compatibility     !!");
-		WDEBUG("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+		WARN("!! Please read http://wiki.freeradius.org/guide/Certificate_Compatibility     !!");
+		WARN("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
 	}
 
 	return 0;
@@ -194,7 +194,7 @@ void eaplist_free(rlm_eap_t *inst)
 {
 	eap_handler_t *node, *next;
 
-       	for (node = inst->session_head; node != NULL; node = next) {
+	for (node = inst->session_head; node != NULL; node = next) {
 		next = node->next;
 		talloc_free(node);
 	}
@@ -286,7 +286,7 @@ static void eaplist_expire(rlm_eap_t *inst, REQUEST *request, time_t timestamp)
 		 *	Expire entries from the start of the list.
 		 *	They should be the oldest ones.
 		 */
-		if ((timestamp - handler->timestamp) > inst->timer_limit) {
+		if ((timestamp - handler->timestamp) > (int)inst->timer_limit) {
 			rbnode_t *node;
 			node = rbtree_find(inst->session_tree, handler);
 			rad_assert(node != NULL);
@@ -320,9 +320,6 @@ int eaplist_add(rlm_eap_t *inst, eap_handler_t *handler)
 	int		status = 0;
 	VALUE_PAIR	*state;
 	REQUEST		*request = handler->request;
-
-	rad_assert(handler != NULL);
-	rad_assert(request != NULL);
 
 	/*
 	 *	Generate State, since we've been asked to add it to

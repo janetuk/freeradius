@@ -59,12 +59,12 @@ static char trans[64] =
 #define ENC(c) trans[c]
 
 struct unix_instance {
+	char const *name;	//!< Instance name.
 	char const *radwtmp;
 };
 
 static const CONF_PARSER module_config[] = {
-	{ "radwtmp",  PW_TYPE_FILE_OUTPUT | PW_TYPE_REQUIRED,
-	  offsetof(struct unix_instance,radwtmp), NULL,   "NULL" },
+	{ "radwtmp", FR_CONF_OFFSET(PW_TYPE_FILE_OUTPUT | PW_TYPE_REQUIRED, struct unix_instance, radwtmp), "NULL" },
 
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
@@ -115,12 +115,38 @@ static int mod_instantiate(UNUSED CONF_SECTION *conf, void *instance)
 {
 	struct unix_instance *inst = instance;
 
+	DICT_ATTR const *group_da, *user_name_da;
+
+	inst->name = cf_section_name2(conf);
+	if (!inst->name) {
+		inst->name = cf_section_name1(conf);
+	}
+
+	group_da = dict_attrbyvalue(PW_GROUP, 0);
+	if (!group_da) {
+		ERROR("rlm_unix (%s): 'Group' attribute not found in dictionary", inst->name);
+		return -1;
+	}
+
+	user_name_da = dict_attrbyvalue(PW_USER_NAME, 0);
+	if (!user_name_da) {
+		ERROR("rlm_unix (%s): 'User-Name' attribute not found in dictionary", inst->name);
+		return -1;
+	}
 	/* FIXME - delay these until a group file has been read so we know
 	 * groupcmp can actually do something */
-	paircompare_register(dict_attrbyvalue(PW_GROUP, 0), dict_attrbyvalue(PW_USER_NAME, 0), false, groupcmp, inst);
+	paircompare_register(group_da, user_name_da, false, groupcmp, inst);
 #ifdef PW_GROUP_NAME /* compat */
-	paircompare_register(dict_attrbyvalue(PW_GROUP_NAME, 0), dict_attrbyvalue(PW_USER_NAME, 0),
-			true, groupcmp, inst);
+	{
+		DICT_ATTR const *group_name_da;
+
+		group_name_da = dict_attrbyvalue(PW_GROUP_NAME, 0);
+		if (!group_name_da) {
+			ERROR("rlm_unix (%s): 'Group-Name' attribute not found in dictionary", inst->name);
+			return -1;
+		}
+		paircompare_register(group_name_da, user_name_da, true, groupcmp, inst);
+	}
 #endif
 
 	return 0;
@@ -131,7 +157,7 @@ static int mod_instantiate(UNUSED CONF_SECTION *conf, void *instance)
  *	Pull the users password from where-ever, and add it to
  *	the given vp list.
  */
-static rlm_rcode_t mod_authorize(UNUSED void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, REQUEST *request)
 {
 	char const	*name;
 	char const	*encrypted_pass;
@@ -307,7 +333,7 @@ static char *uue(void *in)
 /*
  *	Unix accounting - write a wtmp file.
  */
-static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *request)
 {
 	VALUE_PAIR	*vp;
 	vp_cursor_t	cursor;
@@ -323,15 +349,15 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 #ifdef USER_PROCESS
 	int		protocol = -1;
 #endif
-	int		nas_port = 0;
-	int		port_seen = 0;
+	uint32_t	nas_port = 0;
+	bool		port_seen = true;
 	struct unix_instance *inst = (struct unix_instance *) instance;
 
 	/*
 	 *	No radwtmp.  Don't do anything.
 	 */
 	if (!inst->radwtmp) {
-		RDEBUG2("No radwtmp file configured.  Ignoring accounting request.");
+		RDEBUG2("No radwtmp file configured.  Ignoring accounting request");
 		return RLM_MODULE_NOOP;
 	}
 
@@ -344,7 +370,7 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 	 *	Which type is this.
 	 */
 	if ((vp = pairfind(request->packet->vps, PW_ACCT_STATUS_TYPE, 0, TAG_ANY))==NULL) {
-		RDEBUG("no Accounting-Status-Type attribute in request.");
+		RDEBUG("no Accounting-Status-Type attribute in request");
 		return RLM_MODULE_NOOP;
 	}
 	status = vp->vp_integer;
@@ -369,9 +395,9 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 	/*
 	 *	First, find the interesting attributes.
 	 */
-	for (vp = paircursor(&cursor, &request->packet->vps);
+	for (vp = fr_cursor_init(&cursor, &request->packet->vps);
 	     vp;
-	     vp = pairnext(&cursor)) {
+	     vp = fr_cursor_next(&cursor)) {
 		if (!vp->da->vendor) switch (vp->da->attr) {
 			case PW_USER_NAME:
 				if (vp->length >= sizeof(ut.ut_name)) {
@@ -394,7 +420,7 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 				break;
 			case PW_NAS_PORT:
 				nas_port = vp->vp_integer;
-				port_seen = 1;
+				port_seen = true;
 				break;
 			case PW_ACCT_DELAY_TIME:
 				delay = vp->vp_ipaddr;
@@ -485,7 +511,7 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 module_t rlm_unix = {
 	RLM_MODULE_INIT,
 	"System",
-	RLM_TYPE_THREAD_UNSAFE | RLM_TYPE_CHECK_CONFIG_SAFE,
+	RLM_TYPE_THREAD_UNSAFE,
 	sizeof(struct unix_instance),
 	module_config,
 	mod_instantiate,		/* instantiation */

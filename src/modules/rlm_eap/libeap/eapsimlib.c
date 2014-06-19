@@ -95,9 +95,9 @@ int map_eapsim_basictypes(RADIUS_PACKET *r, eap_packet_t *ep)
 	 * that we need to encode all of this.
 	 */
 	encoded_size = 0;
-	for (vp = paircursor(&cursor, &r->vps);
+	for (vp = fr_cursor_init(&cursor, &r->vps);
 	     vp;
-	     vp = pairnext(&cursor)) {
+	     vp = fr_cursor_next(&cursor)) {
 		int roundedlen;
 		int vplen;
 
@@ -112,7 +112,7 @@ int map_eapsim_basictypes(RADIUS_PACKET *r, eap_packet_t *ep)
 		 * attribute, we pull the contents out, save it for later
 		 * processing, set the size to 16 bytes (plus 2 bytes padding).
 		 *
- 		 * At this point, we only care about the size.
+		 * At this point, we only care about the size.
 		 */
 		if(vp->da->attr == ATTRIBUTE_EAP_SIM_BASE + PW_EAP_SIM_MAC) {
 			vplen = 18;
@@ -179,7 +179,7 @@ int map_eapsim_basictypes(RADIUS_PACKET *r, eap_packet_t *ep)
 	 */
 	attr = encodedmsg+3;
 
-	for (vp = pairfirst(&cursor); vp; vp = pairnext(&cursor)) {
+	for (vp = fr_cursor_first(&cursor); vp; vp = fr_cursor_next(&cursor)) {
 		int roundedlen;
 
 		if(vp->da->attr < ATTRIBUTE_EAP_SIM_BASE ||
@@ -192,7 +192,7 @@ int map_eapsim_basictypes(RADIUS_PACKET *r, eap_packet_t *ep)
 		 * attribute, we pull the contents out, save it for later
 		 * processing, set the size to 16 bytes (plus 2 bytes padding).
 		 *
- 		 * At this point, we put in zeros, and remember where the
+		 * At this point, we put in zeros, and remember where the
 		 * sixteen bytes go.
 		 */
 		if(vp->da->attr == ATTRIBUTE_EAP_SIM_BASE+PW_EAP_SIM_MAC) {
@@ -255,7 +255,7 @@ int map_eapsim_basictypes(RADIUS_PACKET *r, eap_packet_t *ep)
 		fr_hmac_sha1(buffer, hmaclen, vp->vp_octets, vp->length, sha1digest);
 
 		/* done with the buffer, free it */
-		free(buffer);
+		talloc_free(buffer);
 
 		/* now copy the digest to where it belongs in the AT_MAC */
 		/* note that it is truncated to 128-bits */
@@ -408,7 +408,7 @@ int eapsim_checkmac(TALLOC_CTX *ctx, VALUE_PAIR *rvps, uint8_t key[EAPSIM_AUTH_S
 		 */
 		attr = buffer+8;
 		while(attr < (buffer+elen)) {
-			if(attr[0] == PW_EAP_SIM_MAC) {
+			if (attr[0] == (PW_EAP_SIM_MAC - PW_EAP_SIM_BASE)) {
 				/* zero the data portion, after making sure
 				 * the size is >=5. Maybe future versions.
 				 * will use more bytes, so be liberal.

@@ -30,18 +30,13 @@ RCSID("$Id$")
 #include "rlm_eap.h"
 
 static const CONF_PARSER module_config[] = {
-	{ "default_eap_type", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_eap_t, default_method_name), NULL, "md5" },
-	{ "timer_expire", PW_TYPE_INTEGER,
-	  offsetof(rlm_eap_t, timer_limit), NULL, "60"},
-	{ "ignore_unknown_eap_types", PW_TYPE_BOOLEAN,
-	  offsetof(rlm_eap_t, ignore_unknown_types), NULL, "no" },
-	{ "mod_accounting_username_bug", PW_TYPE_BOOLEAN,
-	  offsetof(rlm_eap_t, mod_accounting_username_bug), NULL, "no" },
-	{ "max_sessions", PW_TYPE_INTEGER,
-	  offsetof(rlm_eap_t, max_sessions), NULL, "2048"},
+	{ "default_eap_type", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_t, default_method_name), "md5" },
+	{ "timer_expire", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_eap_t, timer_limit), "60" },
+	{ "ignore_unknown_eap_types", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_t, ignore_unknown_types), "no" },
+	{ "mod_accounting_username_bug", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_t, mod_accounting_username_bug), "no" },
+	{ "max_sessions", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_eap_t, max_sessions), "2048" },
 
- 	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
+	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
 };
 
 /*
@@ -59,7 +54,14 @@ static int mod_detach(void *instance)
 #endif
 
 	rbtree_free(inst->session_tree);
-	if (inst->handler_tree) rbtree_free(inst->handler_tree);
+	if (inst->handler_tree) {
+		rbtree_free(inst->handler_tree);
+		/*
+		 *  Must be NULL else when nodes are freed they try to
+		 *  delete themselves from the tree.
+		 */
+		inst->handler_tree = NULL;
+	}
 	inst->session_tree = NULL;
 	eaplist_free(inst);
 
@@ -89,7 +91,7 @@ static int eap_handler_cmp(void const *a, void const *b)
 	 *	EAP work.
 	 */
 	if (fr_ipaddr_cmp(&one->src_ipaddr, &two->src_ipaddr) != 0) {
-		WDEBUG("EAP packets are arriving from two different upstream "
+		WARN("EAP packets are arriving from two different upstream "
 		       "servers.  Has there been a proxy fail-over?");
 	}
 
@@ -239,7 +241,7 @@ static int mod_instantiate(CONF_SECTION *cs, void *instance)
 
 #ifdef HAVE_PTHREAD_H
 		if (pthread_mutex_init(&(inst->handler_mutex), NULL) < 0) {
-			ERROR("rlm_eap (%s): Failed initializing mutex: %s", inst->xlat_name, strerror(errno));
+			ERROR("rlm_eap (%s): Failed initializing mutex: %s", inst->xlat_name, fr_syserror(errno));
 			return -1;
 		}
 #endif
@@ -247,7 +249,7 @@ static int mod_instantiate(CONF_SECTION *cs, void *instance)
 
 #ifdef HAVE_PTHREAD_H
 	if (pthread_mutex_init(&(inst->session_mutex), NULL) < 0) {
-		ERROR("rlm_eap (%s): Failed initializing mutex: %s", inst->xlat_name, strerror(errno));
+		ERROR("rlm_eap (%s): Failed initializing mutex: %s", inst->xlat_name, fr_syserror(errno));
 		return -1;
 	}
 #endif
@@ -259,7 +261,7 @@ static int mod_instantiate(CONF_SECTION *cs, void *instance)
 /*
  *	For backwards compatibility.
  */
-static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *request)
 {
 	rlm_eap_t		*inst;
 	eap_handler_t		*handler;
@@ -315,8 +317,8 @@ static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
 	/*
 	 *	If we're doing horrible tunneling work, remember it.
 	 */
-	if ((request->options & RAD_REQUEST_OPTION_PROXY_EAP) != 0) {
-		RDEBUG2("  Not-EAP proxy set.  Not composing EAP");
+	if ((request->log.lvl & RAD_REQUEST_OPTION_PROXY_EAP) != 0) {
+		RDEBUG2("No EAP proxy set.  Not composing EAP");
 		/*
 		 *	Add the handle to the proxied list, so that we
 		 *	can retrieve it in the post-proxy stage, and
@@ -373,7 +375,7 @@ static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
 		 */
 		pairdelete(&request->proxy->vps, PW_FREERADIUS_PROXIED_TO, VENDORPEC_FREERADIUS, TAG_ANY);
 
-		RDEBUG2("  Tunneled session will be proxied.  Not doing EAP.");
+		RDEBUG2("Tunneled session will be proxied.  Not doing EAP");
 		return RLM_MODULE_HANDLED;
 	}
 #endif
@@ -432,7 +434,7 @@ static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
 	 *	says that we MUST include a User-Name attribute in the
 	 *	Access-Accept.
 	 */
-	if ((request->reply->code == PW_AUTHENTICATION_ACK) &&
+	if ((request->reply->code == PW_CODE_AUTHENTICATION_ACK) &&
 	    request->username) {
 		VALUE_PAIR *vp;
 
@@ -450,14 +452,14 @@ static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
 		 *	terminated string in Access-Accept.
 		 */
 		if (inst->mod_accounting_username_bug) {
-		    	char const *old = vp->vp_strvalue;
-		    	char *new = talloc_zero_array(vp, char, vp->length + 1);
+			char const *old = vp->vp_strvalue;
+			char *new = talloc_zero_array(vp, char, vp->length + 1);
 
-		    	memcpy(new, old, vp->length);
-		    	vp->vp_strvalue = new;
-		    	vp->length++;
+			memcpy(new, old, vp->length);
+			vp->vp_strvalue = new;
+			vp->length++;
 
-		    	rad_const_free(old);
+			rad_const_free(old);
 		}
 	}
 
@@ -469,7 +471,7 @@ static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
  * to check for user existence & get their configured values.
  * It Handles EAP-START Messages, User-Name initilization.
  */
-static rlm_rcode_t mod_authorize(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *request)
 {
 	rlm_eap_t	*inst;
 	int		status;
@@ -541,7 +543,7 @@ static rlm_rcode_t mod_authorize(void *instance, REQUEST *request)
  *	If we're proxying EAP, then there may be magic we need
  *	to do.
  */
-static rlm_rcode_t mod_post_proxy(void *inst, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_post_proxy(void *inst, REQUEST *request)
 {
 	size_t		i;
 	size_t		len;
@@ -618,7 +620,7 @@ static rlm_rcode_t mod_post_proxy(void *inst, REQUEST *request)
 		 *	says that we MUST include a User-Name attribute in the
 		 *	Access-Accept.
 		 */
-		if ((request->reply->code == PW_AUTHENTICATION_ACK) &&
+		if ((request->reply->code == PW_CODE_AUTHENTICATION_ACK) &&
 		    request->username) {
 			/*
 			 *	Doesn't exist, add it in.
@@ -637,10 +639,15 @@ static rlm_rcode_t mod_post_proxy(void *inst, REQUEST *request)
 	}
 
 	/*
+	 *	This is allowed.
+	 */
+	if (!request->proxy_reply) return RLM_MODULE_NOOP;
+
+	/*
 	 *	There may be more than one Cisco-AVPair.
 	 *	Ensure we find the one with the LEAP attribute.
 	 */
-	paircursor(&cursor, &request->proxy_reply->vps);
+	fr_cursor_init(&cursor, &request->proxy_reply->vps);
 	for (;;) {
 		/*
 		 *	Hmm... there's got to be a better way to
@@ -649,7 +656,7 @@ static rlm_rcode_t mod_post_proxy(void *inst, REQUEST *request)
 		 *	This is vendor Cisco (9), Cisco-AVPair
 		 *	attribute (1)
 		 */
-		vp = pairfindnext(&cursor, 1, 9, TAG_ANY);
+		vp = fr_cursor_next_by_num(&cursor, 1, 9, TAG_ANY);
 		if (!vp) {
 			return RLM_MODULE_NOOP;
 		}
@@ -668,7 +675,7 @@ static rlm_rcode_t mod_post_proxy(void *inst, REQUEST *request)
 	 *	The format is very specific.
 	 */
 	if (vp->length != (17 + 34)) {
-		RDEBUG2("Cisco-AVPair with leap:session-key has incorrect length %d: Expected %d",
+		RDEBUG2("Cisco-AVPair with leap:session-key has incorrect length %zu: Expected %d",
 		       vp->length, 17 + 34);
 		return RLM_MODULE_NOOP;
 	}
@@ -681,9 +688,8 @@ static rlm_rcode_t mod_post_proxy(void *inst, REQUEST *request)
 	 */
 	i = 34;
 	p = talloc_memdup(vp, vp->vp_octets, vp->length);
-	len = rad_tunnel_pwdecode((uint8_t *)p + 17, &i,
-				  request->home_server->secret,
-				  request->proxy->vector);
+	talloc_set_type(p, uint8_t);
+	len = rad_tunnel_pwdecode((uint8_t *)p + 17, &i, request->home_server->secret, request->proxy->vector);
 
 	/*
 	 *	FIXME: Assert that i == 16.
@@ -701,7 +707,7 @@ static rlm_rcode_t mod_post_proxy(void *inst, REQUEST *request)
 }
 #endif
 
-static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *request)
 {
 	rlm_eap_t	*inst = instance;
 	VALUE_PAIR	*vp;
@@ -760,7 +766,7 @@ static rlm_rcode_t mod_post_auth(void *instance, REQUEST *request)
 module_t rlm_eap = {
 	RLM_MODULE_INIT,
 	"eap",
-	RLM_TYPE_CHECK_CONFIG_SAFE,   	/* type */
+	0,   	/* type */
 	sizeof(rlm_eap_t),
 	module_config,
 	mod_instantiate,		/* instantiation */

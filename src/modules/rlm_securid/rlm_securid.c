@@ -39,14 +39,10 @@ typedef enum {
 
 
 static const CONF_PARSER module_config[] = {
-	{ "timer_expire", PW_TYPE_INTEGER,
-	  offsetof(rlm_securid_t, timer_limit), NULL, "600"},
-	{ "max_sessions", PW_TYPE_INTEGER,
-	  offsetof(rlm_securid_t, max_sessions), NULL, "2048"},
-	{ "max_trips_per_session", PW_TYPE_INTEGER,
-	  offsetof(rlm_securid_t, max_trips_per_session), NULL, NULL},
-	{ "max_round_trips", PW_TYPE_INTEGER,
-	  offsetof(rlm_securid_t, max_trips_per_session), NULL, "6"},
+	{ "timer_expire", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_securid_t, timer_limit), "600" },
+	{ "max_sessions", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_securid_t, max_sessions), "2048" },
+	{ "max_trips_per_session", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_securid_t, max_trips_per_session), NULL },
+	{ "max_round_trips", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_securid_t, max_trips_per_session), "6" },
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
 
@@ -146,7 +142,7 @@ static SECURID_AUTH_RC securidAuth(void *instance, REQUEST *request,
 			securid_session->identity = strdup(username);
 
 			/* Get PIN requirements */
-			acm_ret = AceGetPinParams(sdiHandle, &pin_params);
+			(void) AceGetPinParams(sdiHandle, &pin_params);
 
 			/* If a system-generated PIN is required */
 			if (pin_params.Selectable == CANNOT_CHOOSE_PIN) {
@@ -442,7 +438,7 @@ static int mod_instantiate(UNUSED CONF_SECTION *conf, void *instance)
 	 */
 	inst->session_tree = rbtree_create(securid_session_cmp, NULL, 0);
 	if (!inst->session_tree) {
-		ERROR("rlm_securid: Cannot initialize session tree.");
+		ERROR("rlm_securid: Cannot initialize session tree");
 		return -1;
 	}
 
@@ -454,7 +450,7 @@ static int mod_instantiate(UNUSED CONF_SECTION *conf, void *instance)
 /*
  *	Authenticate the user via one of any well-known password.
  */
-static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *request)
 {
 	int rcode;
 	rlm_securid_t *inst = instance;
@@ -467,12 +463,12 @@ static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
 	 *	a User-Name attribute.
 	 */
 	if (!request->username) {
-		AUTH("rlm_securid: Attribute \"User-Name\" is required for authentication.");
+		AUTH("rlm_securid: Attribute \"User-Name\" is required for authentication");
 		return RLM_MODULE_INVALID;
 	}
 
 	if (!request->password) {
-		RAUTH("Attribute \"Password\" is required for authentication.");
+		RAUTH("Attribute \"Password\" is required for authentication");
 		return RLM_MODULE_INVALID;
 	}
 
@@ -498,8 +494,11 @@ static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
 	username = request->username->vp_strvalue;
 	password = request->password->vp_strvalue;
 
-	RDEBUG("User [%s] login attempt with password [%s]",
-	       username, password);
+	if (RDEBUG_ENABLED3) {
+		RDEBUG3("Login attempt with password \"%s\"", password);
+	} else {
+		RDEBUG("Login attempt with password");
+	}
 
 	rcode = securidAuth(inst, request, username, password,
 			    buffer, sizeof(buffer));
@@ -520,8 +519,8 @@ static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
 		pairadd(&request->reply->vps, vp);
 
 		/* Mark the packet as a Acceess-Challenge Packet */
-		request->reply->code = PW_ACCESS_CHALLENGE;
-		RDEBUG("Sending Access-Challenge.");
+		request->reply->code = PW_CODE_ACCESS_CHALLENGE;
+		RDEBUG("Sending Access-Challenge");
 		rcode = RLM_MODULE_HANDLED;
 		break;
 
@@ -551,7 +550,7 @@ static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
 module_t rlm_securid = {
 	RLM_MODULE_INIT,
 	"securid",
-	RLM_TYPE_CHECK_CONFIG_SAFE | RLM_TYPE_HUP_SAFE,   	/* type */
+	RLM_TYPE_HUP_SAFE,   	/* type */
 	sizeof(rlm_securid_t),
 	module_config,
 	mod_instantiate, 		/* instantiation */

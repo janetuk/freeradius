@@ -30,16 +30,11 @@ RCSID("$Id$")
 #include "rlm_redis.h"
 
 static const CONF_PARSER module_config[] = {
-	{ "hostname", PW_TYPE_STRING_PTR | PW_TYPE_DEPRECATED,
-	  offsetof(REDIS_INST, hostname), NULL, NULL},
-	{ "server", PW_TYPE_STRING_PTR | PW_TYPE_REQUIRED,
-	  offsetof(REDIS_INST, hostname), NULL, NULL},
-	{ "port", PW_TYPE_INTEGER,
-	  offsetof(REDIS_INST, port), NULL, "6379"},
-	{ "database", PW_TYPE_INTEGER,
-	  offsetof(REDIS_INST, database), NULL, "0"},
-	{ "password", PW_TYPE_STRING_PTR,
-	  offsetof(REDIS_INST, password), NULL, NULL},
+	{ "hostname", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_DEPRECATED, REDIS_INST, hostname), NULL },
+	{ "server", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED, REDIS_INST, hostname), NULL },
+	{ "port", FR_CONF_OFFSET(PW_TYPE_SHORT, REDIS_INST, port), "6379" },
+	{ "database", FR_CONF_OFFSET(PW_TYPE_INTEGER, REDIS_INST, database), "0" },
+	{ "password", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_SECRET, REDIS_INST, password), NULL },
 
 	{ NULL, -1, 0, NULL, NULL} /* end the list */
 };
@@ -64,14 +59,13 @@ static void *mod_conn_create(void *ctx)
 	REDIS_INST *inst = ctx;
 	REDISSOCK *dissocket = NULL;
 	redisContext *conn;
+	redisReply *reply = NULL;
 	char buffer[1024];
 
 	conn = redisConnect(inst->hostname, inst->port);
 	if (conn->err) return NULL;
 
 	if (inst->password) {
-		redisReply *reply = NULL;
-
 		snprintf(buffer, sizeof(buffer), "AUTH %s", inst->password);
 
 		reply = redisCommand(conn, buffer);
@@ -102,8 +96,6 @@ static void *mod_conn_create(void *ctx)
 	}
 
 	if (inst->database) {
-		redisReply *reply = NULL;
-
 		snprintf(buffer, sizeof(buffer), "SELECT %d", inst->database);
 
 		reply = redisCommand(conn, buffer);
@@ -146,12 +138,7 @@ static ssize_t redis_xlat(void *instance, REQUEST *request, char const *fmt, cha
 	char buffer[21];
 
 	dissocket = fr_connection_get(inst->pool);
-	if (!dissocket) {
-		ERROR("rlm_redis (%s): redis_get_socket() failed",
-		       inst->xlat_name);
-
-		return -1;
-	}
+	if (!dissocket) return -1;
 
 	/* Query failed for some reason, release socket and return */
 	if (rlm_redis_query(&dissocket, inst, fmt, request) < 0) {

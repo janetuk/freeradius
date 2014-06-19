@@ -89,7 +89,7 @@ int getusersfile(TALLOC_CTX *ctx, char const *filename, PAIR_LIST **pair_list, c
 		(strcmp(compat_mode_str, "cistron") == 0)) {
 		PAIR_LIST *entry;
 		VALUE_PAIR *vp;
-		int compat_mode = false;
+		bool compat_mode = false;
 
 		if (strcmp(compat_mode_str, "cistron") == 0) {
 			compat_mode = true;
@@ -127,7 +127,7 @@ int getusersfile(TALLOC_CTX *ctx, char const *filename, PAIR_LIST **pair_list, c
 				if ((vp->da->vendor!= 0) ||
 						(vp->da->attr < 0x100)) {
 					if (!compat_mode) {
-						WDEBUG("[%s]:%d Changing '%s =' to '%s =='\n\tfor comparing RADIUS attribute in check item list for user %s",
+						WARN("[%s]:%d Changing '%s =' to '%s =='\n\tfor comparing RADIUS attribute in check item list for user %s",
 								filename, entry->lineno,
 								vp->da->name, vp->da->name,
 								entry->name);
@@ -187,9 +187,8 @@ int getusersfile(TALLOC_CTX *ctx, char const *filename, PAIR_LIST **pair_list, c
 				 *	good warning message.
 				 */
 				 if ((vp->da->vendor == 0) &&
-					(vp->da->attr > 0xff) &&
-					(vp->da->attr > 1000)) {
-					WDEBUG("[%s]:%d Check item \"%s\"\n"
+				     (vp->da->attr > 1000)) {
+					WARN("[%s]:%d Check item \"%s\"\n"
 					       "\tfound in reply item list for user \"%s\".\n"
 					       "\tThis attribute MUST go on the first line"
 					       " with the other check items",

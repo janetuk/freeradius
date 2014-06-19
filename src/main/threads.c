@@ -112,10 +112,10 @@ typedef struct thread_fork_t {
 
 #ifdef WITH_STATS
 typedef struct fr_pps_t {
-	int	pps_old;
-	int	pps_now;
-	int	pps;
-	time_t	time_old;
+	uint32_t	pps_old;
+	uint32_t	pps_now;
+	uint32_t	pps;
+	time_t		time_old;
 } fr_pps_t;
 #endif
 
@@ -127,24 +127,25 @@ typedef struct fr_pps_t {
  */
 typedef struct THREAD_POOL {
 #ifndef WITH_GCD
-	THREAD_HANDLE *head;
-	THREAD_HANDLE *tail;
+	THREAD_HANDLE	*head;
+	THREAD_HANDLE	*tail;
 
-	int active_threads;	/* protected by queue_mutex */
-	int exited_threads;
-	int total_threads;
-	int max_thread_num;
-	int start_threads;
-	int max_threads;
-	int min_spare_threads;
-	int max_spare_threads;
-	unsigned int max_requests_per_thread;
-	unsigned long request_count;
-	time_t time_last_spawned;
-	int cleanup_delay;
-	int stop_flag;
+	uint32_t	active_threads;	/* protected by queue_mutex */
+	uint32_t	total_threads;
+
+	uint32_t	exited_threads;
+	uint32_t	max_thread_num;
+	uint32_t	start_threads;
+	uint32_t	max_threads;
+	uint32_t	min_spare_threads;
+	uint32_t	max_spare_threads;
+	uint32_t	max_requests_per_thread;
+	uint32_t	request_count;
+	time_t		time_last_spawned;
+	uint32_t	cleanup_delay;
+	bool		stop_flag;
 #endif	/* WITH_GCD */
-	int spawn_flag;
+	bool		spawn_flag;
 
 #ifdef WNOHANG
 	pthread_mutex_t	wait_mutex;
@@ -173,14 +174,14 @@ typedef struct THREAD_POOL {
 	 */
 	pthread_mutex_t	queue_mutex;
 
-	int		max_queue_size;
-	int		num_queued;
+	uint32_t	max_queue_size;
+	uint32_t	num_queued;
 	fr_fifo_t	*fifo[NUM_FIFOS];
 #endif	/* WITH_GCD */
 } THREAD_POOL;
 
 static THREAD_POOL thread_pool;
-static int pool_initialized = false;
+static bool pool_initialized = false;
 
 #ifndef WITH_GCD
 static time_t last_cleaned = 0;
@@ -193,16 +194,16 @@ static void thread_pool_manage(time_t now);
  *	A mapping of configuration file names to internal integers
  */
 static const CONF_PARSER thread_config[] = {
-	{ "start_servers",	   PW_TYPE_INTEGER, 0, &thread_pool.start_threads,	   "5" },
-	{ "max_servers",	     PW_TYPE_INTEGER, 0, &thread_pool.max_threads,	     "32" },
-	{ "min_spare_servers",       PW_TYPE_INTEGER, 0, &thread_pool.min_spare_threads,       "3" },
-	{ "max_spare_servers",       PW_TYPE_INTEGER, 0, &thread_pool.max_spare_threads,       "10" },
-	{ "max_requests_per_server", PW_TYPE_INTEGER, 0, &thread_pool.max_requests_per_thread, "0" },
-	{ "cleanup_delay",	   PW_TYPE_INTEGER, 0, &thread_pool.cleanup_delay,	   "5" },
-	{ "max_queue_size",	  PW_TYPE_INTEGER, 0, &thread_pool.max_queue_size,	  "65536" },
+	{ "start_servers", FR_CONF_POINTER(PW_TYPE_INTEGER, &thread_pool.start_threads), "5" },
+	{ "max_servers", FR_CONF_POINTER(PW_TYPE_INTEGER, &thread_pool.max_threads), "32" },
+	{ "min_spare_servers", FR_CONF_POINTER(PW_TYPE_INTEGER, &thread_pool.min_spare_threads), "3" },
+	{ "max_spare_servers", FR_CONF_POINTER(PW_TYPE_INTEGER, &thread_pool.max_spare_threads), "10" },
+	{ "max_requests_per_server", FR_CONF_POINTER(PW_TYPE_INTEGER, &thread_pool.max_requests_per_thread), "0" },
+	{ "cleanup_delay", FR_CONF_POINTER(PW_TYPE_INTEGER, &thread_pool.cleanup_delay), "5" },
+	{ "max_queue_size", FR_CONF_POINTER(PW_TYPE_INTEGER, &thread_pool.max_queue_size), "65536" },
 #ifdef WITH_STATS
 #ifdef WITH_ACCOUNTING
-	{ "auto_limit_acct",	     PW_TYPE_BOOLEAN, 0, &thread_pool.auto_limit_acct, NULL },
+	{ "auto_limit_acct", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &thread_pool.auto_limit_acct), NULL },
 #endif
 #endif
 	{ NULL, -1, 0, NULL, NULL }
@@ -242,13 +243,6 @@ static void ssl_locking_function(int mode, int n, UNUSED char const *file, UNUSE
 static int setup_ssl_mutexes(void)
 {
 	int i;
-
-#ifdef HAVE_OPENSSL_EVP_H
-	/*
-	 *	Enable all ciphers and digests.
-	 */
-	OpenSSL_add_all_algorithms();
-#endif
 
 	ssl_mutexes = rad_malloc(CRYPTO_num_locks() * sizeof(pthread_mutex_t));
 	if (!ssl_mutexes) {
@@ -321,6 +315,8 @@ static void reap_children(void)
  */
 int request_enqueue(REQUEST *request)
 {
+	rad_assert(pool_initialized == true);
+
 	/*
 	 *	If we haven't checked the number of child threads
 	 *	in a while, OR if the thread pool appears to be full,
@@ -370,11 +366,11 @@ int request_enqueue(REQUEST *request)
 		 *	A probabilistic approach allows us to process
 		 *	SOME of the new accounting packets.
 		 */
-		if ((request->packet->code == PW_ACCOUNTING_REQUEST) &&
+		if ((request->packet->code == PW_CODE_ACCOUNTING_REQUEST) &&
 		    (thread_pool.num_queued > (thread_pool.max_queue_size / 2)) &&
 		    (thread_pool.pps_in.pps_now > thread_pool.pps_out.pps_now)) {
 			uint32_t prob;
-			int keep;
+			uint32_t keep;
 
 			/*
 			 *	Take a random value of how full we
@@ -417,28 +413,18 @@ int request_enqueue(REQUEST *request)
 	thread_pool.request_count++;
 
 	if (thread_pool.num_queued >= thread_pool.max_queue_size) {
-		int complain = false;
-		time_t now;
-		static time_t last_complained = 0;
-
-		now = time(NULL);
-		if (last_complained != now) {
-			last_complained = now;
-			complain = true;
-		}
-
 		pthread_mutex_unlock(&thread_pool.queue_mutex);
 
 		/*
 		 *	Mark the request as done.
 		 */
-		if (complain) {
-			ERROR("Something is blocking the server.  There are %d packets in the queue, waiting to be processed.  Ignoring the new request.", thread_pool.max_queue_size);
-		}
+		RATE_LIMIT(ERROR("Something is blocking the server.  There are %d packets in the queue, "
+				 "waiting to be processed.  Ignoring the new request.", thread_pool.num_queued));
 		return 0;
 	}
 	request->component = "<core>";
 	request->module = "<queue>";
+	request->child_state = REQUEST_QUEUED;
 
 	/*
 	 *	Push the request onto the appropriate fifo for that
@@ -479,6 +465,8 @@ static int request_dequeue(REQUEST **prequest)
 	RAD_LISTEN_TYPE i, start;
 	REQUEST *request;
 	reap_children();
+
+	rad_assert(pool_initialized == true);
 
 	pthread_mutex_lock(&thread_pool.queue_mutex);
 
@@ -559,6 +547,7 @@ static int request_dequeue(REQUEST **prequest)
 
 	request->component = "<core>";
 	request->module = "";
+	request->child_state = REQUEST_RUNNING;
 
 	/*
 	 *	If the request has sat in the queue for too long,
@@ -580,7 +569,7 @@ static int request_dequeue(REQUEST **prequest)
 	thread_pool.active_threads++;
 
 	blocked = time(NULL);
-	if ((blocked - request->timestamp) > 5) {
+	if (!request->proxy && (blocked - request->timestamp) > 5) {
 		total_blocked++;
 		if (last_complained < blocked) {
 			last_complained = blocked;
@@ -635,14 +624,14 @@ static void *request_handler_thread(void *arg)
 				goto re_wait;
 			}
 			ERROR("Thread %d failed waiting for semaphore: %s: Exiting\n",
-			       self->thread_num, strerror(errno));
+			       self->thread_num, fr_syserror(errno));
 			break;
 		}
 
 		DEBUG2("Thread %d got semaphore", self->thread_num);
 
 #ifdef HAVE_OPENSSL_ERR_H
- 		/*
+		/*
 		 *	Clear the error queue for the current thread.
 		 */
 		ERR_clear_error ();
@@ -670,7 +659,7 @@ static void *request_handler_thread(void *arg)
 		       self->request_count);
 
 #ifdef WITH_ACCOUNTING
-		if ((self->request->packet->code == PW_ACCOUNTING_REQUEST) &&
+		if ((self->request->packet->code == PW_CODE_ACCOUNTING_REQUEST) &&
 		    thread_pool.auto_limit_acct) {
 			VALUE_PAIR *vp;
 			REQUEST *request = self->request;
@@ -828,8 +817,9 @@ static THREAD_HANDLE *spawn_thread(time_t now, int do_trigger)
 	rcode = pthread_create(&handle->pthread_id, 0,
 			request_handler_thread, handle);
 	if (rcode != 0) {
+		free(handle);
 		ERROR("Thread create failed: %s",
-		       strerror(rcode));
+		       fr_syserror(rcode));
 		return NULL;
 	}
 
@@ -889,10 +879,11 @@ static int pid_cmp(void const *one, void const *two)
  *
  *	FIXME: What to do on a SIGHUP???
  */
-int thread_pool_init(UNUSED CONF_SECTION *cs, int *spawn_flag)
+int thread_pool_init(UNUSED CONF_SECTION *cs, bool *spawn_flag)
 {
 #ifndef WITH_GCD
-	int		i, rcode;
+	uint32_t	i;
+	int		rcode;
 	CONF_SECTION	*pool_cf;
 #endif
 	time_t		now;
@@ -918,7 +909,7 @@ int thread_pool_init(UNUSED CONF_SECTION *cs, int *spawn_flag)
 	thread_pool.total_threads = 0;
 	thread_pool.max_thread_num = 1;
 	thread_pool.cleanup_delay = 5;
-	thread_pool.stop_flag = 0;
+	thread_pool.stop_flag = false;
 #endif
 	thread_pool.spawn_flag = *spawn_flag;
 
@@ -931,7 +922,7 @@ int thread_pool_init(UNUSED CONF_SECTION *cs, int *spawn_flag)
 #ifdef WNOHANG
 	if ((pthread_mutex_init(&thread_pool.wait_mutex,NULL) != 0)) {
 		ERROR("FATAL: Failed to initialize wait mutex: %s",
-		       strerror(errno));
+		       fr_syserror(errno));
 		return -1;
 	}
 
@@ -967,6 +958,12 @@ int thread_pool_init(UNUSED CONF_SECTION *cs, int *spawn_flag)
 		ERROR("FATAL: max_queue_size value must be in range 2-1048576");
 		return -1;
 	}
+
+	if (thread_pool.start_threads > thread_pool.max_threads) {
+		ERROR("FATAL: start_servers (%i) must be <= max_servers (%i)",
+		      thread_pool.start_threads, thread_pool.max_threads);
+		return -1;
+	}
 #endif	/* WITH_GCD */
 
 	/*
@@ -985,14 +982,14 @@ int thread_pool_init(UNUSED CONF_SECTION *cs, int *spawn_flag)
 	rcode = sem_init(&thread_pool.semaphore, 0, SEMAPHORE_LOCKED);
 	if (rcode != 0) {
 		ERROR("FATAL: Failed to initialize semaphore: %s",
-		       strerror(errno));
+		       fr_syserror(errno));
 		return -1;
 	}
 
 	rcode = pthread_mutex_init(&thread_pool.queue_mutex,NULL);
 	if (rcode != 0) {
 		ERROR("FATAL: Failed to initialize queue mutex: %s",
-		       strerror(errno));
+		       fr_syserror(errno));
 		return -1;
 	}
 
@@ -1034,7 +1031,7 @@ int thread_pool_init(UNUSED CONF_SECTION *cs, int *spawn_flag)
 #else
 	thread_pool.queue = dispatch_queue_create("org.freeradius.threads", NULL);
 	if (!thread_pool.queue) {
-		ERROR("Failed creating dispatch queue: %s", strerror(errno));
+		ERROR("Failed creating dispatch queue: %s", fr_syserror(errno));
 		fr_exit(1);
 	}
 #endif
@@ -1056,10 +1053,12 @@ void thread_pool_stop(void)
 	THREAD_HANDLE *handle;
 	THREAD_HANDLE *next;
 
+	if (!pool_initialized) return;
+
 	/*
 	 *	Set pool stop flag.
 	 */
-	thread_pool.stop_flag = 1;
+	thread_pool.stop_flag = true;
 
 	/*
 	 *	Wakeup all threads to make them see stop flag.
@@ -1105,10 +1104,10 @@ int request_enqueue(REQUEST *request)
  */
 static void thread_pool_manage(time_t now)
 {
-	int spare;
+	uint32_t spare;
 	int i, total;
 	THREAD_HANDLE *handle, *next;
-	int active_threads;
+	uint32_t active_threads;
 
 	/*
 	 *	Loop over the thread pool, deleting exited threads.
@@ -1138,13 +1137,12 @@ static void thread_pool_manage(time_t now)
 	active_threads = thread_pool.active_threads;
 	spare = thread_pool.total_threads - active_threads;
 	if (debug_flag) {
-		static int old_total = -1;
-		static int old_active = -1;
+		static uint32_t old_total = 0;
+		static uint32_t old_active = 0;
 
-		if ((old_total != thread_pool.total_threads) ||
-				(old_active != active_threads)) {
+		if ((old_total != thread_pool.total_threads) || (old_active != active_threads)) {
 			DEBUG2("Threads: total/active/spare threads = %d/%d/%d",
-					thread_pool.total_threads, active_threads, spare);
+			       thread_pool.total_threads, active_threads, spare);
 			old_total = thread_pool.total_threads;
 			old_active = active_threads;
 		}
@@ -1190,7 +1188,7 @@ static void thread_pool_manage(time_t now)
 	 *	passed since we last created one.  This helps to minimize
 	 *	the amount of create/delete cycles.
 	 */
-	if ((now - thread_pool.time_last_spawned) < thread_pool.cleanup_delay) {
+	if ((now - thread_pool.time_last_spawned) < (int)thread_pool.cleanup_delay) {
 		return;
 	}
 
@@ -1393,7 +1391,7 @@ void exec_trigger(REQUEST *request, CONF_SECTION *cs, char const *name, int quen
 	 *	Use global "trigger" section if no local config is given.
 	 */
 	if (!cs) {
-		cs = mainconfig.config;
+		cs = main_config.config;
 		attr = name;
 	} else {
 		/*
@@ -1413,21 +1411,21 @@ void exec_trigger(REQUEST *request, CONF_SECTION *cs, char const *name, int quen
 	 *	reference to the full path, rather than the sub-path.
 	 */
 	subcs = cf_section_sub_find(cs, "trigger");
-	if (!subcs && (cs != mainconfig.config)) {
-		subcs = cf_section_sub_find(mainconfig.config, "trigger");
+	if (!subcs && (cs != main_config.config)) {
+		subcs = cf_section_sub_find(main_config.config, "trigger");
 		attr = name;
 	}
 
 	if (!subcs) return;
 
-	ci = cf_reference_item(subcs, mainconfig.config, attr);
+	ci = cf_reference_item(subcs, main_config.config, attr);
 	if (!ci) {
-		RDEBUG3("No such item in trigger section: %s", attr);
+		ERROR("No such item in trigger section: %s", attr);
 		return;
 	}
 
 	if (!cf_item_is_pair(ci)) {
-		RDEBUG2("Trigger is not a configuration variable: %s", attr);
+		ERROR("Trigger is not a configuration variable: %s", attr);
 		return;
 	}
 
@@ -1436,7 +1434,7 @@ void exec_trigger(REQUEST *request, CONF_SECTION *cs, char const *name, int quen
 
 	value = cf_pair_value(cp);
 	if (!value) {
-		RDEBUG2("Trigger has no value: %s", name);
+		ERROR("Trigger has no value: %s", name);
 		return;
 	}
 
@@ -1474,6 +1472,6 @@ void exec_trigger(REQUEST *request, CONF_SECTION *cs, char const *name, int quen
 		}
 	}
 
-	RDEBUG("Trigger %s -> %s", name, value);
+	DEBUG("Trigger %s -> %s", name, value);
 	radius_exec_program(request, value, false, true, NULL, 0, EXEC_TIMEOUT, vp, NULL);
 }

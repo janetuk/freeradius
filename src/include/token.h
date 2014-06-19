@@ -54,7 +54,7 @@ typedef enum fr_token_t {
   T_OP_REG_EQ,			/* =~ */
   T_OP_REG_NE,			/* !~ */
   T_OP_CMP_TRUE,		/* =* 		20 */
-  T_OP_CMP_FALSE,	       /* !* */
+  T_OP_CMP_FALSE,		/* !* */
   T_OP_CMP_EQ,			/* == */
   T_HASH,			/* # */
   T_BARE_WORD,			/* bare word */
@@ -80,10 +80,9 @@ char const *fr_int2str(FR_NAME_NUMBER const *table, int number,
 			 char const *def);
 
 
-int		getword (char const **ptr, char *buf, int buflen);
-int		getbareword (char const **ptr, char *buf, int buflen);
-FR_TOKEN	gettoken(char const **ptr, char *buf, int buflen);
-FR_TOKEN	getstring(char const **ptr, char *buf, int buflen);
+int		getword (char const **ptr, char *buf, int buflen, bool unescape);
+FR_TOKEN	gettoken(char const **ptr, char *buf, int buflen, bool unescape);
+FR_TOKEN	getstring(char const **ptr, char *buf, int buflen, bool unescape);
 char const	*fr_token_name(int);
 
 #ifdef __cplusplus

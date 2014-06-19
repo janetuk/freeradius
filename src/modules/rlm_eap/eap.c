@@ -87,7 +87,7 @@ static int eap_module_free(void *ctx)
 	 *	debugging.  This removes the symbols needed by
 	 *	valgrind.
 	 */
-	if (!mainconfig.debug_memory)
+	if (!main_config.debug_memory)
 #endif
 	if (inst->handle) dlclose(inst->handle);
 
@@ -115,7 +115,7 @@ int eap_module_load(rlm_eap_t *inst, eap_module_t **m_inst, eap_type_t num, CONF
 	/*
 	 *	The name of the module were trying to load
 	 */
-	mod_name = talloc_asprintf(method, "rlm_eap_%s", method->name);
+	mod_name = talloc_typed_asprintf(method, "rlm_eap_%s", method->name);
 
 	/*
 	 *	dlopen is case sensitive
@@ -236,7 +236,7 @@ static int eap_module_call(eap_module_t *module, eap_handler_t *handler)
  */
 static eap_type_t eap_process_nak(rlm_eap_t *inst, REQUEST *request,
 				    eap_type_t type,
-			     	    eap_type_data_t *nak)
+				    eap_type_data_t *nak)
 {
 	unsigned int i;
 	VALUE_PAIR *vp;
@@ -374,7 +374,7 @@ eap_rcode_t eap_method_select(rlm_eap_t *inst, eap_handler_t *handler)
 	 *	Multiple levels of nesting are invalid.
 	 */
 	if (handler->request->parent && handler->request->parent->parent) {
-		RDEBUG2("Multiple levels of TLS nesting is invalid.");
+		RDEBUG2("Multiple levels of TLS nesting is invalid");
 
 		return EAP_INVALID;
 	}
@@ -474,7 +474,7 @@ eap_rcode_t eap_method_select(rlm_eap_t *inst, eap_handler_t *handler)
 					    handler) == 0) {
 				REDEBUG2("Failed continuing EAP %s (%d) session. "
 					 "EAP sub-module failed",
-				       	 eap_type2name(type->num),
+					 eap_type2name(type->num),
 					 type->num);
 
 				return EAP_INVALID;
@@ -548,14 +548,14 @@ rlm_rcode_t eap_compose(eap_handler_t *handler)
 			 */
 		case PW_EAP_SUCCESS:
 		case PW_EAP_FAILURE:
-	    		break;
+			break;
 
 			/*
 			 *	We've sent a response to their
 			 *	request, the Id is incremented.
 			 */
 		default:
-	    		++reply->id;
+			++reply->id;
 		}
 	} else {
 		RDEBUG2("Underlying EAP-Type set EAP ID to %d",
@@ -584,7 +584,7 @@ rlm_rcode_t eap_compose(eap_handler_t *handler)
 	}
 	eap_packet = (eap_packet_raw_t *)reply->packet;
 
-	vp = radius_paircreate(request, &request->reply->vps, PW_EAP_MESSAGE, 0);
+	vp = radius_paircreate(request->reply, &request->reply->vps, PW_EAP_MESSAGE, 0);
 	if (!vp) return RLM_MODULE_INVALID;
 
 	vp->length = eap_packet->length[0] * 256 + eap_packet->length[1];
@@ -610,19 +610,19 @@ rlm_rcode_t eap_compose(eap_handler_t *handler)
 	rcode = RLM_MODULE_OK;
 	if (!request->reply->code) switch(reply->code) {
 	case PW_EAP_RESPONSE:
-		request->reply->code = PW_AUTHENTICATION_ACK;
+		request->reply->code = PW_CODE_AUTHENTICATION_ACK;
 		rcode = RLM_MODULE_HANDLED; /* leap weirdness */
 		break;
 	case PW_EAP_SUCCESS:
-		request->reply->code = PW_AUTHENTICATION_ACK;
+		request->reply->code = PW_CODE_AUTHENTICATION_ACK;
 		rcode = RLM_MODULE_OK;
 		break;
 	case PW_EAP_FAILURE:
-		request->reply->code = PW_AUTHENTICATION_REJECT;
+		request->reply->code = PW_CODE_AUTHENTICATION_REJECT;
 		rcode = RLM_MODULE_REJECT;
 		break;
 	case PW_EAP_REQUEST:
-		request->reply->code = PW_ACCESS_CHALLENGE;
+		request->reply->code = PW_CODE_ACCESS_CHALLENGE;
 		rcode = RLM_MODULE_HANDLED;
 		break;
 	default:
@@ -631,13 +631,13 @@ rlm_rcode_t eap_compose(eap_handler_t *handler)
 		 *	we do so WITHOUT setting a reply code, as the
 		 *	request is being proxied.
 		 */
-		if (request->options & RAD_REQUEST_OPTION_PROXY_EAP) {
+		if (request->log.lvl & RAD_REQUEST_OPTION_PROXY_EAP) {
 			return RLM_MODULE_HANDLED;
 		}
 
 		/* Should never enter here */
 		ERROR("rlm_eap: reply code %d is unknown, Rejecting the request.", reply->code);
-		request->reply->code = PW_AUTHENTICATION_REJECT;
+		request->reply->code = PW_CODE_AUTHENTICATION_REJECT;
 		reply->code = PW_EAP_FAILURE;
 		rcode = RLM_MODULE_REJECT;
 		break;
@@ -667,7 +667,7 @@ int eap_start(rlm_eap_t *inst, REQUEST *request)
 	 */
 	vp = pairfind(request->packet->vps, PW_EAP_TYPE, 0, TAG_ANY);
 	if (vp && vp->vp_integer == 0) {
-		RDEBUG2("Found EAP-Message, but EAP-Type = None, so we're not doing EAP.");
+		RDEBUG2("Found EAP-Message, but EAP-Type = None, so we're not doing EAP");
 		return EAP_NOOP;
 	}
 
@@ -747,7 +747,7 @@ int eap_start(rlm_eap_t *inst, REQUEST *request)
 	if (eap_msg->length < (EAP_HEADER_LEN + 1)) {
 		if (proxy) goto do_proxy;
 
-		RDEBUG2("Ignoring EAP-Message which is too short to be meaningful.");
+		RDEBUG2("Ignoring EAP-Message which is too short to be meaningful");
 		return EAP_FAIL;
 	}
 
@@ -783,7 +783,7 @@ int eap_start(rlm_eap_t *inst, REQUEST *request)
 	    (eap_msg->vp_octets[0] >= PW_EAP_MAX_CODES)) {
 		RDEBUG2("Unknown EAP packet");
 	} else {
-		RDEBUG2("EAP packet type %s id %d length %d",
+		RDEBUG2("EAP packet type %s id %d length %zu",
 		       eap_codes[eap_msg->vp_octets[0]],
 		       eap_msg->vp_octets[1],
 		       eap_msg->length);
@@ -797,7 +797,7 @@ int eap_start(rlm_eap_t *inst, REQUEST *request)
 	 */
 	if ((eap_msg->vp_octets[0] != PW_EAP_REQUEST) &&
 	    (eap_msg->vp_octets[0] != PW_EAP_RESPONSE)) {
-		RDEBUG2("Ignoring EAP packet which we don't know how to handle.");
+		RDEBUG2("Ignoring EAP packet which we don't know how to handle");
 		return EAP_FAIL;
 	}
 
@@ -814,7 +814,7 @@ int eap_start(rlm_eap_t *inst, REQUEST *request)
 	    ((eap_msg->vp_octets[4] == 0) ||
 	     (eap_msg->vp_octets[4] >= PW_EAP_MAX_TYPES) ||
 	     (!inst->methods[eap_msg->vp_octets[4]]))) {
-		RDEBUG2(" Ignoring Unknown EAP type");
+		RDEBUG2("Ignoring Unknown EAP type");
 		return EAP_NOOP;
 	}
 
@@ -845,11 +845,11 @@ int eap_start(rlm_eap_t *inst, REQUEST *request)
 
 	if ((eap_msg->vp_octets[4] == PW_EAP_TTLS) ||
 	    (eap_msg->vp_octets[4] == PW_EAP_PEAP)) {
-		RDEBUG2("Continuing tunnel setup.");
+		RDEBUG2("Continuing tunnel setup");
 		return EAP_OK;
 	}
 	/*
-	 * We return ok in response to EAP identity and MSCHAP success/fail
+	 * We return ok in response to EAP identity
 	 * This means we can write:
 	 *
 	 * eap {
@@ -863,16 +863,6 @@ int eap_start(rlm_eap_t *inst, REQUEST *request)
 	if (eap_msg->vp_octets[4] == PW_EAP_IDENTITY) {
 		RDEBUG2("EAP-Identity reply, returning 'ok' so we can short-circuit the rest of authorize");
 		return EAP_OK;
-	}
-	if ((eap_msg->vp_octets[4] == PW_EAP_MSCHAPV2) && (eap_msg->length >= 6)) {
-		switch (eap_msg->vp_octets[5]) {
-			case 3:
-				RDEBUG2("EAP-MSCHAPV2 success, returning short-circuit ok");
-				return EAP_OK;
-			case 4:
-				RDEBUG2("EAP-MSCHAPV2 failure, returning short-circuit ok");
-				return EAP_OK;
-		}
 	}
 
 	/*
@@ -927,8 +917,8 @@ static int eap_validation(REQUEST *request, eap_packet_raw_t *eap_packet)
 	 *	High level EAP packet checks
 	 */
 	if ((len <= EAP_HEADER_LEN) ||
- 	    ((eap_packet->code != PW_EAP_RESPONSE) &&
- 	     (eap_packet->code != PW_EAP_REQUEST)) ||
+	    ((eap_packet->code != PW_EAP_RESPONSE) &&
+	     (eap_packet->code != PW_EAP_REQUEST)) ||
 	    (eap_packet->data[0] <= 0) ||
 	    (eap_packet->data[0] >= PW_EAP_MAX_TYPES)) {
 
@@ -1114,7 +1104,7 @@ eap_handler_t *eap_handler(rlm_eap_t *inst, eap_packet_raw_t **eap_packet_p,
 			*/
 		       if (strncmp(handler->identity, vp->vp_strvalue,
 				   MAX_STRING_LEN) != 0) {
-			       RDEBUG("Identity does not match User-Name.  Authentication failed.");
+			       RDEBUG("Identity does not match User-Name.  Authentication failed");
 			       goto error;
 		       }
 	       }
@@ -1158,7 +1148,7 @@ eap_handler_t *eap_handler(rlm_eap_t *inst, eap_packet_raw_t **eap_packet_p,
 			*/
 		       if (strncmp(handler->identity, vp->vp_strvalue,
 				   MAX_STRING_LEN) != 0) {
-			       RDEBUG("Identity does not match User-Name, setting from EAP Identity.");
+			       RDEBUG("Identity does not match User-Name, setting from EAP Identity");
 			       goto error2;
 		       }
 	       }

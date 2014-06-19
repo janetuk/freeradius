@@ -30,26 +30,26 @@ typedef struct rlm_eap_ttls_t {
 	/*
 	 *	TLS configuration
 	 */
-	char	*tls_conf_name;
+	char const *tls_conf_name;
 	fr_tls_server_conf_t *tls_conf;
 
 	/*
 	 *	Default tunneled EAP type
 	 */
-	char	*default_method_name;
-	int	default_method;
+	char const *default_method_name;
+	int default_method;
 
 	/*
 	 *	Use the reply attributes from the tunneled session in
 	 *	the non-tunneled reply to the client.
 	 */
-	bool	use_tunneled_reply;
+	bool use_tunneled_reply;
 
 	/*
 	 *	Use SOME of the request attributes from outside of the
 	 *	tunneled session in the tunneled request
 	 */
-	bool	copy_request_to_tunnel;
+	bool copy_request_to_tunnel;
 
 	/*
 	 *	RFC 5281 (TTLS) says that the length field MUST NOT be
@@ -60,43 +60,30 @@ typedef struct rlm_eap_ttls_t {
 	 *	RFC, we add the option here.  If set to "no", it sends
 	 *	the length field in ONLY the first fragment.
 	 */
-	bool	include_length;
+	bool include_length;
 
 	/*
 	 *	Virtual server for inner tunnel session.
 	 */
-	char	*virtual_server;
+	char const *virtual_server;
 
 	/*
 	 * 	Do we do require a client cert?
 	 */
-	bool	req_client_cert;
+	bool req_client_cert;
 } rlm_eap_ttls_t;
 
 
 static CONF_PARSER module_config[] = {
-	{ "tls", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_eap_ttls_t, tls_conf_name), NULL, NULL },
+	{ "tls", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_ttls_t, tls_conf_name), NULL },
+	{ "default_eap_type", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_ttls_t, default_method_name), "md5" },
+	{ "copy_request_to_tunnel", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_ttls_t, copy_request_to_tunnel), "no" },
+	{ "use_tunneled_reply", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_ttls_t, use_tunneled_reply), "no" },
+	{ "virtual_server", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_ttls_t, virtual_server), NULL },
+	{ "include_length", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_ttls_t, include_length), "yes" },
+	{ "require_client_cert", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_ttls_t, req_client_cert), "no" },
 
-	{ "default_eap_type", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_eap_ttls_t, default_method_name), NULL, "md5" },
-
-	{ "copy_request_to_tunnel", PW_TYPE_BOOLEAN,
-	  offsetof(rlm_eap_ttls_t, copy_request_to_tunnel), NULL, "no" },
-
-	{ "use_tunneled_reply", PW_TYPE_BOOLEAN,
-	  offsetof(rlm_eap_ttls_t, use_tunneled_reply), NULL, "no" },
-
-	{ "virtual_server", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_eap_ttls_t, virtual_server), NULL, NULL },
-
-	{ "include_length", PW_TYPE_BOOLEAN,
-	  offsetof(rlm_eap_ttls_t, include_length), NULL, "yes" },
-
-	{ "require_client_cert", PW_TYPE_BOOLEAN,
-	  offsetof(rlm_eap_ttls_t, req_client_cert), NULL, "no" },
-
- 	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
+	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
 };
 
 
@@ -193,7 +180,7 @@ static int eapttls_initiate(void *type_arg, eap_handler_t *handler)
 	tls_session_t	*ssn;
 	rlm_eap_ttls_t	*inst;
 	VALUE_PAIR	*vp;
-	int		client_cert = false;
+	bool		client_cert;
 	REQUEST		*request = handler->request;
 
 	inst = type_arg;
@@ -204,7 +191,6 @@ static int eapttls_initiate(void *type_arg, eap_handler_t *handler)
 	/*
 	 *	Check if we need a client certificate.
 	 */
-	client_cert = inst->req_client_cert;
 
 	/*
 	 * EAP-TLS-Require-Client-Cert attribute will override
@@ -213,6 +199,8 @@ static int eapttls_initiate(void *type_arg, eap_handler_t *handler)
 	vp = pairfind(handler->request->config_items, PW_EAP_TLS_REQUIRE_CLIENT_CERT, 0, TAG_ANY);
 	if (vp) {
 		client_cert = vp->vp_integer;
+	} else {
+		client_cert = inst->req_client_cert;
 	}
 
 	ssn = eaptls_session(inst->tls_conf, handler, client_cert);
@@ -324,7 +312,7 @@ static int mod_authenticate(void *arg, eap_handler_t *handler)
 	 *	Session is established, proceed with decoding
 	 *	tunneled data.
 	 */
-	RDEBUG2("Session established.  Proceeding to decode tunneled attributes.");
+	RDEBUG2("Session established.  Proceeding to decode tunneled attributes");
 
 	/*
 	 *	We may need TTLS data associated with the session, so
@@ -340,21 +328,21 @@ static int mod_authenticate(void *arg, eap_handler_t *handler)
 	 */
 	rcode = eapttls_process(handler, tls_session);
 	switch (rcode) {
-	case PW_AUTHENTICATION_REJECT:
+	case PW_CODE_AUTHENTICATION_REJECT:
 		eaptls_fail(handler, 0);
 		return 0;
 
 		/*
 		 *	Access-Challenge, continue tunneled conversation.
 		 */
-	case PW_ACCESS_CHALLENGE:
+	case PW_CODE_ACCESS_CHALLENGE:
 		eaptls_request(handler->eap_ds, tls_session);
 		return 1;
 
 		/*
 		 *	Success: Automatically return MPPE keys.
 		 */
-	case PW_AUTHENTICATION_ACK:
+	case PW_CODE_AUTHENTICATION_ACK:
 		return eaptls_success(handler, 0);
 
 		/*
@@ -363,7 +351,7 @@ static int mod_authenticate(void *arg, eap_handler_t *handler)
 		 *	that the request now has a "proxy" packet, and
 		 *	will proxy it, rather than returning an EAP packet.
 		 */
-	case PW_STATUS_CLIENT:
+	case PW_CODE_STATUS_CLIENT:
 #ifdef WITH_PROXY
 		rad_assert(handler->request->proxy != NULL);
 #endif

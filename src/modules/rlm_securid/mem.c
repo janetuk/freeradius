@@ -72,7 +72,7 @@ void securid_sessionlist_free(rlm_securid_t *inst,REQUEST *request)
 
 	pthread_mutex_lock(&(inst->session_mutex));
 
-       	for (node = inst->session_head; node != NULL; node = next) {
+	for (node = inst->session_head; node != NULL; node = next) {
 		next = node->next;
 		securid_session_free(inst,request,node);
 	}
@@ -90,14 +90,10 @@ void securid_sessionlist_free(rlm_securid_t *inst,REQUEST *request)
  *	Since we're adding it to the list, we guess that this means
  *	the packet needs a State attribute.  So add one.
  */
-int securid_sessionlist_add(rlm_securid_t *inst,REQUEST *request,
-			    SECURID_SESSION *session)
+int securid_sessionlist_add(rlm_securid_t *inst,REQUEST *request, SECURID_SESSION *session)
 {
 	int		status = 0;
 	VALUE_PAIR	*state;
-
-	rad_assert(session != NULL);
-	rad_assert(request != NULL);
 
 	/*
 	 *	The time at which this request was made was the time
@@ -222,7 +218,7 @@ SECURID_SESSION *securid_sessionlist_find(rlm_securid_t *inst, REQUEST *request)
 	 *	Might not have been there.
 	 */
 	if (!session) {
-		ERROR("rlm_securid: No SECURID session matching the State variable.");
+		ERROR("rlm_securid: No SECURID session matching the State variable");
 		return NULL;
 	}
 
@@ -285,7 +281,7 @@ static void securid_sessionlist_clean_expired(rlm_securid_t *inst, REQUEST *requ
 	 *	Delete old sessions from the list
 	 *
 	 */
-       	while((session = inst->session_head)) {
+	while((session = inst->session_head)) {
 		if ((timestamp - session->timestamp) > inst->timer_limit) {
 			rbnode_t *node;
 			node = rbtree_find(inst->session_tree, session);

@@ -65,6 +65,19 @@ freeradius (3.0.0~rc0+git+moonshot1-1) unstable; urgency=low
  -- Sam Hartman <hartmans@debian.org>  Tue, 13 Aug 2013 15:44:57 -0400
 
 freeradius (3.0.0git+dfsg-1) unstable; urgency=medium
+
+freeradius (3.0.3+git) unstable; urgency=medium
+
+  * New upstream version.
+
+ -- Alan DeKok <aland@freeradius.org>  Fri, 21 Mar 2014 08:30:00 -0400
+
+freeradius (3.0.2+git) unstable; urgency=medium
+
+  * New upstream version.
+
+ -- Alan DeKok <aland@freeradius.org>  Wed, 15 Jan 2014 21:23:14 -0400
+
 freeradius (3.0.1+git) unstable; urgency=medium
 
 

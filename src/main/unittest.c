@@ -44,11 +44,11 @@ bool memory_report = false;
 bool check_config = false;
 bool log_stripped_names = false;
 
-int filedone = 0;
+bool filedone = false;
 
 char const *radiusd_version = "FreeRADIUS Version " RADIUSD_VERSION_STRING
 #ifdef RADIUSD_VERSION_COMMIT
-" (git #" RADIUSD_VERSION_COMMIT ")"
+" (git #" STRINGIFY(RADIUSD_VERSION_COMMIT) ")"
 #endif
 ", for host " HOSTINFO ", built on " __DATE__ " at " __TIME__;
 
@@ -56,14 +56,6 @@ char const *radiusd_version = "FreeRADIUS Version " RADIUSD_VERSION_STRING
  *	Static functions.
  */
 static void usage(int);
-
-#ifdef WITH_VERIFY_PTR
-static void die_horribly(char const *reason)
-{
-	ERROR("talloc abort: %s\n", reason);
-	abort();
-}
-#endif
 
 void listen_free(UNUSED rad_listen_t **head)
 {
@@ -139,17 +131,17 @@ static REQUEST *request_setup(FILE *fp)
 	request->number = 0;
 
 	request->master_state = REQUEST_ACTIVE;
-	request->child_state = REQUEST_ACTIVE;
+	request->child_state = REQUEST_RUNNING;
 	request->handle = NULL;
-	request->server = talloc_strdup(request, "default");
+	request->server = talloc_typed_strdup(request, "default");
 
-	request->root = &mainconfig;
+	request->root = &main_config;
 
 	/*
 	 *	Read packet from fp
 	 */
-	request->packet->vps = readvp2(request->packet, fp, &filedone, "radiusd:");
-	if (!request->packet->vps) {
+	if (readvp2(&request->packet->vps, request->packet, fp, &filedone) < 0) {
+		fr_perror("unittest");
 		talloc_free(request);
 		return NULL;
 	}
@@ -157,7 +149,7 @@ static REQUEST *request_setup(FILE *fp)
 	/*
 	 *	Set the defaults for IPs, etc.
 	 */
-	request->packet->code = PW_AUTHENTICATION_REQUEST;
+	request->packet->code = PW_CODE_AUTHENTICATION_REQUEST;
 
 	request->packet->src_ipaddr.af = AF_INET;
 	request->packet->src_ipaddr.ipaddr.ip4addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -172,9 +164,9 @@ static REQUEST *request_setup(FILE *fp)
 	 *
 	 *	Fix up Digest-Attributes issues
 	 */
-	for (vp = paircursor(&cursor, &request->packet->vps);
+	for (vp = fr_cursor_init(&cursor, &request->packet->vps);
 	     vp;
-	     vp = pairnext(&cursor)) {
+	     vp = fr_cursor_next(&cursor)) {
 		/*
 		 *	Double quoted strings get marked up as xlat expansions,
 		 *	but we don't support that here.
@@ -280,7 +272,7 @@ static REQUEST *request_setup(FILE *fp)
 				/* overlapping! */
 			{
 				DICT_ATTR const *da;
-				uint8_t *p;
+				uint8_t *p, *q;
 
 				p = talloc_array(vp, uint8_t, vp->length + 2);
 
@@ -289,11 +281,26 @@ static REQUEST *request_setup(FILE *fp)
 				vp->length += 2;
 				p[1] = vp->length;
 
-				pairmemsteal(vp, p);
-
 				da = dict_attrbyvalue(PW_DIGEST_ATTRIBUTES, 0);
 				rad_assert(da != NULL);
 				vp->da = da;
+
+				/*
+				 *	Re-do pairmemsteal ourselves,
+				 *	because we play games with
+				 *	vp->da, and pairmemsteal goes
+				 *	to GREAT lengths to sanitize
+				 *	and fix and change and
+				 *	double-check the various
+				 *	fields.
+				 */
+				memcpy(&q, &vp->vp_octets, sizeof(q));
+				talloc_free(q);
+
+				vp->vp_octets = talloc_steal(vp, p);
+				vp->type = VT_DATA;
+
+				VERIFY_VP(vp);
 			}
 
 			break;
@@ -301,19 +308,19 @@ static REQUEST *request_setup(FILE *fp)
 	} /* loop over the VP's we read in */
 
 	if (debug_flag) {
-		for (vp = paircursor(&cursor, &request->packet->vps);
+		for (vp = fr_cursor_init(&cursor, &request->packet->vps);
 		     vp;
-		     vp = pairnext(&cursor)) {
+		     vp = fr_cursor_next(&cursor)) {
 			/*
 			 *	Take this opportunity to verify all the VALUE_PAIRs are still valid.
 			 */
 			if (!talloc_get_type(vp, VALUE_PAIR)) {
 				ERROR("Expected VALUE_PAIR pointer got \"%s\"", talloc_get_name(vp));
-				
-				log_talloc_report(vp);
+
+				fr_log_talloc_report(vp);
 				rad_assert(0);
 			}
-			
+
 			vp_print(fr_log_fp, vp);
 		}
 		fflush(fr_log_fp);
@@ -338,8 +345,8 @@ static REQUEST *request_setup(FILE *fp)
 	/*
 	 *	Debugging
 	 */
-	request->options = debug_flag;
-	request->radlog = radlog_request;
+	request->log.lvl = debug_flag;
+	request->log.func = vradlog_request;
 
 	request->username = pairfind(request->packet->vps, PW_USER_NAME, 0, TAG_ANY);
 	request->password = pairfind(request->packet->vps, PW_USER_PASSWORD, 0, TAG_ANY);
@@ -360,16 +367,16 @@ static void print_packet(FILE *fp, RADIUS_PACKET *packet)
 
 	fprintf(fp, "%s\n", fr_packet_codes[packet->code]);
 
-	for (vp = paircursor(&cursor, &packet->vps);
+	for (vp = fr_cursor_init(&cursor, &packet->vps);
 	     vp;
-	     vp = pairnext(&cursor)) {
+	     vp = fr_cursor_next(&cursor)) {
 		/*
 		 *	Take this opportunity to verify all the VALUE_PAIRs are still valid.
 		 */
 		if (!talloc_get_type(vp, VALUE_PAIR)) {
 			ERROR("Expected VALUE_PAIR pointer got \"%s\"", talloc_get_name(vp));
 
-			log_talloc_report(vp);
+			fr_log_talloc_report(vp);
 			rad_assert(0);
 		}
 
@@ -389,9 +396,20 @@ int main(int argc, char *argv[])
 	const char *output_file = NULL;
 	const char *filter_file = NULL;
 	FILE *fp;
-	REQUEST *request;
+	REQUEST *request = NULL;
 	VALUE_PAIR *vp;
 	VALUE_PAIR *filter_vps = NULL;
+
+	/*
+	 *	If the server was built with debugging enabled always install
+	 *	the basic fatal signal handlers.
+	 */
+#ifndef NDEBUG
+	if (fr_fault_setup(getenv("PANIC_ACTION"), argv[0]) < 0) {
+		fr_perror("unittest");
+		exit(EXIT_FAILURE);
+	}
+#endif
 
 	if ((progname = strrchr(argv[0], FR_DIR_SEP)) == NULL)
 		progname = argv[0];
@@ -399,15 +417,15 @@ int main(int argc, char *argv[])
 		progname++;
 
 	debug_flag = 0;
-	radius_dir = talloc_strdup(NULL, RADIUS_DIR);
+	set_radius_dir(NULL, RADIUS_DIR);
 
 	/*
 	 *	Ensure that the configuration is initialized.
 	 */
-	memset(&mainconfig, 0, sizeof(mainconfig));
-	mainconfig.myip.af = AF_UNSPEC;
-	mainconfig.port = -1;
-	mainconfig.name = "radiusd";
+	memset(&main_config, 0, sizeof(main_config));
+	main_config.myip.af = AF_UNSPEC;
+	main_config.port = 0;
+	main_config.name = "radiusd";
 
 	/*
 	 *	The tests should have only IPs, not host names.
@@ -418,7 +436,7 @@ int main(int argc, char *argv[])
 	 *	We always log to stdout.
 	 */
 	fr_log_fp = stdout;
-	default_log.dest = L_DST_STDOUT;
+	default_log.dst = L_DST_STDOUT;
 	default_log.fd = STDOUT_FILENO;
 
 	/*  Process the options.  */
@@ -426,14 +444,11 @@ int main(int argc, char *argv[])
 
 		switch(argval) {
 			case 'd':
-				if (radius_dir) {
-					rad_const_free(radius_dir);
-				}
-				radius_dir = talloc_strdup(NULL, optarg);
+				set_radius_dir(NULL, optarg);
 				break;
 
 			case 'D':
-				mainconfig.dictionary_dir = talloc_strdup(NULL, optarg);
+				main_config.dictionary_dir = talloc_typed_strdup(NULL, optarg);
 				break;
 
 			case 'f':
@@ -449,16 +464,16 @@ int main(int argc, char *argv[])
 				break;
 
 			case 'm':
-				mainconfig.debug_memory = 1;
+				main_config.debug_memory = true;
 				break;
 
 			case 'M':
-				memory_report = 1;
-				mainconfig.debug_memory = 1;
+				memory_report = true;
+				main_config.debug_memory = true;
 				break;
 
 			case 'n':
-				mainconfig.name = optarg;
+				main_config.name = optarg;
 				break;
 
 			case 'o':
@@ -467,9 +482,9 @@ int main(int argc, char *argv[])
 
 			case 'X':
 				debug_flag += 2;
-				mainconfig.log_auth = true;
-				mainconfig.log_auth_badpass = true;
-				mainconfig.log_auth_goodpass = true;
+				main_config.log_auth = true;
+				main_config.log_auth_badpass = true;
+				main_config.log_auth_goodpass = true;
 				break;
 
 			case 'x':
@@ -482,22 +497,41 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	if (memory_report) {
-		talloc_enable_null_tracking();
-#ifdef WITH_VERIFY_PTR
-		talloc_set_abort_fn(die_horribly);
-#endif
-	}
-	talloc_set_log_fn(log_talloc);
-
 	if (debug_flag) {
 		version();
 	}
 	fr_debug_flag = debug_flag;
 
-	/*  Read the configuration files, BEFORE doing anything else.  */
-	if (read_mainconfig(0) < 0) {
+	/*
+	 *	Mismatch between the binary and the libraries it depends on
+	 */
+	if (fr_check_lib_magic(RADIUSD_MAGIC_NUMBER) < 0) {
+		fr_perror("radiusd");
 		exit(EXIT_FAILURE);
+	}
+
+	/*  Read the configuration files, BEFORE doing anything else.  */
+	if (main_config_init() < 0) {
+		rcode = EXIT_FAILURE;
+		goto finish;
+	}
+
+	/*
+	 *  Load the modules
+	 */
+	if (modules_init(main_config.config) < 0) {
+		rcode = EXIT_FAILURE;
+		goto finish;
+	}
+
+	/* Set the panic action (if required) */
+	if (main_config.panic_action &&
+#ifndef NDEBUG
+	    !getenv("PANIC_ACTION") &&
+#endif
+	    (fr_fault_setup(main_config.panic_action, argv[0]) < 0)) {
+		rcode = EXIT_FAILURE;
+		goto finish;
 	}
 
 	setlinebuf(stdout); /* unbuffered output */
@@ -508,8 +542,8 @@ int main(int argc, char *argv[])
 		fp = fopen(input_file, "r");
 		if (!fp) {
 			fprintf(stderr, "Failed reading %s: %s\n",
-				input_file, strerror(errno));
-			exit(EXIT_FAILURE);
+				input_file, fr_syserror(errno));
+			goto finish;
 		}
 	}
 
@@ -519,7 +553,8 @@ int main(int argc, char *argv[])
 	request = request_setup(fp);
 	if (!request) {
 		fprintf(stderr, "Failed reading input: %s\n", fr_strerror());
-		exit(EXIT_FAILURE);
+		rcode = EXIT_FAILURE;
+		goto finish;
 	}
 
 	/*
@@ -533,7 +568,7 @@ int main(int argc, char *argv[])
 			fclose(fp);
 			fp = NULL;
 		}
-		filedone = 0;
+		filedone = false;
 	}
 
 	/*
@@ -545,17 +580,18 @@ int main(int argc, char *argv[])
 		if (!fp) {
 			fp = fopen(filter_file, "r");
 			if (!fp) {
-				fprintf(stderr, "Failed reading %s: %s\n",
-					filter_file, strerror(errno));
-				exit(EXIT_FAILURE);
+				fprintf(stderr, "Failed reading %s: %s\n", filter_file, strerror(errno));
+				rcode = EXIT_FAILURE;
+				goto finish;
 			}
 		}
 
-		filter_vps = readvp2(request, fp, &filedone, "radiusd");
-		if (!filter_vps) {
+
+		if (readvp2(&filter_vps, request, fp, &filedone) < 0) {
 			fprintf(stderr, "Failed reading attributes from %s: %s\n",
 				filter_file, fr_strerror());
-			exit(EXIT_FAILURE);
+			rcode = EXIT_FAILURE;
+			goto finish;
 		}
 
 		/*
@@ -572,7 +608,7 @@ int main(int argc, char *argv[])
 		fp = fopen(output_file, "w");
 		if (!fp) {
 			fprintf(stderr, "Failed writing %s: %s\n",
-				output_file, strerror(errno));
+				output_file, fr_syserror(errno));
 			exit(EXIT_FAILURE);
 		}
 	}
@@ -584,37 +620,42 @@ int main(int argc, char *argv[])
 	/*
 	 *	Update the list with the response type.
 	 */
-	vp = radius_paircreate(request, &request->reply->vps,
+	vp = radius_paircreate(request->reply, &request->reply->vps,
 			       PW_RESPONSE_PACKET_TYPE, 0);
 	vp->vp_integer = request->reply->code;
 
-	if (filter_vps && !pairvalidate(filter_vps, request->reply->vps)) {
-		fprintf(stderr, "Output file %s does not match attributes in filter %s\n",
-			output_file ? output_file : input_file, filter_file);
-		exit(EXIT_FAILURE);
+	{
+		VALUE_PAIR const *failed[2];
+
+		if (filter_vps && !pairvalidate(failed, filter_vps, request->reply->vps)) {
+			pairvalidate_debug(request, failed);
+			fr_perror("Output file %s does not match attributes in filter %s",
+				  output_file ? output_file : input_file, filter_file);
+			rcode = EXIT_FAILURE;
+			goto finish;
+		}
 	}
 
-	talloc_free(request);
+	INFO("Exiting normally");
 
-	INFO("Exiting normally.");
+finish:
+	talloc_free(request);
 
 	/*
 	 *	Detach any modules.
 	 */
-	detach_modules();
+	modules_free();
 
 	xlat_free();		/* modules may have xlat's */
 
 	/*
 	 *	Free the configuration items.
 	 */
-	free_mainconfig();
-
-	rad_const_free(radius_dir);
+	main_config_free();
 
 	if (memory_report) {
 		INFO("Allocated memory at time of report:");
-		log_talloc_report(NULL);
+		fr_log_talloc_report(NULL);
 	}
 
 	return rcode;

@@ -97,39 +97,44 @@ void fr_request_from_reply(RADIUS_PACKET *request,
 	request->dst_ipaddr = reply->src_ipaddr;
 }
 
-
-int fr_nonblock(UNUSED int fd)
-{
-	int flags = 0;
-
 #ifdef O_NONBLOCK
+int fr_nonblock(int fd)
+{
+	int flags;
 
 	flags = fcntl(fd, F_GETFL, NULL);
-	if (flags >= 0) {
-		flags |= O_NONBLOCK;
-		return fcntl(fd, F_SETFL, flags);
+	if (flags < 0)  {
+		fr_strerror_printf("Failure getting socket flags: %s", fr_syserror(errno));
+		return -1;
 	}
-#endif
+
+	flags |= O_NONBLOCK;
+	if (fcntl(fd, F_SETFL, flags) < 0) {
+		fr_strerror_printf("Failure setting socket flags: %s", fr_syserror(errno));
+		return -1;
+	}
+
 	return flags;
 }
+#else
+int fr_nonblock(UNUSED int fd)
+{
+	return 0;
+}
+#endif
 
 /*
  *	Open a socket on the given IP and port.
  */
-int fr_socket(fr_ipaddr_t *ipaddr, int port)
+int fr_socket(fr_ipaddr_t *ipaddr, uint16_t port)
 {
 	int sockfd;
 	struct sockaddr_storage salocal;
 	socklen_t	salen;
 
-	if ((port < 0) || (port > 65535)) {
-		fr_strerror_printf("Port %d is out of allowed bounds", port);
-		return -1;
-	}
-
 	sockfd = socket(ipaddr->af, SOCK_DGRAM, 0);
 	if (sockfd < 0) {
-		fr_strerror_printf("cannot open socket: %s", strerror(errno));
+		fr_strerror_printf("cannot open socket: %s", fr_syserror(errno));
 		return sockfd;
 	}
 
@@ -139,7 +144,7 @@ int fr_socket(fr_ipaddr_t *ipaddr, int port)
 	 */
 	if (udpfromto_init(sockfd) != 0) {
 		close(sockfd);
-		fr_strerror_printf("cannot initialize udpfromto: %s", strerror(errno));
+		fr_strerror_printf("cannot initialize udpfromto: %s", fr_syserror(errno));
 		return -1;
 	}
 #endif
@@ -166,7 +171,7 @@ int fr_socket(fr_ipaddr_t *ipaddr, int port)
 				close(sockfd);
 				fr_strerror_printf("Failed setting sockopt "
 						   "IPPROTO_IPV6 - IPV6_V6ONLY"
-						   ": %s", strerror(errno));
+						   ": %s", fr_syserror(errno));
 				return -1;
 			}
 		}
@@ -189,7 +194,7 @@ int fr_socket(fr_ipaddr_t *ipaddr, int port)
 			close(sockfd);
 			fr_strerror_printf("Failed setting sockopt "
 					   "IPPROTO_IP - IP_MTU_DISCOVER: %s",
-					   strerror(errno));
+					   fr_syserror(errno));
 			return -1;
 		}
 #endif
@@ -204,7 +209,7 @@ int fr_socket(fr_ipaddr_t *ipaddr, int port)
 			close(sockfd);
 			fr_strerror_printf("Failed setting sockopt "
 					   "IPPROTO_IP - IP_DONTFRAG: %s",
-					   strerror(errno));
+					   fr_syserror(errno));
 			return -1;
 		}
 #endif
@@ -212,7 +217,7 @@ int fr_socket(fr_ipaddr_t *ipaddr, int port)
 
 	if (bind(sockfd, (struct sockaddr *) &salocal, salen) < 0) {
 		close(sockfd);
-		fr_strerror_printf("cannot bind socket: %s", strerror(errno));
+		fr_strerror_printf("cannot bind socket: %s", fr_syserror(errno));
 		return -1;
 	}
 
@@ -227,17 +232,17 @@ typedef struct fr_packet_socket_t {
 	int		sockfd;
 	void		*ctx;
 
-	int		num_outgoing;
+	uint32_t	num_outgoing;
 
 	int		src_any;
 	fr_ipaddr_t	src_ipaddr;
-	int		src_port;
+	uint16_t	src_port;
 
 	int		dst_any;
 	fr_ipaddr_t	dst_ipaddr;
-	int		dst_port;
+	uint16_t	dst_port;
 
-	int		dont_use;
+	bool		dont_use;
 
 #ifdef WITH_TCP
 	int		proto;
@@ -262,7 +267,7 @@ struct fr_packet_list_t {
 	rbtree_t	*tree;
 
 	int		alloc_id;
-	int		num_outgoing;
+	uint32_t	num_outgoing;
 	int		last_recv;
 	int		num_sockets;
 
@@ -304,7 +309,7 @@ bool fr_packet_list_socket_freeze(fr_packet_list_t *pl, int sockfd)
 		return false;
 	}
 
-	ps->dont_use = 1;
+	ps->dont_use = true;
 	return true;
 }
 
@@ -317,7 +322,7 @@ bool fr_packet_list_socket_thaw(fr_packet_list_t *pl, int sockfd)
 	ps = fr_socket_find(pl, sockfd);
 	if (!ps) return false;
 
-	ps->dont_use = 0;
+	ps->dont_use = false;
 	return true;
 }
 
@@ -331,7 +336,10 @@ bool fr_packet_list_socket_del(fr_packet_list_t *pl, int sockfd)
 	ps = fr_socket_find(pl, sockfd);
 	if (!ps) return false;
 
-	if (ps->num_outgoing != 0) return false;
+	if (ps->num_outgoing != 0) {
+		fr_strerror_printf("socket is still in use");
+		return false;
+	}
 
 	ps->sockfd = -1;
 	pl->num_sockets--;
@@ -341,7 +349,7 @@ bool fr_packet_list_socket_del(fr_packet_list_t *pl, int sockfd)
 
 
 bool fr_packet_list_socket_add(fr_packet_list_t *pl, int sockfd, int proto,
-			      fr_ipaddr_t *dst_ipaddr, int dst_port,
+			      fr_ipaddr_t *dst_ipaddr, uint16_t dst_port,
 			      void *ctx)
 {
 	int i, start;
@@ -400,7 +408,7 @@ bool fr_packet_list_socket_add(fr_packet_list_t *pl, int sockfd, int proto,
 	memset(&src, 0, sizeof_src);
 	if (getsockname(sockfd, (struct sockaddr *) &src,
 			&sizeof_src) < 0) {
-		fr_strerror_printf("%s", strerror(errno));
+		fr_strerror_printf("%s", fr_syserror(errno));
 		return false;
 	}
 
@@ -555,7 +563,7 @@ bool fr_packet_list_yank(fr_packet_list_t *pl, RADIUS_PACKET *request)
 	return true;
 }
 
-int fr_packet_list_num_elements(fr_packet_list_t *pl)
+uint32_t fr_packet_list_num_elements(fr_packet_list_t *pl)
 {
 	if (!pl) return 0;
 
@@ -773,7 +781,7 @@ bool fr_packet_list_id_alloc(fr_packet_list_t *pl, int proto,
 	if (fr_packet_list_insert(pl, request_p)) {
 		if (pctx) *pctx = ps->ctx;
 		ps->num_outgoing++;
-		pl->num_outgoing++;		
+		pl->num_outgoing++;
 		return true;
 	}
 
@@ -821,23 +829,24 @@ bool fr_packet_list_id_free(fr_packet_list_t *pl,
 	pl->num_outgoing--;
 
 	request->id = -1;
+	request->src_ipaddr.af = AF_UNSPEC; /* id_alloc checks this */
+	request->src_port = 0;
 
 	return true;
 }
 
 /*
- *	We always walk DeleteOrder, which is like InOrder, except that
+ *	We always walk RBTREE_DELETE_ORDER, which is like RBTREE_IN_ORDER, except that
  *	<0 means error, stop
  *	0  means OK, continue
  *	1  means delete current node and stop
  *	2  means delete current node and continue
  */
-int fr_packet_list_walk(fr_packet_list_t *pl, void *ctx,
-			fr_hash_table_walk_t callback)
+int fr_packet_list_walk(fr_packet_list_t *pl, void *ctx, rb_walker_t callback)
 {
 	if (!pl || !callback) return 0;
 
-	return rbtree_walk(pl->tree, DeleteOrder, callback, ctx);
+	return rbtree_walk(pl->tree, RBTREE_DELETE_ORDER, callback, ctx);
 }
 
 int fr_packet_list_fd_set(fr_packet_list_t *pl, fd_set *set)
@@ -903,9 +912,9 @@ RADIUS_PACKET *fr_packet_list_recv(fr_packet_list_t *pl, fd_set *set)
 	return NULL;
 }
 
-int fr_packet_list_num_incoming(fr_packet_list_t *pl)
+uint32_t fr_packet_list_num_incoming(fr_packet_list_t *pl)
 {
-	int num_elements;
+	uint32_t num_elements;
 
 	if (!pl) return 0;
 
@@ -915,7 +924,7 @@ int fr_packet_list_num_incoming(fr_packet_list_t *pl)
 	return num_elements - pl->num_outgoing;
 }
 
-int fr_packet_list_num_outgoing(fr_packet_list_t *pl)
+uint32_t fr_packet_list_num_outgoing(fr_packet_list_t *pl)
 {
 	if (!pl) return 0;
 

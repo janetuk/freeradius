@@ -100,7 +100,7 @@
 #  define LD_LIBRARY_PATH_LOCAL		LD_LIBRARY_PATH
 #endif
 
-#if defined(sun)
+#if defined(__sun)
 #  define SHELL_CMD			"/bin/sh"
 #  define DYNAMIC_LIB_EXT		"so"
 #  define MODULE_LIB_EXT		"so"
@@ -109,7 +109,7 @@
 #  define LIBRARIAN			"ar"
 #  define LIBRARIAN_OPTS		"cr"
 #  define RANLIB			"ranlib"
-#  define PIC_FLAG			"-KPIC"
+#  define PIC_FLAG			"-fPIC"
 #  define RPATH				"-R"
 #  define SHARED_OPTS			"-G"
 #  define MODULE_OPTS			"-G"
@@ -396,9 +396,9 @@ static int snprintf(char *str, size_t n, char const *fmt, ...)
 	va_list ap;
 	int res;
 
-	va_start( ap, fmt );
-	res = vsnprintf( str, n, fmt, ap );
-	va_end( ap );
+	va_start(ap, fmt);
+	res = vsnprintf(str, n, fmt, ap);
+	va_end(ap);
 	return res;
 }
 #endif
@@ -580,12 +580,26 @@ static int external_spawn(command_t *cmd, char const *file, char const **argv)
 			return execvp(argv[0], (char**)argv);
 		}
 		else {
-			int statuscode;
-			waitpid(pid, &statuscode, 0);
-			if (WIFEXITED(statuscode)) {
-				return WEXITSTATUS(statuscode);
+			int status;
+			waitpid(pid, &status, 0);
+
+			/*
+			 *	Exited via exit(status)
+			 */
+			if (WIFEXITED(status)) {
+				return WEXITSTATUS(status);
 			}
-			return 0;
+
+#ifdef WTERMSIG
+			if (WIFSIGNALED(status)) {
+				return WTERMSIG(status);
+			}
+#endif
+
+			/*
+			 *	Some other failure.
+			 */
+			return 1;
 		}
 	}
 #endif

@@ -25,16 +25,31 @@ export DESTDIR := $(R)
 include scripts/boiler.mk
 
 #
+#  To work around OpenSSL issues with travis.
+#
+.PHONY:
+raddb/test.conf:
+	@echo 'security {' >> $@
+	@echo '        allow_vulnerable_openssl = yes' >> $@
+	@echo '}' >> $@
+	@echo '$$INCLUDE radiusd.conf' >> $@
+
+#
 #  Run "radiusd -C", looking for errors.
 #
-$(BUILD_DIR)/tests/radiusd-c: ${BUILD_DIR}/bin/radiusd | build.raddb
+# Only redirect STDOUT, which should contain details of why the test failed.
+# Don't molest STDERR as this may be used to receive output from a debugger.
+$(BUILD_DIR)/tests/radiusd-c: raddb/test.conf ${BUILD_DIR}/bin/radiusd | build.raddb
 	@$(MAKE) -C raddb/certs
-	@if ! ./build/make/jlibtool --mode=execute ./build/bin/radiusd -XCMd ./raddb -n debug -D ./share > $(BUILD_DIR)/tests/radiusd.config.log 2>&1; then \
+	@printf "radiusd -C... "
+	@if ! ./build/make/jlibtool --mode=execute ./build/bin/radiusd -XCMd ./raddb -D ./share -n test > $(BUILD_DIR)/tests/radiusd.config.log; then \
+		@rm -f raddb/test.conf; \
 		cat $(BUILD_DIR)/tests/radiusd.config.log; \
-		echo "FAIL: radiusd -C"; \
+		echo "fail"; \
 		exit 1; \
 	fi
-	@echo "OK: radiusd -C"
+	@rm -f raddb/test.conf
+	@echo "ok"
 	@touch $@
 
 test: ${BUILD_DIR}/bin/radiusd ${BUILD_DIR}/bin/radclient tests.unit tests.keywords $(BUILD_DIR)/tests/radiusd-c | build.raddb
@@ -43,8 +58,12 @@ test: ${BUILD_DIR}/bin/radiusd ${BUILD_DIR}/bin/radclient tests.unit tests.keywo
 #  Tests specifically for Travis.  We do a LOT more than just
 #  the above tests
 ifneq "$(findstring travis,${prefix})" ""
-travis-test: test
+travis-test: raddb/test.conf test
+	@./build/make/jlibtool --mode=execute ./build/bin/radiusd -xxxv -n test
+	@rm -f raddb/test.conf
 	@$(MAKE) install
+	@perl -p -i -e 's/allow_vulnerable_openssl = no/allow_vulnerable_openssl = yes/' ${raddbdir}/radiusd.conf
+	@${sbindir}/radiusd -XC
 	@$(MAKE) deb
 endif
 
@@ -195,7 +214,7 @@ CONFIGURE_ARGS	   := $(shell head -10 config.log | grep '^  \$$' | sed 's/^..../
 src/%all.mk: src/%all.mk.in src/%configure
 	@echo CONFIGURE $(dir $@)
 	@rm -f ./config.cache $(dir $<)/config.cache
-	@cd $(dir $<) && CPPFLAGS=$(DARWIN_CFLAGS) CFLAGS=$(DARWIN_CFLAGS) ./configure $(CONFIGURE_ARGS)
+	@cd $(dir $<) && ./configure $(CONFIGURE_ARGS)
 endif
 
 .PHONY: check-includes
@@ -211,7 +230,7 @@ TAGS:
 #
 .PHONY: certs
 certs:
-	@cd raddb/certs && $(MAKE)
+	@$(MAKE) -C raddb/certs
 
 ######################################################################
 #
@@ -279,3 +298,12 @@ deb:
 warnings:
 	@(make clean all 2>&1) | egrep -v '^/|deprecated|^In file included|: In function|   from |^HEADER|^CC|^LINK' > warnings.txt
 	@wc -l warnings.txt
+
+#
+#  Ensure we're using tabs in the configuration files,
+#  and remove trailing whitespace in source files.
+#
+.PHONY: whitespace
+whitespace:
+	@for x in $$(git ls-files raddb/ src/); do unexpand $$x > $$x.bak; cp $$x.bak $$x; rm -f $$x.bak;done
+	@perl -p -i -e 'trim' $$(git ls-files src/)

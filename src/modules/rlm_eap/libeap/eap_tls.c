@@ -110,6 +110,7 @@ tls_session_t *eaptls_session(fr_tls_server_conf_t *tls_conf, eap_handler_t *han
 	SSL_set_ex_data(ssn->ssl, FR_TLS_EX_INDEX_STORE, (void *)tls_conf->ocsp_store);
 #endif
 	SSL_set_ex_data(ssn->ssl, FR_TLS_EX_INDEX_SSN, (void *)ssn);
+	SSL_set_ex_data(ssn->ssl, FR_TLS_EX_INDEX_TALLOC, (void *)tls_conf);
 
 	return talloc_steal(handler, ssn); /* ssn */
 }
@@ -519,7 +520,7 @@ static EAPTLS_PACKET *eaptls_extract(REQUEST *request, EAP_DS *eap_ds, fr_tls_st
 		memcpy(&data_len, &eap_ds->response->type.data[1], 4);
 		data_len = ntohl(data_len);
 		if (data_len > MAX_RECORD_SIZE) {
-			RDEBUG("The EAP-TLS packet will contain more data than we can process.");
+			RDEBUG("The EAP-TLS packet will contain more data than we can process");
 			talloc_free(tlspacket);
 			return NULL;
 		}
@@ -528,7 +529,7 @@ static EAPTLS_PACKET *eaptls_extract(REQUEST *request, EAP_DS *eap_ds, fr_tls_st
 		DEBUG2(" TLS: %d %d\n", data_len, tlspacket->length);
 
 		if (data_len < tlspacket->length) {
-			RDEBUG("EAP-TLS packet claims to be smaller than the encapsulating EAP packet.");
+			RDEBUG("EAP-TLS packet claims to be smaller than the encapsulating EAP packet");
 			talloc_free(tlspacket);
 			return NULL;
 		}
@@ -656,7 +657,7 @@ static fr_tls_status_t eaptls_operation(fr_tls_status_t status,
 	 */
 	if (!tls_handshake_recv(handler->request, tls_session)) {
 		DEBUG2("TLS receive handshake failed during operation");
-		eaptls_fail(handler, tls_session->peap_flag);
+		tls_fail(tls_session);
 		return FR_TLS_FAIL;
 	}
 
@@ -827,7 +828,7 @@ fr_tls_status_t eaptls_process(eap_handler_t *handler)
 		 */
 		if ((status == FR_TLS_MORE_FRAGMENTS) ||
 		    (status == FR_TLS_MORE_FRAGMENTS_WITH_LENGTH) ||
-	    	    (status == FR_TLS_FIRST_FRAGMENT)) {
+		    (status == FR_TLS_FIRST_FRAGMENT)) {
 			/*
 			 *	Send the ACK.
 			 */
@@ -974,7 +975,7 @@ fr_tls_server_conf_t *eaptls_conf_parse(CONF_SECTION *cs, char const *attr)
 	 *	The EAP RFC's say 1020, but we're less picky.
 	 */
 	if (tls_conf->fragment_size < 100) {
-		ERROR("Fragment size is too small.");
+		ERROR("Fragment size is too small");
 		return NULL;
 	}
 
@@ -985,7 +986,7 @@ fr_tls_server_conf_t *eaptls_conf_parse(CONF_SECTION *cs, char const *attr)
 	 *	that can be devoted *solely* to EAP.
 	 */
 	if (tls_conf->fragment_size > 4000) {
-		ERROR("Fragment size is too large.");
+		ERROR("Fragment size is too large");
 		return NULL;
 	}
 

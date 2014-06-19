@@ -31,12 +31,12 @@ RCSID("$Id$")
  *	going to return.
  */
 typedef struct rlm_sometimes_t {
-	char			*rcode_str;
-	int			rcode;
-	int			start;
-	int			end;
-	char			*key;
-	DICT_ATTR const		*da;
+	char const	*rcode_str;
+	rlm_rcode_t	rcode;
+	uint32_t	start;
+	uint32_t	end;
+	char const	*key;
+	DICT_ATTR const	*da;
 } rlm_sometimes_t;
 
 /*
@@ -49,10 +49,10 @@ typedef struct rlm_sometimes_t {
  *	buffer over-flows.
  */
 static const CONF_PARSER module_config[] = {
-	{ "rcode",      PW_TYPE_STRING_PTR, offsetof(rlm_sometimes_t,rcode_str), NULL, "fail" },
-	{ "key", PW_TYPE_STRING_PTR | PW_TYPE_ATTRIBUTE,    offsetof(rlm_sometimes_t,key), NULL, "User-Name" },
-	{ "start", PW_TYPE_INTEGER,    offsetof(rlm_sometimes_t,start), NULL, "0" },
-	{ "end", PW_TYPE_INTEGER,    offsetof(rlm_sometimes_t,end), NULL, "127" },
+	{ "rcode", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_sometimes_t, rcode_str), "fail" },
+	{ "key", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_ATTRIBUTE, rlm_sometimes_t, key), "User-Name" },
+	{ "start", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_sometimes_t, start), "0" },
+	{ "end", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_sometimes_t, end), "127" },
 
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
@@ -67,8 +67,8 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	/*
 	 *	Convert the rcode string to an int, and get rid of it
 	 */
-	inst->rcode = fr_str2int(mod_rcode_table, inst->rcode_str, -1);
-	if (inst->rcode == -1) {
+	inst->rcode = fr_str2int(mod_rcode_table, inst->rcode_str, RLM_MODULE_UNKNOWN);
+	if (inst->rcode == RLM_MODULE_UNKNOWN) {
 		cf_log_err_cs(conf, "Unknown module return code '%s'", inst->rcode_str);
 		return -1;
 	}
@@ -82,11 +82,10 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 /*
  *	A lie!  It always returns!
  */
-static rlm_rcode_t sometimes_return(void *instance, RADIUS_PACKET *packet,
-				    RADIUS_PACKET *reply)
+static rlm_rcode_t sometimes_return(void *instance, RADIUS_PACKET *packet, RADIUS_PACKET *reply)
 {
 	uint32_t hash;
-	int value;
+	uint32_t value;
 	rlm_sometimes_t *inst = instance;
 	VALUE_PAIR *vp;
 
@@ -119,20 +118,20 @@ static rlm_rcode_t sometimes_return(void *instance, RADIUS_PACKET *packet,
 	 */
 	if ((inst->rcode == RLM_MODULE_HANDLED) && reply) {
 		switch (packet->code) {
-		case PW_AUTHENTICATION_REQUEST:
-			reply->code = PW_AUTHENTICATION_ACK;
+		case PW_CODE_AUTHENTICATION_REQUEST:
+			reply->code = PW_CODE_AUTHENTICATION_ACK;
 			break;
 
-		case PW_ACCOUNTING_REQUEST:
-			reply->code = PW_ACCOUNTING_RESPONSE;
+		case PW_CODE_ACCOUNTING_REQUEST:
+			reply->code = PW_CODE_ACCOUNTING_RESPONSE;
 			break;
 
-		case PW_COA_REQUEST:
-			reply->code = PW_COA_ACK;
+		case PW_CODE_COA_REQUEST:
+			reply->code = PW_CODE_COA_ACK;
 			break;
 
-		case PW_DISCONNECT_REQUEST:
-			reply->code = PW_DISCONNECT_ACK;
+		case PW_CODE_DISCONNECT_REQUEST:
+			reply->code = PW_CODE_DISCONNECT_ACK;
 			break;
 
 		default:
@@ -143,25 +142,25 @@ static rlm_rcode_t sometimes_return(void *instance, RADIUS_PACKET *packet,
 	return inst->rcode;
 }
 
-static rlm_rcode_t sometimes_packet(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_sometimes_packet(void *instance, REQUEST *request)
 {
 	return sometimes_return(instance, request->packet, request->reply);
 }
 
-static rlm_rcode_t sometimes_reply(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_sometimes_reply(void *instance, REQUEST *request)
 {
 	return sometimes_return(instance, request->reply, NULL);
 }
 
 #ifdef WITH_PROXY
-static rlm_rcode_t mod_pre_proxy(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_pre_proxy(void *instance, REQUEST *request)
 {
 	if (!request->proxy) return RLM_MODULE_NOOP;
 
 	return sometimes_return(instance, request->proxy, request->proxy_reply);
 }
 
-static rlm_rcode_t mod_post_proxy(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_post_proxy(void *instance, REQUEST *request)
 {
 	if (!request->proxy_reply) return RLM_MODULE_NOOP;
 
@@ -172,28 +171,28 @@ static rlm_rcode_t mod_post_proxy(void *instance, REQUEST *request)
 module_t rlm_sometimes = {
 	RLM_MODULE_INIT,
 	"sometimes",
-	RLM_TYPE_CHECK_CONFIG_SAFE | RLM_TYPE_HUP_SAFE,   	/* type */
+	RLM_TYPE_HUP_SAFE,   	/* type */
 	sizeof(rlm_sometimes_t),
 	module_config,
 	mod_instantiate,		/* instantiation */
 	NULL,				/* detach */
 	{
-		sometimes_packet,	/* authentication */
-		sometimes_packet,	/* authorization */
-		sometimes_packet,	/* preaccounting */
-		sometimes_packet,	/* accounting */
+		mod_sometimes_packet,	/* authentication */
+		mod_sometimes_packet,	/* authorization */
+		mod_sometimes_packet,	/* preaccounting */
+		mod_sometimes_packet,	/* accounting */
 		NULL,
 #ifdef WITH_PROXY
-		mod_pre_proxy,	/* pre-proxy */
-		mod_post_proxy,	/* post-proxy */
+		mod_pre_proxy,		/* pre-proxy */
+		mod_post_proxy,		/* post-proxy */
 #else
 		NULL, NULL,
 #endif
-		sometimes_reply		/* post-auth */
+		mod_sometimes_reply	/* post-auth */
 #ifdef WITH_COA
 		,
-		sometimes_packet,	/* recv-coa */
-		sometimes_reply		/* send-coa */
+		mod_sometimes_packet,	/* recv-coa */
+		mod_sometimes_reply	/* send-coa */
 #endif
 	},
 };

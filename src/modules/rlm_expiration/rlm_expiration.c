@@ -31,7 +31,7 @@ RCSID("$Id$")
 /*
  *      Check if account has expired, and if user may login now.
  */
-static rlm_rcode_t mod_authorize(UNUSED void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, REQUEST *request)
 {
 	VALUE_PAIR *vp, *check_item = NULL;
 
@@ -63,7 +63,7 @@ static rlm_rcode_t mod_authorize(UNUSED void *instance, REQUEST *request)
 		 */
 		vp = pairfind(request->reply->vps, PW_SESSION_TIMEOUT, 0, TAG_ANY);
 		if (!vp) {
-			vp = radius_paircreate(request, &request->reply->vps, PW_SESSION_TIMEOUT, 0);
+			vp = radius_paircreate(request->reply, &request->reply->vps, PW_SESSION_TIMEOUT, 0);
 			vp->vp_date = (uint32_t) (((time_t) check_item->vp_date) - request->timestamp);
 		} else if (vp->vp_date > ((uint32_t) (((time_t) check_item->vp_date) - request->timestamp))) {
 			vp->vp_date = (uint32_t) (((time_t) check_item->vp_date) - request->timestamp);

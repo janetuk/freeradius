@@ -66,13 +66,13 @@ typedef enum fr_cond_type_t {
 struct fr_cond_t {
 	fr_cond_type_t	type;
 
+	CONF_ITEM const *ci;
 	union {
 		value_pair_map_t *map;
 		value_pair_tmpl_t *vpt;
 		fr_cond_t  	*child;
 	} data;
 
-	int		regex_i;
 	int		negate;
 	int		pass2_fixup;
 
@@ -106,7 +106,6 @@ bool fr_condition_walk(fr_cond_t *head, bool (*callback)(void *, fr_cond_t *), v
 /*
  *	In xlat.c for now
  */
-typedef struct xlat_exp xlat_exp_t;
 ssize_t xlat_tokenize(TALLOC_CTX *ctx, char *fmt, xlat_exp_t **head,
 		      char const **error);
 size_t xlat_sprint(char *buffer, size_t bufsize, xlat_exp_t const *node);

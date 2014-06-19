@@ -28,21 +28,16 @@ RCSID("$Id$")
 #include <sys/un.h>
 
 typedef struct rlm_smsotp_t {
-	char		*socket;
-	char		*challenge;
-	char		*authtype;
+	char const	*socket;
+	char const	*challenge;
+	char const	*authtype;
 	fr_connection_pool_t *pool;
 } rlm_smsotp_t;
 
 static const CONF_PARSER module_config[] = {
-	{ "socket", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_smsotp_t, socket),
-	  NULL, "/var/run/smsotp_socket" },
-	{ "challenge_message", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_smsotp_t, challenge), NULL, "Enter Mobile PIN" },
-	{ "challenge_type", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_smsotp_t, authtype),
-	  NULL, "smsotp-reply" },
+	{ "socket", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_smsotp_t, socket), "/var/run/smsotp_socket" },
+	{ "challenge_message", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_smsotp_t, challenge), "Enter Mobile PIN" },
+	{ "challenge_type", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_smsotp_t, authtype), "smsotp-reply" },
 
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
@@ -62,13 +57,13 @@ static void *mod_conn_create(void *instance)
 	fd = socket(PF_UNIX, SOCK_STREAM, 0);
 	if (fd < 0) {
 		ERROR("Failed opening SMSOTP file %s: %s",
-		       inst->socket, strerror(errno));
+		       inst->socket, fr_syserror(errno));
 		return NULL;
 	}
 
 	if (connect(fd, (struct sockaddr *) &sa, socklen) < -1) {
 		ERROR("Failed connecting to SMSOTP file %s: %s",
-		       inst->socket, strerror(errno));
+		       inst->socket, fr_syserror(errno));
 		return NULL;
 	}
 
@@ -192,7 +187,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 /*
  *	Authenticate the user with the given password.
  */
-static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *request)
 {
 	rlm_smsotp_t *inst = instance;
 	VALUE_PAIR *state;
@@ -203,10 +198,7 @@ static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
 	char output[1000];
 
 	fdp = fr_connection_get(inst->pool);
-	if (!fdp) {
-		REDEBUG("Failed to get handle from connection pool");
-		return RLM_MODULE_FAIL;
-	}
+	if (!fdp) return RLM_MODULE_FAIL;
 
 	/* Get greeting */
 	bufsize = read_all(fdp, buffer, sizeof(buffer));
@@ -220,7 +212,7 @@ static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
 	 */
 #define WRITE_ALL(_a,_b,_c) if (write_all(_a,_b,_c) < 0) goto done;
 	state = pairfind(request->packet->vps, PW_STATE, 0, TAG_ANY);
-	if (!state) {
+	if (state) {
 		RDEBUG("Found reply to access challenge");
 
 		/* send username */
@@ -228,26 +220,26 @@ static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
 			 request->username->vp_strvalue);
 		WRITE_ALL(fdp, output, strlen(output));
 
-		bufsize = read_all(fdp, buffer, sizeof(buffer));
+		(void) read_all(fdp, buffer, sizeof(buffer));
 
 		/* send password */
 		snprintf(output, sizeof(output), "user otp is %s\n",
 			 request->password->vp_strvalue);
 		WRITE_ALL(fdp, output, strlen(output));
 
-		bufsize = read_all(fdp, buffer, sizeof(buffer));
+		(void) read_all(fdp, buffer, sizeof(buffer));
 
 		/* set uuid */
 		snprintf(output, sizeof(output), "otp id is %s\n",
 			 state->vp_strvalue);
 		WRITE_ALL(fdp, output, strlen(output));
 
-		bufsize = read_all(fdp, buffer, sizeof(buffer));
+		(void) read_all(fdp, buffer, sizeof(buffer));
 
 		/* now check the otp */
 		WRITE_ALL(fdp, "get check result\n", 17);
 
-		bufsize = read_all(fdp, buffer, sizeof(buffer));
+		(void) read_all(fdp, buffer, sizeof(buffer));
 
 		/* end the sesssion */
 		WRITE_ALL(fdp, "quit\n", 5);
@@ -267,7 +259,7 @@ static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
 		 request->username->vp_strvalue);
 	WRITE_ALL(fdp, output, strlen(output));
 
-	bufsize = read_all(fdp, buffer, sizeof(buffer));
+	(void) read_all(fdp, buffer, sizeof(buffer));
 
 	/* end the sesssion */
 	WRITE_ALL(fdp, "quit\n", 5);
@@ -291,8 +283,8 @@ static rlm_rcode_t mod_authenticate(void *instance, REQUEST *request)
 	 *
 	 *  The server will take care of sending it to the user.
 	 */
-	request->reply->code = PW_ACCESS_CHALLENGE;
-	DEBUG("rlm_smsotp: Sending Access-Challenge.");
+	request->reply->code = PW_CODE_ACCESS_CHALLENGE;
+	DEBUG("rlm_smsotp: Sending Access-Challenge");
 
 	rcode = RLM_MODULE_HANDLED;
 
@@ -307,7 +299,7 @@ done:
  *	from the database. The authentication code only needs to check
  *	the password, the rest is done here.
  */
-static rlm_rcode_t mod_authorize(UNUSED void *instance, UNUSED REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, UNUSED REQUEST *request)
 {
 	VALUE_PAIR *state;
 	rlm_smsotp_t *inst = instance;

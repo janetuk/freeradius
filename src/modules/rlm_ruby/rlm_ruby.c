@@ -68,8 +68,8 @@ typedef struct rlm_ruby_t {
 #endif
 	RLM_RUBY_STRUCT(detach);
 
-	char *filename;
-	char *module_name;
+	char const *filename;
+	char const *module_name;
 	VALUE module;
 
 } rlm_ruby_t;
@@ -84,11 +84,9 @@ typedef struct rlm_ruby_t {
  *	buffer over-flows.
  */
 static const CONF_PARSER module_config[] = {
-	{ "filename", PW_TYPE_FILE_INPUT | PW_TYPE_REQUIRED,
-	  offsetof(struct rlm_ruby_t, filename), NULL, NULL},
-	{ "module", PW_TYPE_STRING_PTR,
-	  offsetof(struct rlm_ruby_t, module_name), NULL, "Radiusd"},
-	{ NULL, -1, 0, NULL, NULL} /* end of module_config */
+	{ "filename", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT | PW_TYPE_REQUIRED, struct rlm_ruby_t, filename), NULL },
+	{ "module", FR_CONF_OFFSET(PW_TYPE_STRING, struct rlm_ruby_t, module_name), "Radiusd" },
+	{ NULL, -1, 0, NULL, NULL } /* end of module_config */
 };
 
 
@@ -194,8 +192,9 @@ static void add_vp_tuple(TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR **vpp, VA
  */
 
 #define BUF_SIZE 1024
-static rlm_rcode_t do_ruby(REQUEST *request, unsigned long func,
-			   VALUE module, char const *function_name) {
+static rlm_rcode_t CC_HINT(nonnull (4)) do_ruby(REQUEST *request, unsigned long func,
+						VALUE module, char const *function_name)
+{
 	rlm_rcode_t rcode = RLM_MODULE_OK;
 	vp_cursor_t cursor;
 
@@ -215,25 +214,24 @@ static rlm_rcode_t do_ruby(REQUEST *request, unsigned long func,
 	}
 
 	n_tuple = 0;
-
 	if (request) {
-		for (vp = paircursor(&cursor, &request->packet->vps);
+		for (vp = fr_cursor_init(&cursor, &request->packet->vps);
 		     vp;
-		     vp = pairnext(&cursor)) {
-		 	 n_tuple++;
+		     vp = fr_cursor_next(&cursor)) {
+			 n_tuple++;
 		}
 	}
-
 
 	/*
 	  Creating ruby array, that contains arrays of [name,value]
 	  Maybe we should use hash instead? Can this names repeat?
 	*/
 	rb_request = rb_ary_new2(n_tuple);
+
 	if (request) {
-		for (vp = paircursor(&cursor, &request->packet->vps);
+		for (vp = fr_cursor_init(&cursor, &request->packet->vps);
 		     vp;
-		     vp = pairnext(&cursor)) {
+		     vp = fr_cursor_next(&cursor)) {
 			VALUE tmp = rb_ary_new2(2);
 
 			/* The name. logic from vp_prints, lib/print.c */
@@ -262,8 +260,7 @@ static rlm_rcode_t do_ruby(REQUEST *request, unsigned long func,
 	 */
 	if (TYPE(rb_result) == T_ARRAY) {
 		if (!FIXNUM_P(rb_ary_entry(rb_result, 0))) {
-			REDEBUG("First element of an array was not a "
-				"FIXNUM (Which has to be a return_value)");
+			ERROR("First element of an array was not a FIXNUM (Which has to be a return_value)");
 
 			rcode = RLM_MODULE_FAIL;
 			goto finish;
@@ -365,7 +362,7 @@ static int mod_instantiate(UNUSED CONF_SECTION *conf, void *instance)
 	 */
 	module = inst->module = rb_define_module(inst->module_name);
 	if (!module) {
-		EDEBUG("Ruby rb_define_module failed");
+		ERROR("Ruby rb_define_module failed");
 
 		return -1;
 	}
@@ -385,7 +382,7 @@ static int mod_instantiate(UNUSED CONF_SECTION *conf, void *instance)
 	DEBUG("Loading file %s...", inst->filename);
 	rb_load_protect(rb_str_new2(inst->filename), 0, &status);
 	if (status) {
-		EDEBUG("Error loading file %s status: %d", inst->filename, status);
+		ERROR("Error loading file %s status: %d", inst->filename, status);
 
 		return -1;
 	}
@@ -417,7 +414,7 @@ static int mod_instantiate(UNUSED CONF_SECTION *conf, void *instance)
 	return do_ruby(NULL, inst->func_instantiate, inst->module, "instantiate");
 }
 
-#define RLM_RUBY_FUNC(foo) static rlm_rcode_t mod_##foo(void *instance, REQUEST *request) \
+#define RLM_RUBY_FUNC(foo) static rlm_rcode_t CC_HINT(nonnull) mod_##foo(void *instance, REQUEST *request) \
 	{ \
 		return do_ruby(request,	\
 			       ((struct rlm_ruby_t *)instance)->func_##foo,((struct rlm_ruby_t *)instance)->module, \

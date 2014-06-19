@@ -4,12 +4,6 @@
 #  $Id$
 #
 
-condition a == b
-data a == b
-
-condition a == b || c == d
-data a == b || c == d
-
 #
 #  A bunch of errors, in the order that the error strings
 #  appear in parser.c
@@ -32,70 +26,73 @@ data ERROR offset 11 No closing brace at end of string
 condition (|| b)
 data ERROR offset 1 Empty string is invalid
 
-condition ((a || b) foo)
-data ERROR offset 10 Unexpected text after condition
+condition ((ok || handled) foo)
+data ERROR offset 17 Unexpected text after condition
 
 # escapes in names are illegal
-condition (a\ foo || b)
-data ERROR offset 2 Unexpected escape
+condition (ok\ foo || handled)
+data ERROR offset 3 Unexpected escape
 
-condition (a FOO b)
-data ERROR offset 3 Invalid text. Expected comparison operator
+condition (ok FOO handled)
+data ERROR offset 4 Invalid text. Expected comparison operator
 
-condition (a !x b)
-data ERROR offset 3 Invalid operator
+condition (ok !x handled)
+data ERROR offset 4 Invalid operator
 
-condition (a =x b)
-data ERROR offset 3 Invalid operator
+condition (ok =x handled)
+data ERROR offset 4 Invalid operator
 
-condition (a =~ b)
-data ERROR offset 6 Expected regular expression
+condition (ok =~ handled)
+data ERROR offset 7 Expected regular expression
 
-condition (a == /b/)
-data ERROR offset 6 Unexpected regular expression
+condition (ok == /foo/)
+data ERROR offset 7 Unexpected regular expression
 
-condition (a == b"foo")
-data ERROR offset 7 Unexpected start of string
+condition (ok == handled"foo")
+data ERROR offset 14 Unexpected start of string
 
 # And now we have a bunch of VALID conditions we want to parse.
 
 # sillyness is OK
-condition ((((((a))))))
-data a
+condition ((((((ok))))))
+data ok
 
-condition (a == b)
-data a == b
+#
+#  Extra braces get squashed
+#
+condition (&User-Name == &User-Password)
+data &User-Name == &User-Password
 
-condition (!a)
-data !a
+condition (!ok)
+data !ok
 
-condition !(a)
-data !a
+condition !(ok)
+data !ok
 
-condition !!a
+condition !!ok
 data ERROR offset 1 Double negation is invalid
 
-condition !(!a)
-data a
+condition !(!ok)
+data ok
 
 #
 #  These next two are identical after normalization
 #
-condition (a == b || c == d)
-data a == b || c == d
+condition (&User-Name == &User-Password || &Filter-Id == &Reply-Message)
+data &User-Name == &User-Password || &Filter-Id == &Reply-Message
 
-condition ((a == b) || (c == d))
-data a == b || c == d
+condition ((&User-Name == &User-Password) || (&Filter-Id == &Reply-Message))
+data &User-Name == &User-Password || &Filter-Id == &Reply-Message
 
-condition (!(a == b) || (c == d))
-data !a == b || c == d
+condition (!(&User-Name == &User-Password) || (&Filter-Id == &Reply-Message))
+data !&User-Name == &User-Password || &Filter-Id == &Reply-Message
 
 #  different from the previous ones.
-condition (!((a == b) || (c == d)))
-data !(a == b || c == d)
+condition (!((&User-Name == &User-Password) || (&Filter-Id == &Reply-Message)))
+data !(&User-Name == &User-Password || &Filter-Id == &Reply-Message)
 
-condition (!(a == b) || (c == d))
-data !a == b || c == d
+condition (!(&User-Name == &User-Password) || (&Filter-Id == &Reply-Message))
+data !&User-Name == &User-Password || &Filter-Id == &Reply-Message
 
 condition ((a == b) || (c == d)))
 data ERROR offset 22 Unexpected closing brace
@@ -110,9 +107,6 @@ data handled && &Response-Packet-Type == Access-Challenge
 # and this, though it's not a good idea.
 condition handled &&&Response-Packet-Type == Access-Challenge
 data handled && &Response-Packet-Type == Access-Challenge
-
-condition (!(!foo))
-data foo
 
 condition /foo/ =~ bar
 data ERROR offset 0 Conditional check cannot begin with a regular expression
@@ -144,14 +138,14 @@ data foo =~ /bar/
 #
 #  Convert != to !(COND) for normal checks
 #
-condition foo == "bar"
-data foo == "bar"
+condition &User-Name == &User-Password
+data &User-Name == &User-Password
 
-condition foo != "bar"
-data !foo == "bar"
+condition &User-Name != &User-Password
+data !&User-Name == &User-Password
 
-condition !foo != "bar"
-data foo == "bar"
+condition !&User-Name != &User-Password
+data &User-Name == &User-Password
 
 condition <ipv6addr>foo
 data ERROR offset 0 Cannot do cast for existence check
@@ -168,11 +162,14 @@ data ERROR offset 21 Cannot cast to a different data type
 condition <ipaddr>Filter-Id == <blerg>&Framed-IP-Address
 data ERROR offset 22 Invalid data type in cast
 
+#
+#  Normalize things
+#
 condition <ipaddr>Filter-Id == "127.0.0.1"
-data <ipaddr>&Filter-Id == "127.0.0.1"
+data <ipaddr>&Filter-Id == '127.0.0.1'
 
 condition <ipaddr>127.0.0.1 < &Framed-IP-Address
-data <ipaddr>127.0.0.1 < &Framed-IP-Address
+data &Framed-IP-Address > 127.0.0.1
 
 # =* and !* are only for attrs / lists
 condition "foo" !* bar
@@ -222,13 +219,13 @@ condition Session-Timeout == '10'
 data ERROR offset 19 Value must be an unquoted string
 
 # Except for dates, which can be humanly readable!
-# This one MIGHT be an expansion, so it's left as-is.
-condition Event-Timestamp == "January 1, 2012"
-data &Event-Timestamp == "January 1, 2012"
+# This one is be an expansion, so it's left as-is.
+condition Event-Timestamp == "January 1, 2012 %{blah}"
+data &Event-Timestamp == "January 1, 2012 %{blah}"
 
 # This one is NOT an expansion, so it's parsed into normal form
 condition Event-Timestamp == 'January 1, 2012'
-#data &Event-Timestamp == "Jan  1 2012 00:00:00 EST"
+#data &Event-Timestamp == 'Jan  1 2012 00:00:00 EST'
 
 # literals are parsed when the conditions are parsed
 condition <integer>X == 1
@@ -237,11 +234,24 @@ data ERROR offset 9 Failed to parse field
 condition NAS-Port == X
 data ERROR offset 12 Failed to parse value for attribute
 
+#
+#  The RHS is a static string, so this gets mashed to a literal,
+#  and then statically evaluated.
+#
 condition <ipaddr>127.0.0.1 == "127.0.0.1"
-data <ipaddr>127.0.0.1 == "127.0.0.1"
+data true
+
+condition <ipaddr>127.0.0.1 == "%{sql: 127.0.0.1}"
+data <ipaddr>127.0.0.1 == "%{sql: 127.0.0.1}"
 
 condition <ether> 00:11:22:33:44:55 == "00:11:22:33:44:55"
-data <ether>00:11:22:33:44:55 == "00:11:22:33:44:55"
+data true
+
+condition <ether> 00:11:22:33:44:55 == "ff:11:22:33:44:55"
+data false
+
+condition <ether> 00:11:22:33:44:55 == "%{sql:00:11:22:33:44:55}"
+data <ether>00:11:22:33:44:55 == "%{sql:00:11:22:33:44:55}"
 
 condition <ether> 00:XX:22:33:44:55 == 00:11:22:33:44:55
 data ERROR offset 8 Failed to parse field
@@ -274,7 +284,192 @@ condition true || (User-Name == "bob")
 data true
 
 #
-#  Both sides literals: evaluate at parse time.
+#  Both sides static data with a cast: evaluate at parse time.
 #
 condition <integer>20 < 100
 data true
+
+#
+#  Both sides literal: evaluate at parse time
+#
+condition ('foo' == 'bar')
+data false
+
+condition ('foo' < 'bar')
+data false
+
+condition ('foo' > 'bar')
+data true
+
+condition ('foo' == 'foo')
+data true
+
+#
+#  Double-quotes strings without expansions are literals
+#
+condition ("foo" == "%{sql: foo}")
+data foo == "%{sql: foo}"
+
+condition ("foo bar" == "%{sql: foo}")
+data 'foo bar' == "%{sql: foo}"
+
+condition ("foo" == "bar")
+data false
+
+condition ("foo" == 'bar')
+data false
+
+#
+#  The RHS gets parsed as a VPT_TYPE_DATA, which is
+#  a double-quoted string
+#
+condition (&User-Name == "bob")
+data &User-Name == "bob"
+
+condition (&User-Name == "%{sql: blah}")
+data &User-Name == "%{sql: blah}"
+
+condition <ipaddr>127.0.0.1 == 2130706433
+data true
+
+# /32 suffix should be trimmed for this type
+condition <ipaddr>127.0.0.1/32 == 127.0.0.1
+data true
+
+condition <ipaddr>127.0.0.1/327 == 127.0.0.1
+data ERROR offset 8 Failed to parse field
+
+condition <ipaddr>127.0.0.1/32 == 127.0.0.1
+data true
+
+condition (/foo/)
+data ERROR offset 1 Conditional check cannot begin with a regular expression
+
+#
+#  Tests for (FOO).
+#
+condition (1)
+data true
+
+condition (0)
+data false
+
+condition (true)
+data true
+
+condition (false)
+data false
+
+condition ('')
+data false
+
+condition ("")
+data false
+
+#
+#  Integers are true, as are non-zero strings
+#
+condition (4)
+data true
+
+condition ('a')
+data true
+
+condition (a)
+data ERROR offset 1 Expected a module return code
+
+#
+#  Module return codes are OK
+#
+condition (ok)
+data ok
+
+condition (handled)
+data handled
+
+condition (fail)
+data fail
+
+condition ("a")
+data true
+
+condition (`a`)
+data `a`
+
+condition (User-name)
+data &User-Name
+
+#
+#  Forbidden data types in cast
+#
+condition (<vsa>"foo" == &User-Name)
+data ERROR offset 2 Forbidden data type in cast
+
+#
+#  Must have attribute references on the LHS of a condition.
+#
+condition ("foo" == &User-Name)
+data ERROR offset 1 Cannot use attribute reference on right side of condition
+
+#
+#  If the LHS is a cast to a type, and the RHS is an attribute
+#  of the same type, then re-write it so that the attribute
+#  is on the LHS of the condition.
+#
+condition <string>"foo" == &User-Name
+data &User-Name == "foo"
+
+condition <integer>"%{expr: 1 + 1}" < &NAS-Port
+data &NAS-Port > "%{expr: 1 + 1}"
+
+condition &Filter-Id == &Framed-IP-Address
+data ERROR offset 0 Attribute comparisons must be of the same data type
+
+condition <ipaddr>127.0.0.1 == &Filter-Id
+data ERROR offset 0 Attribute comparisons must be of the same data type
+
+condition <ipaddr>&Tmp-Integer64-0 == &Foo-Stuff-Bar
+data ERROR offset 0 Unknown attribute
+
+#
+#  Casting attributes of different size
+#
+condition <ipaddr>&Tmp-Integer64-0 == &Framed-IP-Address
+data ERROR offset 0 Cannot cast to attribute of incompatible size
+
+condition <ipaddr>&PMIP6-Home-IPv4-HoA == &Framed-IP-Address
+data ERROR offset 0 Cannot cast to attribute of incompatible size
+
+# but these are allowed
+condition <ether>&Tmp-Integer64-0 == "%{module: foo}"
+data <ether>&Tmp-Integer64-0 == "%{module: foo}"
+
+condition <ipaddr>&Filter-Id == &Framed-IP-Address
+data <ipaddr>&Filter-Id == &Framed-IP-Address
+
+condition <ipaddr>&Class == &Framed-IP-Address
+data <ipaddr>&Class == &Framed-IP-Address
+
+#
+#  Tags of zero mean restrict to attributes with no tag
+#
+condition &Tunnel-Password:0 == "Hello"
+data &Tunnel-Password:0 == "Hello"
+
+condition &Tunnel-Password:1 == "Hello"
+data &Tunnel-Password:1 == "Hello"
+
+#
+#  zero offset into arrays get parsed and ignored
+#
+condition &User-Name[0] == "bob"
+data &User-Name[0] == "bob"
+
+condition &User-Name[1] == "bob"
+data &User-Name[1] == "bob"
+
+condition &Tunnel-Password:1[0] == "Hello"
+data &Tunnel-Password:1[0] == "Hello"
+
+condition &Tunnel-Password:1[3] == "Hello"
+data &Tunnel-Password:1[3] == "Hello"

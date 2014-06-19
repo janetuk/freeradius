@@ -29,7 +29,7 @@ int tr_init(void)
 }
 
 static fr_tls_server_conf_t *construct_tls( TIDC_INSTANCE *inst,
-					    home_server *hs,
+					    home_server_t *hs,
 					    TID_SRVR_BLK *server)
 {
   fr_tls_server_conf_t *tls = talloc_zero( hs, fr_tls_server_conf_t);
@@ -86,7 +86,7 @@ static void tr_response_func( TIDC_INSTANCE *inst,
 			     UNUSED TID_REQ *req, TID_RESP *resp,
 			     void *cookie)
 {
-  home_server *hs = NULL;
+  home_server_t *hs = NULL;
   TID_SRVR_BLK *server;
   home_pool_t *pool = NULL;
   REALM *nr = NULL;
@@ -124,10 +124,9 @@ static void tr_response_func( TIDC_INSTANCE *inst,
   pool = home_pool_byname(home_pool_name, HOME_TYPE_AUTH);
   if (pool == NULL) {
     size_t i = 0;
-    pool = rad_malloc(sizeof(*pool) + num_servers *sizeof(home_server *));
+    pool = talloc_zero_size(NULL, sizeof(*pool) + num_servers *sizeof(home_server_t *));
 		  
     if (pool == NULL) goto error;
-    memset(pool, 0, sizeof(*pool));
     pool->type = HOME_POOL_CLIENT_PORT_BALANCE;
     pool->server_type = HOME_TYPE_AUTH;
     pool->name = strdup(home_pool_name);
@@ -147,9 +146,8 @@ static void tr_response_func( TIDC_INSTANCE *inst,
       } else {
 	char nametemp[INET_ADDRSTRLEN];
 	inet_ntop(home_server_ip.af, &home_server_ip.ipaddr, nametemp, sizeof(nametemp));
-	hs = talloc_zero(NULL, home_server);
+	hs = talloc_zero(pool, home_server_t);
 	if (!hs) return;
-	memset(hs, 0, sizeof(*hs));
 	hs->type = HOME_TYPE_AUTH;
 	hs->ipaddr = home_server_ip;
         hs->src_ipaddr.af = home_server_ip.af;

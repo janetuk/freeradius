@@ -121,23 +121,133 @@ int fr_utf8_char(uint8_t const *str)
 	return 0;
 }
 
-/*
- *	Convert a string to something printable.  The output string
- *	has to be larger than the input string by at least 5 bytes.
- *	If not, the output is silently truncated...
+/** Escape any non printable or non-UTF8 characters in the input string
+ *
+ * @param[in] in string to escape.
+ * @param[in] inlen length of string to escape (lets us deal with embedded NULLs)
+ * @param[out] out where to write the escaped string.
+ * @param[out] outlen the length of the buffer pointed to by out.
+ * @return the number of bytes written to the out buffer, or a number > outlen if truncation has occurred.
  */
 size_t fr_print_string(char const *in, size_t inlen, char *out, size_t outlen)
 {
-	char const	*start = out;
-	uint8_t const	*str = (uint8_t const *) in;
+	uint8_t const	*p = (uint8_t const *) in;
 	int		sp = 0;
+	int		utf8 = 0;
+	size_t		freespace = outlen;
+
+	/* Can't '\0' terminate */
+	if (freespace == 0) {
+		return inlen;
+	}
+
+	/* No input, so no output... */
+	if (!in) {
+	no_input:
+		*out = '\0';
+		return 0;
+	}
+
+	/* Figure out the length of the input string */
+	if (inlen == 0) inlen = strlen(in);
+
+	/* Not enough space to hold one char */
+	if (freespace < 2) {
+		/* And there's input data... */
+		if (inlen > 0) {
+			*out = '\0';
+			return inlen;
+		}
+
+		goto no_input;
+	}
+
+	while (inlen > 0) {
+		/*
+		 *	Hack: never print trailing zero.
+		 *	Some clients send pings with an off-by-one
+		 *	length (confused with strings in C).
+		 */
+		if ((inlen == 1) && (*p == '\0')) {
+			inlen--;
+			break;
+		}
+		switch (*p) {
+		case '\\':
+			sp = '\\';
+			break;
+		case '\r':
+			sp = 'r';
+			break;
+		case '\n':
+			sp = 'n';
+			break;
+		case '\t':
+			sp = 't';
+			break;
+		case '"':
+			sp = '"';
+			break;
+		default:
+			sp = '\0';
+			break;
+		}
+
+		if (sp) {
+			if (freespace < 3) break; /* \ + <c> + \0 */
+			*out++ = '\\';
+			*out++ = sp;
+			freespace -= 2;
+			p++;
+			inlen--;
+			continue;
+		}
+
+		utf8 = fr_utf8_char(p);
+		if (utf8 == 0) {
+			if (freespace < 5) break; /* \ + <o><o><o> + \0 */
+			snprintf(out, freespace, "\\%03o", *p);
+			out += 4;
+			freespace -= 4;
+			p++;
+			inlen--;
+			continue;
+		}
+
+		do {
+			if (freespace < 2) goto finish; /* <c> + \0 */
+			*out++ = *p++;
+			freespace--;
+			inlen--;
+		} while (--utf8 > 0);
+	}
+
+finish:
+	*out = '\0';
+
+	/* Indicate truncation occurred */
+	if (inlen > 0) return outlen + inlen;
+
+	return outlen - freespace;
+}
+
+/** Find the length of the buffer required to fully escape a string with fr_print_string
+ *
+ * Were assuming here that's it's cheaper to figure out the length and do one
+ * alloc than repeatedly expand the buffer when we find extra chars which need
+ * to be added.
+ *
+ * @param in string to calculate the escaped length for.
+ * @param inlen length of the input string, if 0 strlen will be used to check the length.
+ * @return the size of buffer required to hold the escaped string excluding the NULL byte.
+ */
+size_t fr_print_string_len(char const *in, size_t inlen)
+{
+	uint8_t const	*p = (uint8_t const *) in;
+	size_t		outlen = 0;
 	int		utf8 = 0;
 
 	if (!in) {
-		if (outlen) {
-			*out = '\0';
-		}
-
 		return 0;
 	}
 
@@ -145,66 +255,47 @@ size_t fr_print_string(char const *in, size_t inlen, char *out, size_t outlen)
 		inlen = strlen(in);
 	}
 
-	/*
-	 *
-	 */
-	while ((inlen > 0) && (outlen > 4)) {
+	while (inlen > 0) {
 		/*
-		 *	Hack: never print trailing zero.
-		 *	Some clients send strings with an off-by-one
-		 *	length (confused with strings in C).
+		 *	Hack: never print trailing zero. Some clients send pings
+		 *	with an off-by-one length (confused with strings in C).
 		 */
-		if ((inlen == 1) && (*str == 0)) break;
-
-		switch (*str) {
-			case '\\':
-				sp = '\\';
-				break;
-			case '\r':
-				sp = 'r';
-				break;
-			case '\n':
-				sp = 'n';
-				break;
-			case '\t':
-				sp = 't';
-				break;
-			case '"':
-				sp = '"';
-				break;
-			default:
-				sp = 0;
-				break;
+		if ((inlen == 1) && (*p == '\0')) {
+			inlen--;
+			break;
 		}
 
-		if (sp) {
-			*out++ = '\\';
-			*out++ = sp;
-			outlen -= 2;
-			str++;
+		switch (*p) {
+		case '\\':
+		case '\r':
+		case '\n':
+		case '\t':
+		case '"':
+			outlen += 2;
+			p++;
 			inlen--;
 			continue;
+
+		default:
+			break;
 		}
 
-		utf8 = fr_utf8_char(str);
-		if (!utf8) {
-			snprintf(out, outlen, "\\%03o", *str);
-			out  += 4;
-			outlen -= 4;
-			str++;
+		utf8 = fr_utf8_char(p);
+		if (utf8 == 0) {
+			outlen += 4;
+			p++;
 			inlen--;
 			continue;
 		}
 
 		do {
-			*out++ = *str++;
-			outlen--;
+			outlen++;
+			p++;
 			inlen--;
 		} while (--utf8 > 0);
 	}
-	*out = '\0';
 
-	return out - start;
+	return outlen;
 }
 
 
@@ -215,29 +306,32 @@ size_t fr_print_string(char const *in, size_t inlen, char *out, size_t outlen)
  * @param[in] vp to print.
  * @param[in] quote Char to add before and after printed value, if 0 no char will be added, if < 0 raw string will be
  *	added.
- * @return length of data written to out or 0 on error.
+ * @return the length of data written to out, or a value >= outlen on truncation.
  */
 size_t vp_prints_value(char *out, size_t outlen, VALUE_PAIR const *vp, int8_t quote)
 {
 	DICT_VALUE	*v;
-	char		buf[1024];
+	char		buf[1024];	/* Interim buffer to use with poorly behaved printing functions */
 	char const	*a = NULL;
 	time_t		t;
 	struct tm	s_tm;
 
-	char		*start = out;
-	size_t		len, freespace = outlen;
-
-	*out = '\0';
+	size_t		len = 0, freespace = outlen;
 
 	if (!vp) return 0;
+
+	VERIFY_VP(vp);
+
+	if (outlen == 0) return vp->length;
+
+	*out = '\0';
 
 	switch (vp->da->type) {
 	case PW_TYPE_STRING:
 		/* need to copy the escaped value, but quoted */
 		if (quote > 0) {
 			if (freespace < 3) {
-				return 0;
+				return vp->length + 2;
 			}
 
 			*out++ = (char) quote;
@@ -248,7 +342,7 @@ size_t vp_prints_value(char *out, size_t outlen, VALUE_PAIR const *vp, int8_t qu
 			if (len >= (freespace - 1)) {
 				out[outlen - 2] = (char) quote;
 				out[outlen - 1] = '\0';
-				return outlen - 1;
+				return len + 2;
 			}
 			out += len;
 			freespace -= len;
@@ -257,95 +351,130 @@ size_t vp_prints_value(char *out, size_t outlen, VALUE_PAIR const *vp, int8_t qu
 			freespace--;
 			*out = '\0';
 
-			return out - start;
+			return len + 2;
 		}
 
 		/* xlat.c - need to copy raw value verbatim */
-		if (quote < 0) {
-			strlcpy(out, vp->vp_strvalue, outlen);
-			return strlen(out);
+		else if (quote < 0) {
+			if (outlen > vp->length) {
+				memcpy(out, vp->vp_strvalue, vp->length + 1);
+				return vp->length;
+			}
+
+			memcpy(out, vp->vp_strvalue, outlen);
+			out[outlen - 1] = '\0';
+			return vp->length;	/* not a typo */
 		}
 
-		return fr_print_string(vp->vp_strvalue, vp->length, out, sizeof(out));
+		return fr_print_string(vp->vp_strvalue, vp->length, out, outlen);
 
 	case PW_TYPE_INTEGER:
 		if (vp->da->flags.has_tag) {
 			/* Attribute value has a tag, need to ignore it */
-			if ((v = dict_valbyattr(vp->da->attr, vp->da->vendor, (vp->vp_integer & 0xffffff)))
-			    != NULL)
+			if ((v = dict_valbyattr(vp->da->attr, vp->da->vendor, (vp->vp_integer & 0xffffff))) != NULL) {
 				a = v->name;
-			else {
-				snprintf(buf, sizeof(buf), "%u", (vp->vp_integer & 0xffffff));
+				len = strlen(a);
+			} else {
+				/* should never be truncated */
+				len = snprintf(buf, sizeof(buf), "%u", (vp->vp_integer & 0xffffff));
 				a = buf;
 			}
 		} else {
 	case PW_TYPE_BYTE:
 	case PW_TYPE_SHORT:
 			/* Normal, non-tagged attribute */
-			if ((v = dict_valbyattr(vp->da->attr, vp->da->vendor, vp->vp_integer))
-			    != NULL)
+			if ((v = dict_valbyattr(vp->da->attr, vp->da->vendor, vp->vp_integer)) != NULL) {
 				a = v->name;
-			else {
-				snprintf(buf, sizeof(buf), "%u", vp->vp_integer);
+				len = strlen(a);
+			} else {
+				/* should never be truncated */
+				len = snprintf(buf, sizeof(buf), "%u", vp->vp_integer);
 				a = buf;
 			}
 		}
 		break;
 
 	case PW_TYPE_INTEGER64:
-		snprintf(out, outlen, "%" PRIu64, vp->vp_integer64);
-		return strlen(out);
+		return snprintf(out, outlen, "%" PRIu64, vp->vp_integer64);
 
 	case PW_TYPE_DATE:
 		t = vp->vp_date;
 		if (quote > 0) {
-			len = strftime(buf, sizeof(buf) - 1, "%%%b %e %Y %H:%M:%S %Z%%",
-				       localtime_r(&t, &s_tm));
+			len = strftime(buf, sizeof(buf) - 1, "%%%b %e %Y %H:%M:%S %Z%%", localtime_r(&t, &s_tm));
 			buf[0] = (char) quote;
 			buf[len - 1] = (char) quote;
 			buf[len] = '\0';
 		} else {
-			len = strftime(buf, sizeof(buf), "%b %e %Y %H:%M:%S %Z",
-				       localtime_r(&t, &s_tm));
+			len = strftime(buf, sizeof(buf), "%b %e %Y %H:%M:%S %Z", localtime_r(&t, &s_tm));
 		}
-		if (len > 0) a = buf;
-		break;
-
-	case PW_TYPE_SIGNED: /* Damned code for 1 WiMAX attribute */
-		snprintf(buf, sizeof(buf), "%d", vp->vp_signed);
 		a = buf;
 		break;
 
-	case PW_TYPE_IPADDR:
+	case PW_TYPE_SIGNED: /* Damned code for 1 WiMAX attribute */
+		len = snprintf(buf, sizeof(buf), "%d", vp->vp_signed);
+		a = buf;
+		break;
+
+	case PW_TYPE_IPV4_ADDR:
 		a = inet_ntop(AF_INET, &(vp->vp_ipaddr), buf, sizeof(buf));
+		len = strlen(buf);
 		break;
 
 	case PW_TYPE_ABINARY:
 #ifdef WITH_ASCEND_BINARY
+
+		print_abinary(buf, sizeof(buf), vp, quote);
 		a = buf;
-		print_abinary(vp, buf, sizeof(buf), quote);
+		len = strlen(buf);
 		break;
 #else
 	/* FALL THROUGH */
 #endif
 	case PW_TYPE_OCTETS:
-		if (outlen <= (2 * (vp->length + 1))) return 0;
+	case PW_TYPE_TLV:
+	{
+		size_t max;
 
-		strcpy(buf, "0x");
+		/* Return the number of bytes we would have written */
+		len = (vp->length * 2) + 2;
+		if (freespace <= 1) {
+			return len;
+		}
 
-		fr_bin2hex(buf + 2, vp->vp_octets, vp->length);
-		a = buf;
+		*out++ = '0';
+		freespace--;
+
+		if (freespace <= 1) {
+			*out = '\0';
+			return len;
+		}
+		*out++ = 'x';
+		freespace--;
+
+		if (freespace <= 2) {
+			*out = '\0';
+			return len;
+		}
+
+		/* Get maximum number of bytes we can encode given freespace */
+		max = ((freespace % 2) ? freespace - 1 : freespace - 2) / 2;
+		fr_bin2hex(out, vp->vp_octets, (vp->length > max) ? max : vp->length);
+
+		return len;
+	}
 		break;
 
 	case PW_TYPE_IFID:
 		a = ifid_ntoa(buf, sizeof(buf), vp->vp_ifid);
+		len = strlen(buf);
 		break;
 
-	case PW_TYPE_IPV6ADDR:
+	case PW_TYPE_IPV6_ADDR:
 		a = inet_ntop(AF_INET6, &vp->vp_ipv6addr, buf, sizeof(buf));
+		len = strlen(buf);
 		break;
 
-	case PW_TYPE_IPV6PREFIX:
+	case PW_TYPE_IPV6_PREFIX:
 	{
 		struct in6_addr addr;
 
@@ -356,14 +485,16 @@ size_t vp_prints_value(char *out, size_t outlen, VALUE_PAIR const *vp, int8_t qu
 
 		a = inet_ntop(AF_INET6, &addr, buf, sizeof(buf));
 		if (a) {
-			char *p = buf + strlen(buf);
-			snprintf(p, buf + sizeof(buf) - p - 1, "/%u",
-				 (unsigned int) vp->vp_ipv6prefix[1]);
+			char *p = buf;
+
+			len = strlen(buf);
+			p += len;
+			len += snprintf(p, sizeof(buf) - len, "/%u", (unsigned int) vp->vp_ipv6prefix[1]);
 		}
 	}
 		break;
 
-	case PW_TYPE_IPV4PREFIX:
+	case PW_TYPE_IPV4_PREFIX:
 	{
 		struct in_addr addr;
 
@@ -374,46 +505,37 @@ size_t vp_prints_value(char *out, size_t outlen, VALUE_PAIR const *vp, int8_t qu
 
 		a = inet_ntop(AF_INET, &addr, buf, sizeof(buf));
 		if (a) {
-			char *p = buf + strlen(buf);
-			snprintf(p, buf + sizeof(buf) - p - 1, "/%u",
-				 (unsigned int) (vp->vp_ipv4prefix[1] & 0x3f));
+			char *p = buf;
+
+			len = strlen(buf);
+			p += len;
+			len += snprintf(p, sizeof(buf) - len, "/%u", (unsigned int) (vp->vp_ipv4prefix[1] & 0x3f));
 		}
 	}
 		break;
 
 	case PW_TYPE_ETHERNET:
-		snprintf(buf, sizeof(buf), "%02x:%02x:%02x:%02x:%02x:%02x",
-			 vp->vp_ether[0], vp->vp_ether[1],
-			 vp->vp_ether[2], vp->vp_ether[3],
-			 vp->vp_ether[4], vp->vp_ether[5]);
-		a = buf;
-		break;
-
-	case PW_TYPE_TLV:
-		if (outlen <= (2 * (vp->length + 1))) return 0;
-
-		strcpy(buf, "0x");
-
-		fr_bin2hex(buf + 2, vp->vp_tlv, vp->length);
-		a = buf;
-		break;
+		return snprintf(out, outlen, "%02x:%02x:%02x:%02x:%02x:%02x",
+				vp->vp_ether[0], vp->vp_ether[1],
+				vp->vp_ether[2], vp->vp_ether[3],
+				vp->vp_ether[4], vp->vp_ether[5]);
 
 	default:
 		a = "UNKNOWN-TYPE";
+		len = strlen(a);
 		break;
 	}
 
-	if (a != NULL) strlcpy(out, a, outlen);
+	if (a) strlcpy(out, a, outlen);
 
-	return strlen(out);
+	return len;	/* Return the number of bytes we would of written (for truncation detection) */
 }
 
-
-char *vp_aprinttype(TALLOC_CTX *ctx, PW_TYPE type)
+char *vp_aprint_type(TALLOC_CTX *ctx, PW_TYPE type)
 {
 	switch (type) {
 	case PW_TYPE_STRING :
-		return talloc_strdup(ctx, "_");
+		return talloc_typed_strdup(ctx, "_");
 
 	case PW_TYPE_INTEGER64:
 	case PW_TYPE_SIGNED:
@@ -421,172 +543,37 @@ char *vp_aprinttype(TALLOC_CTX *ctx, PW_TYPE type)
 	case PW_TYPE_SHORT:
 	case PW_TYPE_INTEGER:
 	case PW_TYPE_DATE :
-		return talloc_strdup(ctx, "0");
+		return talloc_typed_strdup(ctx, "0");
 
-	case PW_TYPE_IPADDR :
-		return talloc_strdup(ctx, "?.?.?.?");
+	case PW_TYPE_IPV4_ADDR :
+		return talloc_typed_strdup(ctx, "?.?.?.?");
 
-	case PW_TYPE_IPV4PREFIX:
-		return talloc_strdup(ctx, "?.?.?.?/?");
+	case PW_TYPE_IPV4_PREFIX:
+		return talloc_typed_strdup(ctx, "?.?.?.?/?");
 
-	case PW_TYPE_IPV6ADDR:
-		return talloc_strdup(ctx, "[:?:]");
+	case PW_TYPE_IPV6_ADDR:
+		return talloc_typed_strdup(ctx, "[:?:]");
 
-	case PW_TYPE_IPV6PREFIX:
-		return talloc_strdup(ctx, "[:?:]/?");
+	case PW_TYPE_IPV6_PREFIX:
+		return talloc_typed_strdup(ctx, "[:?:]/?");
 
 	case PW_TYPE_OCTETS:
-		return talloc_strdup(ctx, "0x??");
+		return talloc_typed_strdup(ctx, "??");
 
 	case PW_TYPE_ETHERNET:
-		return talloc_strdup(ctx, "??:??:??:??:??:??:??:??");
+		return talloc_typed_strdup(ctx, "??:??:??:??:??:??:??:??");
 
 #ifdef WITH_ASCEND_BINARY
 	case PW_TYPE_ABINARY:
-		return talloc_strdup(ctx, "??");
+		return talloc_typed_strdup(ctx, "??");
 #endif
 
 	default :
 		break;
 	}
 
-	return talloc_strdup(ctx, "<UNKNOWN-TYPE>");
+	return talloc_typed_strdup(ctx, "<UNKNOWN-TYPE>");
 }
-
-/*
- *	vp_prints_value for talloc
- */
-char *vp_aprint(TALLOC_CTX *ctx, VALUE_PAIR const *vp)
-{
-	char *p;
-
-	switch (vp->da->type) {
-	case PW_TYPE_STRING:
-		/*
-		 *	FIXME: deal with \r\n" ??
-		 */
-		p = talloc_strdup(ctx, vp->vp_strvalue);
-		break;
-
-	case PW_TYPE_BYTE:
-	case PW_TYPE_SHORT:
-	case PW_TYPE_INTEGER:
-		{
-			DICT_VALUE *dv;
-
-			dv = dict_valbyattr(vp->da->attr, vp->da->vendor,
-					    vp->vp_integer);
-			if (dv) {
-				p = talloc_strdup(ctx, dv->name);
-			} else {
-				p = talloc_asprintf(ctx, "%u", vp->vp_integer);
-			}
-		}
-		break;
-
-	case PW_TYPE_SIGNED:
-		p = talloc_asprintf(ctx, "%d", vp->vp_signed);
-		break;
-
-	case PW_TYPE_INTEGER64:
-		p = talloc_asprintf(ctx, "%" PRIu64 , vp->vp_integer64);
-		break;
-
-	case PW_TYPE_ETHERNET:
-		p = talloc_asprintf(ctx, "%02x:%02x:%02x:%02x:%02x:%02x",
-				    vp->vp_ether[0], vp->vp_ether[1],
-				    vp->vp_ether[2], vp->vp_ether[3],
-				    vp->vp_ether[4], vp->vp_ether[5]);
-		break;
-
-	case PW_TYPE_ABINARY:
-#ifdef WITH_ASCEND_BINARY
-		p = talloc_array(ctx, char, 128);
-		if (!p) return NULL;
-		print_abinary(vp, p, 128, 0);
-		break;
-#else
-		  /* FALL THROUGH */
-#endif
-
-	case PW_TYPE_OCTETS:
-		p = talloc_array(ctx, char, 3 + vp->length * 2);
-		if (!p) return NULL;
-		memcpy(p, "0x", 2);
-		fr_bin2hex(p + 2, vp->vp_octets, vp->length);
-		break;
-
-	case PW_TYPE_DATE:
-	{
-		time_t      t;
-		struct tm   s_tm;
-
-		t = vp->vp_date;
-
-		p = talloc_array(ctx, char, 64);
-		strftime(p, 64, "%b %e %Y %H:%M:%S %Z",
-			 localtime_r(&t, &s_tm));
-		break;
-	}
-
-	case PW_TYPE_IPADDR:
-		p = talloc_asprintf(ctx, "%u.%u.%u.%u",
-				    vp->vp_ipv4prefix[0], /* network byte order */
-				    vp->vp_ipv4prefix[1],
-				    vp->vp_ipv4prefix[2],
-				    vp->vp_ipv4prefix[3]);
-		break;
-
-	case PW_TYPE_IPV4PREFIX:
-		p = talloc_asprintf(ctx, "%u.%u.%u.%u/%u",
-				    vp->vp_ipv4prefix[2],
-				    vp->vp_ipv4prefix[3],
-				    vp->vp_ipv4prefix[4],
-				    vp->vp_ipv4prefix[5],
-				    vp->vp_ipv4prefix[1] & 0x3f);
-		break;
-
-	case PW_TYPE_IPV6ADDR:
-		p = talloc_asprintf(ctx, "%x:%x:%x:%x:%x:%x:%x:%x",
-				    (vp->vp_ipv6addr.s6_addr[0] << 8) | vp->vp_ipv6addr.s6_addr[1],
-				    (vp->vp_ipv6addr.s6_addr[2] << 8) | vp->vp_ipv6addr.s6_addr[3],
-				    (vp->vp_ipv6addr.s6_addr[4] << 8) | vp->vp_ipv6addr.s6_addr[5],
-				    (vp->vp_ipv6addr.s6_addr[6] << 8) | vp->vp_ipv6addr.s6_addr[7],
-				    (vp->vp_ipv6addr.s6_addr[8] << 8) | vp->vp_ipv6addr.s6_addr[9],
-				    (vp->vp_ipv6addr.s6_addr[10] << 8) | vp->vp_ipv6addr.s6_addr[11],
-				    (vp->vp_ipv6addr.s6_addr[12] << 8) | vp->vp_ipv6addr.s6_addr[13],
-				    (vp->vp_ipv6addr.s6_addr[14] << 8) | vp->vp_ipv6addr.s6_addr[15]);
-		break;
-
-	case PW_TYPE_IPV6PREFIX:
-		p = talloc_asprintf(ctx, "%x:%x:%x:%x:%x:%x:%x:%x/%u",
-				    (vp->vp_ipv6prefix[2] << 8) | vp->vp_ipv6prefix[3],
-				    (vp->vp_ipv6prefix[4] << 8) | vp->vp_ipv6prefix[5],
-				    (vp->vp_ipv6prefix[6] << 8) | vp->vp_ipv6prefix[7],
-				    (vp->vp_ipv6prefix[8] << 8) | vp->vp_ipv6prefix[9],
-				    (vp->vp_ipv6prefix[10] << 8) | vp->vp_ipv6prefix[11],
-				    (vp->vp_ipv6prefix[12] << 8) | vp->vp_ipv6prefix[13],
-				    (vp->vp_ipv6prefix[14] << 8) | vp->vp_ipv6prefix[15],
-				    (vp->vp_ipv6prefix[16] << 8) | vp->vp_ipv6prefix[17],
-				    vp->vp_ipv6prefix[2]);
-		break;
-
-	case PW_TYPE_IFID:
-		p = talloc_asprintf(ctx, "%x:%x:%x:%x",
-				    (vp->vp_ifid[0] << 8) | vp->vp_ifid[1],
-				    (vp->vp_ifid[2] << 8) | vp->vp_ifid[3],
-				    (vp->vp_ifid[4] << 8) | vp->vp_ifid[5],
-				    (vp->vp_ifid[6] << 8) | vp->vp_ifid[7]);
-		break;
-
-	default:
-		p = NULL;
-		break;
-	}
-
-	return p;
-}
-
 
 /**  Prints attribute values escaped suitably for use as JSON values
  *
@@ -600,7 +587,6 @@ char *vp_aprint(TALLOC_CTX *ctx, VALUE_PAIR const *vp)
  */
 size_t vp_prints_value_json(char *out, size_t outlen, VALUE_PAIR const *vp)
 {
-	char		*start = out;
 	char const	*q;
 	size_t		len, freespace = outlen;
 
@@ -611,26 +597,26 @@ size_t vp_prints_value_json(char *out, size_t outlen, VALUE_PAIR const *vp)
 			case PW_TYPE_SHORT:
 				if (vp->da->flags.has_value) break;
 
-				len = snprintf(out, freespace, "%u", vp->vp_integer);
-				return len;
+				return snprintf(out, freespace, "%u", vp->vp_integer);
 
 			case PW_TYPE_SIGNED:
-				len = snprintf(out, freespace, "%d", vp->vp_signed);
-				return len;
+				return snprintf(out, freespace, "%d", vp->vp_signed);
 
 			default:
 				break;
 		}
 	}
 
-	if (freespace < 2) return -1;
+	/* Indicate truncation */
+	if (freespace < 2) return outlen + 1;
 	*out++ = '"';
 	freespace--;
 
 	switch (vp->da->type) {
 		case PW_TYPE_STRING:
 			for (q = vp->vp_strvalue; q < vp->vp_strvalue + vp->length; q++) {
-				if (freespace < 3) return -1;
+				/* Indicate truncation */
+				if (freespace < 3) return outlen + 1;
 
 				if (*q == '"') {
 					*out++ = '\\';
@@ -678,7 +664,7 @@ size_t vp_prints_value_json(char *out, size_t outlen, VALUE_PAIR const *vp)
 						break;
 					default:
 						len = snprintf(out, freespace, "u%04X", *q);
-						if (len >= freespace) return outlen;
+						if (is_truncated(len, freespace)) return (outlen - freespace) + len;
 						out += len;
 						freespace -= len;
 					}
@@ -688,17 +674,19 @@ size_t vp_prints_value_json(char *out, size_t outlen, VALUE_PAIR const *vp)
 
 		default:
 			len = vp_prints_value(out, freespace, vp, 0);
-			if (len >= freespace) return outlen;
+			if (is_truncated(len, freespace)) return (outlen - freespace) + len;
 			out += len;
 			freespace -= len;
 			break;
 	}
 
-	if (freespace < 2) return outlen;
+	/* Indicate truncation */
+	if (freespace < 2) return outlen + 1;
 	*out++ = '"';
+	freespace--;
 	*out = '\0'; // We don't increment out, because the nul byte should not be included in the length
 
-	return out - start;
+	return outlen - freespace;
 }
 
 /*
@@ -739,107 +727,6 @@ extern int fr_attr_max_tlv;
 extern int fr_attr_shift[];
 extern int fr_attr_mask[];
 
-/** Print an attribute OID (does not include vendor)
- *
- * @param out Where to write the string.
- * @param outlen Lenth of output buffer.
- * @param attr id.
- * @param dv_type Type of dictionary value.
- * @return the length of data written to out, or a value >= outlen on truncation.
- */
-static size_t vp_print_attr_oid(char *out, size_t outlen, unsigned int attr, int dv_type)
-{
-	int		nest;
-	char		*start = out;
-	size_t		len, freespace = outlen;
-
-	switch (dv_type) {
-	case 4:
-		return snprintf(out, freespace, "%u", attr);
-
-	case 2:
-		return snprintf(out, freespace, "%u", attr & 0xffff);
-
-	default:
-	case 1:
-		len = snprintf(out, freespace, "%u", attr & 0xff);
-		if (len >= freespace) return outlen;
-		out += len;
-		freespace -= len;
-		break;
-	}
-
-	if ((attr >> 8) == 0) return out - start;
-
-	for (nest = 1; nest <= fr_attr_max_tlv; nest++) {
-		if (((attr >> fr_attr_shift[nest]) & fr_attr_mask[nest]) == 0) break;
-
-		len = snprintf(out, freespace, ".%u", (attr >> fr_attr_shift[nest]) & fr_attr_mask[nest]);
-		if (len >= freespace) return outlen;
-		out += freespace;
-		freespace -= len;
-	}
-
-	return out - start;
-}
-
-/** Print the names of attributes which are not in the dictionaries
- *
- * Print name for an unknown attribute in the format:
-@verbatim
-	Attr-<vendor id>-<attribute oid>
-@endverbatim
- * to a string.
- *
- * @param out Where to write the string.
- * @param outlen Lenth of output buffer.
- * @param attr id.
- * @param vendor id.
- * @return the length of data written to out, or a value >= outlen on truncation.
- */
-size_t vp_print_name(char *out, size_t outlen, unsigned int attr, unsigned int vendor)
-{
-	int 		dv_type = 1;
-	char		*start = out;
-	size_t		len, freespace = outlen;
-
-	if (!out) return 0;
-
-	len = snprintf(out, freespace, "Attr-");
-	if (len >= freespace) return outlen;
-	out += len;
-	freespace -= len;
-
-	if (vendor > FR_MAX_VENDOR) {
-		len = snprintf(out, freespace, "%u.", vendor / FR_MAX_VENDOR);
-		if (len >= freespace) return outlen;
-		out += len;
-		freespace -= len;
-
-		vendor &= (FR_MAX_VENDOR) - 1;
-	}
-
-	if (vendor) {
-		DICT_VENDOR *dv;
-
-		dv = dict_vendorbyvalue(vendor);
-		if (dv) {
-			dv_type = dv->type;
-		}
-
-		len = snprintf(out, freespace, "26.%u.", vendor);
-		if (len >= freespace) return outlen;
-		out += len;
-		freespace -= len;
-	}
-
-	len = vp_print_attr_oid(out, freespace, attr, dv_type);
-	if (len >= freespace) return outlen;
-	out += len;
-
-	return out - start;
-}
-
 
 /** Print one attribute and value to a string
  *
@@ -857,7 +744,6 @@ size_t vp_print_name(char *out, size_t outlen, unsigned int attr, unsigned int v
 size_t vp_prints(char *out, size_t outlen, VALUE_PAIR const *vp)
 {
 	char const	*token = NULL;
-	char		*start = out;
 	size_t		len, freespace = outlen;
 
 	if (!out) return 0;
@@ -873,22 +759,22 @@ size_t vp_prints(char *out, size_t outlen, VALUE_PAIR const *vp)
 		token = "<INVALID-TOKEN>";
 	}
 
-	if(vp->da->flags.has_tag) {
+	if (vp->da->flags.has_tag) {
 		len = snprintf(out, freespace, "%s:%d %s ", vp->da->name, vp->tag, token);
 	} else {
 		len = snprintf(out, freespace, "%s %s ", vp->da->name, token);
 	}
-	if (len >= freespace) return outlen;
+
+	if (is_truncated(len, freespace)) return len;
 	out += len;
 	freespace -= len;
 
 	len = vp_prints_value(out, freespace, vp, '\'');
-	if (len >= freespace) return outlen;
-	out += len;
+	if (is_truncated(len, freespace)) return (outlen - freespace) + len;
+	freespace -= len;
 
-	return out - start;
+	return (outlen - freespace);
 }
-
 
 /** Print one attribute and value to FP
  *
@@ -903,6 +789,8 @@ void vp_print(FILE *fp, VALUE_PAIR const *vp)
 	char	buf[1024];
 	char	*p = buf;
 	size_t	len;
+
+	VERIFY_VP(vp);
 
 	*p++ = '\t';
 	len = vp_prints(p, sizeof(buf) - 1, vp);
@@ -933,8 +821,178 @@ void vp_print(FILE *fp, VALUE_PAIR const *vp)
 void vp_printlist(FILE *fp, VALUE_PAIR const *vp)
 {
 	vp_cursor_t cursor;
-	for (vp = paircursorc(&cursor, &vp); vp; vp = pairnext(&cursor)) {
+	for (vp = fr_cursor_init(&cursor, &vp); vp; vp = fr_cursor_next(&cursor)) {
 		vp_print(fp, vp);
 	}
 }
+
+
+/*
+ *	vp_prints_value for talloc
+ */
+char *vp_aprint_value(TALLOC_CTX *ctx, VALUE_PAIR const *vp)
+{
+	char *p;
+
+	switch (vp->da->type) {
+	case PW_TYPE_STRING:
+	{
+		size_t len, ret;
+
+		/* Gets us the size of the buffer we need to alloc */
+		len = fr_print_string_len(vp->vp_strvalue, vp->length);
+		p = talloc_array(ctx, char, len + 1); 	/* +1 for '\0' */
+		if (!p) return NULL;
+
+		ret = fr_print_string(vp->vp_strvalue, vp->length, p, len + 1);
+		if (!fr_assert(ret == len)) {
+			talloc_free(p);
+			return NULL;
+		}
+		break;
+	}
+
+	case PW_TYPE_BYTE:
+	case PW_TYPE_SHORT:
+	case PW_TYPE_INTEGER:
+		{
+			DICT_VALUE *dv;
+
+			dv = dict_valbyattr(vp->da->attr, vp->da->vendor,
+					    vp->vp_integer);
+			if (dv) {
+				p = talloc_typed_strdup(ctx, dv->name);
+			} else {
+				p = talloc_typed_asprintf(ctx, "%u", vp->vp_integer);
+			}
+		}
+		break;
+
+	case PW_TYPE_SIGNED:
+		p = talloc_typed_asprintf(ctx, "%d", vp->vp_signed);
+		break;
+
+	case PW_TYPE_INTEGER64:
+		p = talloc_typed_asprintf(ctx, "%" PRIu64 , vp->vp_integer64);
+		break;
+
+	case PW_TYPE_ETHERNET:
+		p = talloc_typed_asprintf(ctx, "%02x:%02x:%02x:%02x:%02x:%02x",
+				    vp->vp_ether[0], vp->vp_ether[1],
+				    vp->vp_ether[2], vp->vp_ether[3],
+				    vp->vp_ether[4], vp->vp_ether[5]);
+		break;
+
+	case PW_TYPE_ABINARY:
+#ifdef WITH_ASCEND_BINARY
+		p = talloc_array(ctx, char, 128);
+		if (!p) return NULL;
+		print_abinary(p, 128, vp, 0);
+		break;
+#else
+		  /* FALL THROUGH */
+#endif
+
+	case PW_TYPE_OCTETS:
+		p = talloc_array(ctx, char, 1 + vp->length * 2);
+		if (!p) return NULL;
+		fr_bin2hex(p, vp->vp_octets, vp->length);
+		break;
+
+	case PW_TYPE_DATE:
+	{
+		time_t t;
+		struct tm s_tm;
+
+		t = vp->vp_date;
+
+		p = talloc_array(ctx, char, 64);
+		strftime(p, 64, "%b %e %Y %H:%M:%S %Z",
+			 localtime_r(&t, &s_tm));
+		break;
+	}
+
+	/*
+	 *	We need to use the proper inet_ntop functions for IP
+	 *	addresses, else the output might not match output of
+	 *	other functions, which makes testing difficult.
+	 *
+	 *	An example is tunnelled ipv4 in ipv6 addresses.
+	 */
+	case PW_TYPE_IPV4_ADDR:
+	case PW_TYPE_IPV4_PREFIX:
+		{
+			char buff[INET_ADDRSTRLEN  + 4]; // + /prefix
+
+			buff[0] = '\0';
+			vp_prints_value(buff, sizeof(buff), vp, 0);
+
+			p = talloc_typed_strdup(ctx, buff);
+		}
+		break;
+
+	case PW_TYPE_IPV6_ADDR:
+	case PW_TYPE_IPV6_PREFIX:
+		{
+			char buff[INET6_ADDRSTRLEN + 4]; // + /prefix
+
+			buff[0] = '\0';
+			vp_prints_value(buff, sizeof(buff), vp, 0);
+
+			p = talloc_typed_strdup(ctx, buff);
+		}
+		break;
+
+	case PW_TYPE_IFID:
+		p = talloc_typed_asprintf(ctx, "%x:%x:%x:%x",
+				    (vp->vp_ifid[0] << 8) | vp->vp_ifid[1],
+				    (vp->vp_ifid[2] << 8) | vp->vp_ifid[3],
+				    (vp->vp_ifid[4] << 8) | vp->vp_ifid[5],
+				    (vp->vp_ifid[6] << 8) | vp->vp_ifid[7]);
+		break;
+
+	default:
+		p = NULL;
+		break;
+	}
+
+	return p;
+}
+
+/** Print one attribute and value to a string
+ *
+ * Print a VALUE_PAIR in the format:
+@verbatim
+	<attribute_name>[:tag] <op> <value>
+@endverbatim
+ * to a string.
+ *
+ * @param ctx to allocate string in.
+ * @param vp to print.
+ * @return a talloced buffer with the attribute operator and value.
+ */
+char *vp_aprint(TALLOC_CTX *ctx, VALUE_PAIR const *vp)
+{
+	char const	*token = NULL;
+	char 		*pair, *value;
+
+	if (!vp || !vp->da) return 0;
+
+	VERIFY_VP(vp);
+
+	if ((vp->op > T_OP_INVALID) && (vp->op < T_TOKEN_LAST)) {
+		token = vp_tokens[vp->op];
+	} else {
+		token = "<INVALID-TOKEN>";
+	}
+
+	value = vp_aprint_value(ctx, vp);
+	pair = vp->da->flags.has_tag ?
+	       talloc_asprintf(ctx, "%s:%d %s %s", vp->da->name, vp->tag, token, value) :
+	       talloc_asprintf(ctx, "%s %s %s", vp->da->name, token, value);
+	talloc_free(value);
+
+	return pair;
+}
+
 

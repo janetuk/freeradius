@@ -41,13 +41,11 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 #endif
 
 static CONF_PARSER module_config[] = {
-	{ "tls", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_eap_tls_t, tls_conf_name), NULL, NULL },
+	{ "tls", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_tls_t, tls_conf_name), NULL },
 
-	{ "virtual_server", PW_TYPE_STRING_PTR,
-	  offsetof(rlm_eap_tls_t, virtual_server), NULL, NULL },
+	{ "virtual_server", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_tls_t, virtual_server), NULL },
 
- 	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
+	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
 };
 
 
@@ -131,7 +129,7 @@ static int eaptls_initiate(void *type_arg, eap_handler_t *handler)
 /*
  *	Do authentication, by letting EAP-TLS do most of the work.
  */
-static int mod_authenticate(void *type_arg, eap_handler_t *handler)
+static int CC_HINT(nonnull) mod_authenticate(void *type_arg, eap_handler_t *handler)
 {
 	fr_tls_status_t	status;
 	tls_session_t *tls_session = (tls_session_t *) handler->opaque;
@@ -139,8 +137,6 @@ static int mod_authenticate(void *type_arg, eap_handler_t *handler)
 	rlm_eap_tls_t *inst;
 
 	inst = type_arg;
-
-	rad_assert(request != NULL);
 
 	RDEBUG2("Authenticate");
 
@@ -186,7 +182,7 @@ static int mod_authenticate(void *type_arg, eap_handler_t *handler)
 				  &fake->reply->vps, 0, 0, TAG_ANY);
 
 			/* reject if virtual server didn't return accept */
-			if (fake->reply->code != PW_AUTHENTICATION_ACK) {
+			if (fake->reply->code != PW_CODE_AUTHENTICATION_ACK) {
 				RDEBUG2("Certificates were rejected by the virtual server");
 				request_free(&fake);
 				eaptls_fail(handler, 0);
@@ -211,7 +207,7 @@ static int mod_authenticate(void *type_arg, eap_handler_t *handler)
 		 *	data.
 		 */
 	case FR_TLS_OK:
-		RDEBUG2("Received unexpected tunneled data after successful handshake.");
+		RDEBUG2("Received unexpected tunneled data after successful handshake");
 #ifndef NDEBUG
 		if ((debug_flag > 2) && fr_log_fp) {
 			unsigned int i;

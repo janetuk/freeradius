@@ -119,16 +119,16 @@ if test x$with_[]modname != xno; then
 
 	if test "x$fail" = "x"; then
 	    AC_CHECK_FUNC(ldap_start_tls_s,
-		[ SMART_CFLAGS="$SMART_CFLAGS -DHAVE_LDAP_START_TLS" ])
+		[ SMART_CPPFLAGS="$SMART_CPPFLAGS -DHAVE_LDAP_START_TLS" ])
 	    AC_CHECK_FUNC(ldap_initialize,
-		[ SMART_CFLAGS="$SMART_CFLAGS -DHAVE_LDAP_INITIALIZE" ])
+		[ SMART_CPPFLAGS="$SMART_CPPFLAGS -DHAVE_LDAP_INITIALIZE" ])
 
 
-        AC_CHECK_FUNCS(ldap_set_rebind_proc)
-        AC_CACHE_CHECK(whether ldap_set_rebind_proc takes 3 arguments, ac_cv_ldap_set_rebind_proc, [
-        AC_TRY_COMPILE([
-        #include <lber.h>
-        #include <ldap.h>], [ldap_set_rebind_proc(0, 0, 0);],
+	AC_CHECK_FUNCS(ldap_set_rebind_proc)
+	AC_CACHE_CHECK(whether ldap_set_rebind_proc takes 3 arguments, ac_cv_ldap_set_rebind_proc, [
+	AC_TRY_COMPILE([
+	#include <lber.h>
+	#include <ldap.h>], [ldap_set_rebind_proc(0, 0, 0);],
 	  [ac_cv_ldap_set_rebind_proc=3],
 	  [ac_cv_ldap_set_rebind_proc=2]) ])
 	fi
@@ -156,7 +156,7 @@ if test x"$fail" != x""; then
 fi
 
 mod_ldflags=$SMART_LIBS
-mod_cflags="$SMART_CFLAGS -DWITH_EDIR -DLDAP_DEPRECATED -DLDAP_SET_REBIND_PROC_ARGS=$ac_cv_ldap_set_rebind_proc"
+mod_cflags="$SMART_CPPFLAGS -DWITH_EDIR -DLDAP_DEPRECATED -DLDAP_SET_REBIND_PROC_ARGS=$ac_cv_ldap_set_rebind_proc"
 AC_SUBST(mod_ldflags)
 AC_SUBST(mod_cflags)
 AC_SUBST(targetname)

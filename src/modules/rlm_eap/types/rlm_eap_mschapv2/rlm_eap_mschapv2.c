@@ -35,11 +35,9 @@ typedef struct rlm_eap_mschapv2_t {
 } rlm_eap_mschapv2_t;
 
 static CONF_PARSER module_config[] = {
-	{ "with_ntdomain_hack",     PW_TYPE_BOOLEAN,
-	  offsetof(rlm_eap_mschapv2_t,with_ntdomain_hack), NULL, "no" },
+	{ "with_ntdomain_hack", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_mschapv2_t, with_ntdomain_hack), "no" },
 
-	{ "send_error",     PW_TYPE_BOOLEAN,
-	  offsetof(rlm_eap_mschapv2_t,send_error), NULL, "no" },
+	{ "send_error", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_mschapv2_t, send_error), "no" },
 
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
@@ -103,23 +101,22 @@ static int eapmschapv2_compose(eap_handler_t *handler, VALUE_PAIR *reply)
 	switch (reply->da->attr) {
 	case PW_MSCHAP_CHALLENGE:
 		/*
-		 *   0		   1		   2		   3
+		 *   0                   1                   2                   3
 		 *   0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 		 *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-		 *  |     Code      |   Identifier  |	    Length	     |
+		 *  |     Code      |   Identifier  |            Length             |
 		 *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 		 *  |     Type      |   OpCode      |  MS-CHAPv2-ID |  MS-Length...
 		 *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 		 *  |   MS-Length   |  Value-Size   |  Challenge...
 		 *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-		 *  |			     Challenge...
+		 *  |                             Challenge...
 		 *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-		 *  |			     Name...
+		 *  |                             Name...
 		 *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 		 */
 		length = MSCHAPV2_HEADER_LEN + MSCHAPV2_CHALLENGE_LEN + strlen(handler->identity);
-		eap_ds->request->type.data = talloc_array(eap_ds->request,
-							  uint8_t, length);
+		eap_ds->request->type.data = talloc_array(eap_ds->request, uint8_t, length);
 		/*
 		 *	Allocate room for the EAP-MS-CHAPv2 data.
 		 */
@@ -142,20 +139,20 @@ static int eapmschapv2_compose(eap_handler_t *handler, VALUE_PAIR *reply)
 		/*
 		 *	Copy the Challenge, success, or error over.
 		 */
-		memcpy(ptr, reply->vp_strvalue, reply->length);
+		memcpy(ptr, reply->vp_octets, reply->length);
 		memcpy((ptr + reply->length), handler->identity, strlen(handler->identity));
 		break;
 
 	case PW_MSCHAP2_SUCCESS:
 		/*
-		 *   0		   1		   2		   3
+		 *   0                   1                   2                   3
 		 *   0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 		 *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-		 *  |     Code      |   Identifier  |	    Length	     |
+		 *  |     Code      |   Identifier  |            Length             |
 		 *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 		 *  |     Type      |   OpCode      |  MS-CHAPv2-ID |  MS-Length...
 		 *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-		 *  |   MS-Length   |		    Message...
+		 *  |   MS-Length   |                    Message...
 		 *  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 		 */
 		DEBUG2("MSCHAP Success\n");
@@ -181,8 +178,7 @@ static int eapmschapv2_compose(eap_handler_t *handler, VALUE_PAIR *reply)
 	case PW_MSCHAP_ERROR:
 		DEBUG2("MSCHAP Failure\n");
 		length = 4 + reply->length - 1;
-		eap_ds->request->type.data = talloc_array(eap_ds->request,
-							  uint8_t, length);
+		eap_ds->request->type.data = talloc_array(eap_ds->request, uint8_t, length);
 
 		/*
 		 *	Allocate room for the EAP-MS-CHAPv2 data.
@@ -248,7 +244,7 @@ static int mschapv2_initiate(UNUSED void *instance, eap_handler_t *handler)
 	 *	We're at the stage where we're challenging the user.
 	 */
 	data->code = PW_EAP_MSCHAPV2_CHALLENGE;
-	memcpy(data->challenge, challenge->vp_strvalue, MSCHAPV2_CHALLENGE_LEN);
+	memcpy(data->challenge, challenge->vp_octets, MSCHAPV2_CHALLENGE_LEN);
 	data->mppe_keys = NULL;
 	data->reply = NULL;
 
@@ -267,7 +263,7 @@ static int mschapv2_initiate(UNUSED void *instance, eap_handler_t *handler)
 	 *	The EAP session doesn't have enough information to
 	 *	proxy the "inside EAP" protocol.  Disable EAP proxying.
 	 */
-	handler->request->options &= ~RAD_REQUEST_OPTION_PROXY_EAP;
+	handler->request->log.lvl &= ~RAD_REQUEST_OPTION_PROXY_EAP;
 #endif
 
 	/*
@@ -290,14 +286,13 @@ static int mschapv2_initiate(UNUSED void *instance, eap_handler_t *handler)
  *
  *	Called from rlm_eap.c, eap_postproxy().
  */
-static int mschap_postproxy(eap_handler_t *handler, UNUSED void *tunnel_data)
+static int CC_HINT(nonnull) mschap_postproxy(eap_handler_t *handler, UNUSED void *tunnel_data)
 {
 	VALUE_PAIR *response = NULL;
 	mschapv2_opaque_t *data;
 	REQUEST *request = handler->request;
 
 	data = (mschapv2_opaque_t *) handler->opaque;
-	rad_assert(data != NULL);
 	rad_assert(request != NULL);
 
 	RDEBUG2("Passing reply from proxy back into the tunnel %d.",
@@ -307,21 +302,19 @@ static int mschap_postproxy(eap_handler_t *handler, UNUSED void *tunnel_data)
 	 *	There is only a limited number of possibilities.
 	 */
 	switch (request->reply->code) {
-	case PW_AUTHENTICATION_ACK:
-		RDEBUG2("Proxied authentication succeeded.");
+	case PW_CODE_AUTHENTICATION_ACK:
+		RDEBUG2("Proxied authentication succeeded");
 
 		/*
 		 *	Move the attribute, so it doesn't go into
 		 *	the reply.
 		 */
-		pairfilter(data, &response,
-			  &request->reply->vps,
-			  PW_MSCHAP2_SUCCESS, VENDORPEC_MICROSOFT, TAG_ANY);
+		pairfilter(data, &response, &request->reply->vps, PW_MSCHAP2_SUCCESS, VENDORPEC_MICROSOFT, TAG_ANY);
 		break;
 
 	default:
-	case PW_AUTHENTICATION_REJECT:
-		RDEBUG("Proxied authentication did not succeed.");
+	case PW_CODE_AUTHENTICATION_REJECT:
+		RDEBUG("Proxied authentication did not succeed");
 		return 0;
 	}
 
@@ -336,7 +329,7 @@ static int mschap_postproxy(eap_handler_t *handler, UNUSED void *tunnel_data)
 	/*
 	 *	Done doing EAP proxy stuff.
 	 */
-	request->options &= ~RAD_REQUEST_OPTION_PROXY_EAP;
+	request->log.lvl &= ~RAD_REQUEST_OPTION_PROXY_EAP;
 	eapmschapv2_compose(handler, response);
 	data->code = PW_EAP_MSCHAPV2_SUCCESS;
 
@@ -358,7 +351,7 @@ static int mschap_postproxy(eap_handler_t *handler, UNUSED void *tunnel_data)
 	 *	And we need to challenge the user, not ack/reject them,
 	 *	so we re-write the ACK to a challenge.  Yuck.
 	 */
-	request->reply->code = PW_ACCESS_CHALLENGE;
+	request->reply->code = PW_CODE_ACCESS_CHALLENGE;
 	pairfree(&response);
 
 	return 1;
@@ -368,17 +361,18 @@ static int mschap_postproxy(eap_handler_t *handler, UNUSED void *tunnel_data)
 /*
  *	Authenticate a previously sent challenge.
  */
-static int mschapv2_authenticate(void *arg, eap_handler_t *handler)
+static int CC_HINT(nonnull) mschapv2_authenticate(void *arg, eap_handler_t *handler)
 {
 	int rcode, ccode;
 	uint8_t *p;
+	size_t length;
+	char *q;
 	mschapv2_opaque_t *data;
 	EAP_DS *eap_ds = handler->eap_ds;
 	VALUE_PAIR *challenge, *response, *name;
 	rlm_eap_mschapv2_t *inst = (rlm_eap_mschapv2_t *) arg;
 	REQUEST *request = handler->request;
 
-	rad_assert(request != NULL);
 	rad_assert(handler->stage == AUTHENTICATE);
 
 	data = (mschapv2_opaque_t *) handler->opaque;
@@ -469,7 +463,7 @@ static int mschapv2_authenticate(void *arg, eap_handler_t *handler)
 			}
 
 	failure:
-			request->options &= ~RAD_REQUEST_OPTION_PROXY_EAP;
+			request->log.lvl &= ~RAD_REQUEST_OPTION_PROXY_EAP;
 			eap_ds->request->code = PW_EAP_FAILURE;
 			return 1;
 
@@ -494,7 +488,7 @@ static int mschapv2_authenticate(void *arg, eap_handler_t *handler)
 					/*
 					 *	It's a success.  Don't proxy it.
 					 */
-					request->options &= ~RAD_REQUEST_OPTION_PROXY_EAP;
+					request->log.lvl &= ~RAD_REQUEST_OPTION_PROXY_EAP;
 #endif
 					pairfilter(request->reply,
 						  &request->reply->vps,
@@ -552,11 +546,10 @@ static int mschapv2_authenticate(void *arg, eap_handler_t *handler)
 	 *	The MS-Length field is 5 + value_size + length
 	 *	of name, which is put after the response.
 	 */
-	if (((eap_ds->response->type.data[2] << 8) |
-	     eap_ds->response->type.data[3]) < (5 + 49)) {
-		REDEBUG("Response contains contradictory length %d %d",
-			(eap_ds->response->type.data[2] << 8) |
-		       eap_ds->response->type.data[3], 5 + 49);
+	length = (eap_ds->response->type.data[2] << 8) | eap_ds->response->type.data[3];
+	if ((length < (5 + 49)) || (length > (256 + 5 + 49))) {
+		REDEBUG("Response contains contradictory length %zu %d",
+			length, 5 + 49);
 		return 0;
 	}
 
@@ -579,14 +572,12 @@ static int mschapv2_authenticate(void *arg, eap_handler_t *handler)
 	if (!response) {
 		return 0;
 	}
-
 	response->length = MSCHAPV2_RESPONSE_LEN;
 	response->vp_octets = p = talloc_array(response, uint8_t, response->length);
 
 	p[0] = eap_ds->response->type.data[1];
 	p[1] = eap_ds->response->type.data[5 + MSCHAPV2_RESPONSE_LEN];
-	memcpy(p + 2, &eap_ds->response->type.data[5],
-	       MSCHAPV2_RESPONSE_LEN - 2);
+	memcpy(p + 2, &eap_ds->response->type.data[5], MSCHAPV2_RESPONSE_LEN - 2);
 
 	name = pairmake_packet("MS-CHAP-User-Name", NULL, T_OP_EQ);
 	if (!name) {
@@ -596,14 +587,12 @@ static int mschapv2_authenticate(void *arg, eap_handler_t *handler)
 	/*
 	 *	MS-Length - MS-Value - 5.
 	 */
-	name->length = (((eap_ds->response->type.data[2] << 8) |
-			 eap_ds->response->type.data[3]) -
-			eap_ds->response->type.data[4] - 5);
-	name->vp_octets = p = talloc_array(name, uint8_t, name->length + 1);
-	memcpy(p,
+	name->length = length - 49 - 5;
+	name->vp_strvalue = q = talloc_array(name, char, name->length + 1);
+	memcpy(q,
 	       &eap_ds->response->type.data[4 + MSCHAPV2_RESPONSE_LEN],
 	       name->length);
-	p[name->length] = '\0';
+	q[name->length] = '\0';
 
 packet_ready:
 
@@ -618,7 +607,7 @@ packet_ready:
 	 *	EAP attributes, and proxy the MS-CHAP attributes to a
 	 *	home server.
 	 */
-	if (request->options & RAD_REQUEST_OPTION_PROXY_EAP) {
+	if (request->log.lvl & RAD_REQUEST_OPTION_PROXY_EAP) {
 		char *username = NULL;
 		eap_tunnel_data_t *tunnel;
 
@@ -697,16 +686,15 @@ packet_ready:
 	 */
 	response = NULL;
 	if (rcode == RLM_MODULE_OK) {
-		pairfilter(data, &response, &request->reply->vps,
-			 PW_MSCHAP2_SUCCESS, VENDORPEC_MICROSOFT, TAG_ANY);
+		pairfilter(data, &response, &request->reply->vps, PW_MSCHAP2_SUCCESS, VENDORPEC_MICROSOFT, TAG_ANY);
 		data->code = PW_EAP_MSCHAPV2_SUCCESS;
-
 	} else if (inst->send_error) {
-		pairfilter(data, &response, &request->reply->vps,
-			  PW_MSCHAP_ERROR, VENDORPEC_MICROSOFT, TAG_ANY);
+		pairfilter(data, &response, &request->reply->vps, PW_MSCHAP_ERROR, VENDORPEC_MICROSOFT, TAG_ANY);
 		if (response) {
 			int n,err,retry;
 			char buf[34];
+
+			VERIFY_VP(response);
 
 			RDEBUG2("MSCHAP-Error: %s", response->vp_strvalue);
 
@@ -734,7 +722,7 @@ packet_ready:
 	 *	No response, die.
 	 */
 	if (!response) {
-		REDEBUG("No MS-CHAP-Success or MS-CHAP-Error was found.");
+		REDEBUG("No MS-CHAP-Success or MS-CHAP-Error was found");
 		return 0;
 	}
 

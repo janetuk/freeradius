@@ -42,6 +42,8 @@ our (%RAD_REQUEST, %RAD_REPLY, %RAD_CHECK);
 #my %RAD_REPLY;
 #This is for check items
 #my %RAD_CHECK;
+# This is configuration items from "config" perl module configuration section
+#my %RAD_PERLCONF;
 
 #
 # This the remapping of return values
@@ -57,14 +59,6 @@ use constant {
 	RLM_MODULE_UPDATED  => 8, # OK (pairs modified)
 	RLM_MODULE_NUMCODES => 9  # How many return codes there are
 };
-
-# Same as src/include/radiusd.h
-use constant	L_DBG=>   1;
-use constant	L_AUTH=>  2;
-use constant	L_INFO=>  3;
-use constant	L_ERR=>   4;
-use constant	L_PROXY=> 5;
-use constant	L_ACCT=>  6;
 
 # Same as src/include/radiusd.h
 use constant	L_DBG=>   1;
