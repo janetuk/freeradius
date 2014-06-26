@@ -264,9 +264,6 @@ static VALUE_PAIR *diameter2vp(REQUEST *request, REQUEST *fake, SSL *ssl,
 			pairfree(&first);
 			return NULL;
 		}
-		if (vendor == VENDORPEC_UKERNA) {
-			RDEBUG("Received UKERNA attr %d!", attr);
-		}	
 
 		/*
 		 *	If it's a type from our dictionary, then
