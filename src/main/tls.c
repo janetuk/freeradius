@@ -81,22 +81,29 @@ static unsigned int 	record_minus(record_t *buf, void *ptr,
 				     unsigned int size);
 
 #ifdef PSK_MAX_IDENTITY_LEN
-static int identity_is_safe( const char *identity)
+static bool identity_is_safe(const char *identity)
 {
-	while (identity &&identity[0]) {
-		char c = identity[0];
-		identity++;
-		if (isalpha(c) || isdigit(c))
+	char c;
+
+	if (!identity) return true;
+
+	while ((c = *(identity++)) != '\0') {
+		if (isalpha((int) c) || isdigit((int) c) || isspace((int) c) ||
+		    (c == '@') || (c == '-') || (c == '_') || (c == '.')) {
 			continue;
-		else if ((c == '@') || (c == '-') || (c == '_'))
-			continue;
-		else if (isspace(c) || (c == '.'))
-			continue;
-		else return 0;
+		}
+
+		return false;
 	}
-	return 1;
+
+	return true;
 }
 
+
+/*
+ *	When a client uses TLS-PSK to talk to a server, this callback
+ *	is used by the server to determine the PSK to use.
+ */
 static unsigned int psk_server_callback(SSL *ssl, const char *identity,
 					unsigned char *psk,
 					unsigned int max_psk_len)
@@ -104,7 +111,6 @@ static unsigned int psk_server_callback(SSL *ssl, const char *identity,
 	unsigned int psk_len = 0;
 	fr_tls_server_conf_t *conf;
 	REQUEST *request;
-	
 
 	conf = (fr_tls_server_conf_t *)SSL_get_ex_data(ssl,
 						       FR_TLS_EX_INDEX_CONF);
@@ -112,33 +118,62 @@ static unsigned int psk_server_callback(SSL *ssl, const char *identity,
 
 	request = (REQUEST *)SSL_get_ex_data(ssl,
 					     FR_TLS_EX_INDEX_REQUEST);
-	if (request) {
+	if (request && conf->psk_query) {
+		size_t hex_len;
 		VALUE_PAIR *vp;
-		char psk_buffer[2*PSK_MAX_PSK_LEN+1];
-		 size_t hex_len = 0;
-		if (max_psk_len > PSK_MAX_PSK_LEN)
-		  max_psk_len = PSK_MAX_PSK_LEN;
-		vp = pairmake(request, &request->config_items,
-				  "tls-psk-identity",
-				  identity, T_OP_SET);
-		if (vp) {
-			if (identity_is_safe(identity))
-			  hex_len = radius_xlat((char *) psk_buffer,
-						2*max_psk_len+1,
-						request, "%{psksql:select hex(key) from psk_keys where keyid = '%{control:tls-psk-identity}';}",
-						NULL, NULL);
-			if (hex_len >0)
-			  return fr_hex2bin(psk, psk_buffer, hex_len);
+		char buffer[2 * PSK_MAX_PSK_LEN + 4]; /* allow for too-long keys */
+
+		/*
+		 *	The passed identity is weird.  Deny it.
+		 */
+		if (!identity_is_safe(identity)) {
+			RWDEBUG("Invalid characters in PSK identity %s", identity);
+			return 0;
 		}
+
+		vp = pairmake_packet("TLS-PSK-Identity", identity, T_OP_SET);
+		if (!vp) return 0;
+
+		hex_len = radius_xlat(buffer, sizeof(buffer), request, conf->psk_query,
+				      NULL, NULL);
+		if (!hex_len) {
+			RWDEBUG("PSK expansion returned an empty string.");
+			return 0;
+		}
+
+		/*
+		 *	The returned key is truncated at MORE than
+		 *	OpenSSL can handle.  That way we can detect
+		 *	the truncation, and complain about it.
+		 */
+		if (hex_len > (2 * max_psk_len)) {
+			RWDEBUG("Returned PSK is too long (%u > %u)",
+				(unsigned int) hex_len, 2 * max_psk_len);
+			return 0;
+		}
+
+		/*
+		 *	Leave the TLS-PSK-Identity in the request, and
+		 *	convert the expansion from printable string
+		 *	back to hex.
+		 */
+		return fr_hex2bin(psk, max_psk_len, buffer, hex_len);
 	}
-		if (strcmp(identity, conf->psk_identity) != 0) {
+
+	/*
+	 *	No REQUEST, or no dynamic query.  Just look for a
+	 *	static identity.
+	 */
+	if (strcmp(identity, conf->psk_identity) != 0) {
+		ERROR("Supplied PSK identity %s does not match configuration.  Rejecting.",
+		      identity);
 		return 0;
 	}
 
 		psk_len = strlen(conf->psk_password);
 	if (psk_len > (2 * max_psk_len)) return 0;
 
-	return fr_hex2bin(psk, conf->psk_password, psk_len);
+	return fr_hex2bin(psk, max_psk_len, conf->psk_password, psk_len);
 }
 
 static unsigned int psk_client_callback(SSL *ssl, UNUSED char const *hint,
@@ -157,7 +192,7 @@ static unsigned int psk_client_callback(SSL *ssl, UNUSED char const *hint,
 
 	strlcpy(identity, conf->psk_identity, max_identity_len);
 
-	return fr_hex2bin(psk, conf->psk_password, psk_len);
+	return fr_hex2bin(psk, max_psk_len, conf->psk_password, psk_len);
 }
 
 #endif
@@ -181,7 +216,7 @@ tls_session_t *tls_new_client_session(fr_tls_server_conf_t *conf, int fd)
 		return NULL;
 	}
 
-	request = talloc_zero(ssn, REQUEST);
+	request = request_alloc(ssn);
 	SSL_set_ex_data(ssn->ssl, FR_TLS_EX_INDEX_REQUEST, (void *)request);
 
 	/*
@@ -219,8 +254,22 @@ tls_session_t *tls_new_client_session(fr_tls_server_conf_t *conf, int fd)
 	return ssn;
 }
 
-tls_session_t *tls_new_session(fr_tls_server_conf_t *conf, REQUEST *request,
-			       int client_cert)
+static int _tls_session_free(tls_session_t *ssn)
+{
+	/*
+	 *	Free any opaque TTLS or PEAP data.
+	 */
+	if ((ssn->opaque) && (ssn->free_opaque)) {
+		ssn->free_opaque(ssn->opaque);
+		ssn->opaque = NULL;
+	}
+
+	session_close(ssn);
+
+	return 0;
+}
+
+tls_session_t *tls_new_session(TALLOC_CTX *ctx, fr_tls_server_conf_t *conf, REQUEST *request, bool client_cert)
 {
 	tls_session_t *state = NULL;
 	SSL *new_tls = NULL;
@@ -254,8 +303,9 @@ tls_session_t *tls_new_session(fr_tls_server_conf_t *conf, REQUEST *request,
 	/* We use the SSL's "app_data" to indicate a call-back */
 	SSL_set_app_data(new_tls, NULL);
 
-	state = talloc_zero(conf, tls_session_t);
+	state = talloc_zero(ctx, tls_session_t);
 	session_init(state);
+	talloc_set_destructor(state, _tls_session_free);
 
 	state->ctx = conf->ctx;
 	state->ssl = new_tls;
@@ -557,25 +607,6 @@ void session_close(tls_session_t *ssn)
 	session_init(ssn);
 }
 
-void session_free(void *ssn)
-{
-	tls_session_t *sess = (tls_session_t *)ssn;
-
-	if (!ssn) return;
-
-	/*
-	 *	Free any opaque TTLS or PEAP data.
-	 */
-	if ((sess->opaque) && (sess->free_opaque)) {
-		sess->free_opaque(sess->opaque);
-		sess->opaque = NULL;
-	}
-
-	session_close(sess);
-
-	talloc_free(sess);
-}
-
 static void record_init(record_t *rec)
 {
 	rec->used = 0;
@@ -867,6 +898,7 @@ static CONF_PARSER tls_server_config[] = {
 #ifdef PSK_MAX_IDENTITY_LEN
 	{ "psk_identity", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, psk_identity), NULL },
 	{ "psk_hexphrase", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_SECRET, fr_tls_server_conf_t, psk_password), NULL },
+	{ "psk_query", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, psk_query), NULL },
 #endif
 	{ "dh_file", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, dh_file), NULL },
 	{ "random_file", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, random_file), NULL },
@@ -1056,8 +1088,10 @@ static int cbtls_new_session(SSL *ssl, SSL_SESSION *sess)
 			return 0;
 		}
 
+
+		/* Do not convert to TALLOC - Thread safety */
 		/* alloc and convert to ASN.1 */
-		sess_blob = talloc_array(conf, unsigned char, blob_len);
+		sess_blob = malloc(blob_len);
 		if (!sess_blob) {
 			DEBUG2("  SSL: could not allocate buffer len=%d to persist session", blob_len);
 			return 0;
@@ -1096,7 +1130,7 @@ static int cbtls_new_session(SSL *ssl, SSL_SESSION *sess)
 	}
 
 error:
-	if (sess_blob) talloc_free(sess_blob);
+	free(sess_blob);
 
 	return 0;
 }
@@ -2036,7 +2070,7 @@ void tls_global_cleanup(void)
  *	- Load the Private key & the certificate
  *	- Set the Context options & Verify options
  */
- SSL_CTX *tls_init_ctx(fr_tls_server_conf_t *conf, int client)
+SSL_CTX *tls_init_ctx(fr_tls_server_conf_t *conf, int client)
 {
 	SSL_CTX *ctx;
 	X509_STORE *certstore;
@@ -2135,6 +2169,26 @@ void tls_global_cleanup(void)
 	}
 
 #ifdef PSK_MAX_IDENTITY_LEN
+	if (!client) {
+		/*
+		 *	No dynamic query exists.  There MUST be a
+		 *	statically configured identity and password.
+		 */
+		if (conf->psk_query && !*conf->psk_query) {
+			ERROR("Invalid PSK Configuration: psk_query cannot be empty");
+			return NULL;
+		}
+
+		SSL_CTX_set_psk_server_callback(ctx, psk_server_callback);
+
+	} else if (conf->psk_query) {
+		ERROR("Invalid PSK Configuration: psk_query cannot be used for outgoing connections");
+		return NULL;
+	}
+
+	/*
+	 *	Now check that if PSK is being used, the config is valid.
+	 */
 	if ((conf->psk_identity && !conf->psk_password) ||
 	    (!conf->psk_identity && conf->psk_password) ||
 	    (conf->psk_identity && !*conf->psk_identity) ||
@@ -2143,22 +2197,9 @@ void tls_global_cleanup(void)
 		return NULL;
 	}
 
-	/*
-	 * There are two ways PSKs can be configured for a server. The
-	 * first is the same as a client: psk_identity and
-	 * psk_hexphrase. The second is to dynamically configure PSKs
-	 * and to have the psk_xlat return them. The second is
-	 * compatible with certificates; either the PSK or cert will
-	 * be used depending on what the client uses.
-	 */
-	if (!client)
-		SSL_CTX_set_psk_server_callback(ctx,
-						psk_server_callback);
-
-
 	if (conf->psk_identity) {
 		size_t psk_len, hex_len;
-		char buffer[PSK_MAX_PSK_LEN];
+		uint8_t buffer[PSK_MAX_PSK_LEN];
 
 		if (conf->certificate_file ||
 		    conf->private_key_password || conf->private_key_file ||
@@ -2170,7 +2211,7 @@ void tls_global_cleanup(void)
 		if (client) {
 			SSL_CTX_set_psk_client_callback(ctx,
 							psk_client_callback);
-		} 
+		}
 
 		psk_len = strlen(conf->psk_password);
 		if (strlen(conf->psk_password) > (2 * PSK_MAX_PSK_LEN)) {
@@ -2179,7 +2220,11 @@ void tls_global_cleanup(void)
 			return NULL;
 		}
 
-		hex_len = fr_hex2bin((uint8_t *) buffer, conf->psk_password, psk_len);
+		/*
+		 *	Check the password now, so that we don't have
+		 *	errors at run-time.
+		 */
+		hex_len = fr_hex2bin(buffer, sizeof(buffer), conf->psk_password, psk_len);
 		if (psk_len != (2 * hex_len)) {
 			ERROR("psk_hexphrase is not all hex");
 			return NULL;
@@ -2327,13 +2372,13 @@ post_ca:
 	 */
 #ifdef X509_V_FLAG_CRL_CHECK
 	if (conf->check_crl) {
-	  certstore = SSL_CTX_get_cert_store(ctx);
-	  if (certstore == NULL) {
-	    ERROR("tls: SSL error %s", ERR_error_string(ERR_get_error(), NULL));
-	    ERROR("tls: Error reading Certificate Store");
-	    return NULL;
-	  }
-	  X509_STORE_set_flags(certstore, X509_V_FLAG_CRL_CHECK);
+		certstore = SSL_CTX_get_cert_store(ctx);
+		if (certstore == NULL) {
+			ERROR("tls: SSL error %s", ERR_error_string(ERR_get_error(), NULL));
+			ERROR("tls: Error reading Certificate Store");
+	    		return NULL;
+		}
+		X509_STORE_set_flags(certstore, X509_V_FLAG_CRL_CHECK);
 	}
 #endif
 
@@ -2421,7 +2466,7 @@ post_ca:
  *	added to automatically free the data when the CONF_SECTION
  *	is freed.
  */
-static int tls_server_conf_free(fr_tls_server_conf_t *conf)
+static int _tls_server_conf_free(fr_tls_server_conf_t *conf)
 {
 	if (conf->ctx) SSL_CTX_free(conf->ctx);
 
@@ -2434,6 +2479,21 @@ static int tls_server_conf_free(fr_tls_server_conf_t *conf)
 	memset(conf, 0, sizeof(*conf));
 #endif
 	return 0;
+}
+
+static fr_tls_server_conf_t *tls_server_conf_alloc(TALLOC_CTX *ctx)
+{
+	fr_tls_server_conf_t *conf;
+
+	conf = talloc_zero(ctx, fr_tls_server_conf_t);
+	if (!conf) {
+		ERROR("Out of memory");
+		return NULL;
+	}
+
+	talloc_set_destructor(conf, _tls_server_conf_free);
+
+	return conf;
 }
 
 
@@ -2451,13 +2511,7 @@ fr_tls_server_conf_t *tls_server_conf_parse(CONF_SECTION *cs)
 		return conf;
 	}
 
-	conf = talloc_zero(cs, fr_tls_server_conf_t);
-	if (!conf) {
-		ERROR("Out of memory");
-		return NULL;
-	}
-
-	talloc_set_destructor(conf, tls_server_conf_free);
+	conf = tls_server_conf_alloc(cs);
 
 	if (cf_section_parse(cs, conf, tls_server_config) < 0) {
 	error:
@@ -2540,13 +2594,7 @@ fr_tls_server_conf_t *tls_client_conf_parse(CONF_SECTION *cs)
 		return conf;
 	}
 
-	conf = talloc_zero(cs, fr_tls_server_conf_t);
-	if (!conf) {
-		ERROR("Out of memory");
-		return NULL;
-	}
-
-	talloc_set_destructor(conf, tls_server_conf_free);
+	conf = tls_server_conf_alloc(cs);
 
 	if (cf_section_parse(cs, conf, tls_client_config) < 0) {
 	error:
@@ -2734,7 +2782,7 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 						paircopyvp(request->packet, vp));
 				} else {
 					pairadd(&request->reply->vps,
-						paircopyvp(request->packet, vp));
+						paircopyvp(request->reply, vp));
 				}
 			}
 

@@ -31,7 +31,7 @@ RCSID("$Id$");
 #include <freeradius-devel/rad_assert.h>
 
 #include <libcouchbase/couchbase.h>
-#include <json/json.h>
+#include <json.h>
 
 #include "mod.h"
 #include "couchbase.h"
@@ -43,7 +43,7 @@ RCSID("$Id$");
 static const CONF_PARSER module_config[] = {
 	{ "acct_key", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_couchbase_t, acct_key), "radacct_%{%{Acct-Unique-Session-Id}:-%{Acct-Session-Id}}" },
 	{ "doctype", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_couchbase_t, doctype), "radacct" },
-	{ "server", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED, rlm_couchbase_t, server), NULL },
+	{ "server", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED, rlm_couchbase_t, server_raw), NULL },
 	{ "bucket", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED, rlm_couchbase_t, bucket), NULL },
 	{ "password", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_couchbase_t, password), NULL },
 	{ "expire", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_couchbase_t, expire), 0 },
@@ -53,7 +53,15 @@ static const CONF_PARSER module_config[] = {
 
 /* initialize couchbase connection */
 static int mod_instantiate(CONF_SECTION *conf, void *instance) {
+	static bool version_done;
+
 	rlm_couchbase_t *inst = instance;   /* our module instance */
+
+	if (!version_done) {
+		version_done = true;
+		INFO("rlm_couchbase: json-c version: %s", json_c_version());
+		INFO("rlm_couchbase: libcouchbase version: %s", lcb_get_version(NULL));
+	}
 
 	{
 		char *server, *p;
@@ -92,7 +100,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance) {
 	}
 
 	/* initiate connection pool */
-	inst->pool = fr_connection_pool_init(conf, inst, mod_conn_create, mod_conn_alive, mod_conn_delete, NULL);
+	inst->pool = fr_connection_pool_init(conf, inst, mod_conn_create, mod_conn_alive, NULL);
 
 	/* check connection pool */
 	if (!inst->pool) {

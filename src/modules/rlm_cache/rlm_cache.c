@@ -27,12 +27,6 @@ RCSID("$Id$")
 #include <freeradius-devel/heap.h>
 #include <freeradius-devel/rad_assert.h>
 
-#define PW_CACHE_TTL		1140
-#define PW_CACHE_STATUS_ONLY	1141
-#define PW_CACHE_MERGE		1142
-#define PW_CACHE_ENTRY_HITS	1143
-#define PW_CACHE_READ_ONLY	1144
-
 /*
  *	Define a structure for our module configuration.
  *
@@ -298,7 +292,7 @@ static rlm_cache_entry_t *cache_add(rlm_cache_t *inst, REQUEST *request, char co
 	vp = pairfind(request->config_items, PW_CACHE_TTL, 0, TAG_ANY);
 	if (vp && (vp->vp_signed == 0)) return NULL;
 
-	c = talloc_zero(inst, rlm_cache_entry_t);
+	c = talloc_zero(NULL, rlm_cache_entry_t);
 	c->key = talloc_typed_strdup(c, key);
 	c->created = c->expires = request->timestamp;
 
@@ -673,11 +667,13 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	/*
 	 *	The cache.
 	 */
-	inst->cache = rbtree_create(cache_entry_cmp, cache_entry_free, 0);
+
+	inst->cache = rbtree_create(NULL, cache_entry_cmp, cache_entry_free, 0);
 	if (!inst->cache) {
 		ERROR("Failed to create cache");
 		return -1;
 	}
+	fr_link_talloc_ctx_free(inst, inst->cache);
 
 	/*
 	 *	The heap of entries to expire.
@@ -766,7 +762,8 @@ done:
 		case PW_CACHE_TTL:
 		case PW_CACHE_READ_ONLY:
 		case PW_CACHE_MERGE:
-			fr_cursor_remove(&cursor);
+			vp = fr_cursor_remove(&cursor);
+			talloc_free(vp);
 			break;
 		}
 	}

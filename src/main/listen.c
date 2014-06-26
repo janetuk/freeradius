@@ -244,12 +244,13 @@ RADCLIENT *client_listener_find(rad_listen_t *listener,
 	request->client = client;
 	request->packet = rad_recv(listener->fd, 0x02); /* MSG_PEEK */
 	if (!request->packet) {				/* badly formed, etc */
-		request_free(&request);
+		talloc_free(request);
 		goto unknown;
 	}
+	(void) talloc_steal(request, request->packet);
 	request->reply = rad_alloc_reply(request, request->packet);
 	if (!request->reply) {
-		request_free(&request);
+		talloc_free(request);
 		goto unknown;
 	}
 	gettimeofday(&request->packet->timestamp, NULL);
@@ -273,7 +274,7 @@ RADCLIENT *client_listener_find(rad_listen_t *listener,
 	DEBUG("} # server %s", request->server);
 
 	if (rcode != RLM_MODULE_OK) {
-		request_free(&request);
+		talloc_free(request);
 		goto unknown;
 	}
 
@@ -295,7 +296,7 @@ RADCLIENT *client_listener_find(rad_listen_t *listener,
 	request->server = client->server;
 	exec_trigger(request, NULL, "server.client.add", false);
 
-	request_free(&request);
+	talloc_free(request);
 
 	if (!created) goto unknown;
 
@@ -331,7 +332,7 @@ int rad_status_server(REQUEST *request)
 		switch (rcode) {
 		case RLM_MODULE_OK:
 		case RLM_MODULE_UPDATED:
-			request->reply->code = PW_CODE_AUTHENTICATION_ACK;
+			request->reply->code = PW_CODE_ACCESS_ACCEPT;
 			break;
 
 		case RLM_MODULE_FAIL:
@@ -341,7 +342,7 @@ int rad_status_server(REQUEST *request)
 
 		default:
 		case RLM_MODULE_REJECT:
-			request->reply->code = PW_CODE_AUTHENTICATION_REJECT;
+			request->reply->code = PW_CODE_ACCESS_REJECT;
 			break;
 		}
 		break;
@@ -429,7 +430,7 @@ static int dual_tcp_recv(rad_listen_t *listener)
 	 *	Allocate a packet for partial reads.
 	 */
 	if (!sock->packet) {
-		sock->packet = rad_alloc(sock, 0);
+		sock->packet = rad_alloc(sock, false);
 		if (!sock->packet) return 0;
 
 		sock->packet->sockfd = listener->fd;
@@ -486,7 +487,7 @@ static int dual_tcp_recv(rad_listen_t *listener)
 	 *	Some sanity checks, based on the packet code.
 	 */
 	switch(packet->code) {
-	case PW_CODE_AUTHENTICATION_REQUEST:
+	case PW_CODE_ACCESS_REQUEST:
 		if (listener->type != RAD_LISTEN_AUTH) goto bad_packet;
 		FR_STATS_INC(auth, total_requests);
 		fun = rad_authenticate;
@@ -1444,7 +1445,7 @@ static int auth_socket_recv(rad_listen_t *listener)
 	 *	Some sanity checks, based on the packet code.
 	 */
 	switch(code) {
-	case PW_CODE_AUTHENTICATION_REQUEST:
+	case PW_CODE_ACCESS_REQUEST:
 		fun = rad_authenticate;
 		break;
 
@@ -1857,9 +1858,9 @@ static int proxy_socket_recv(rad_listen_t *listener)
 	 *	FIXME: Client MIB updates?
 	 */
 	switch(packet->code) {
-	case PW_CODE_AUTHENTICATION_ACK:
+	case PW_CODE_ACCESS_ACCEPT:
 	case PW_CODE_ACCESS_CHALLENGE:
-	case PW_CODE_AUTHENTICATION_REJECT:
+	case PW_CODE_ACCESS_REJECT:
 		break;
 
 #ifdef WITH_ACCOUNTING
@@ -1919,9 +1920,9 @@ static int proxy_socket_tcp_recv(rad_listen_t *listener)
 	 *	FIXME: Client MIB updates?
 	 */
 	switch(packet->code) {
-	case PW_CODE_AUTHENTICATION_ACK:
+	case PW_CODE_ACCESS_ACCEPT:
 	case PW_CODE_ACCESS_CHALLENGE:
-	case PW_CODE_AUTHENTICATION_REJECT:
+	case PW_CODE_ACCESS_REJECT:
 		break;
 
 #ifdef WITH_ACCOUNTING
@@ -2501,12 +2502,8 @@ static int listen_bind(rad_listen_t *this)
 }
 
 
-static int listener_free(void *ctx)
+static int _listener_free(rad_listen_t *this)
 {
-	rad_listen_t *this;
-
-	this = talloc_get_type_abort(ctx, rad_listen_t);
-
 	/*
 	 *	Other code may have eaten the FD.
 	 */
@@ -2542,8 +2539,8 @@ static int listener_free(void *ctx)
 		 *	may be used by multiple listeners.
 		 */
 		if (this->tls) {
-			if (sock->ssn) session_free(sock->ssn);
-			request_free(&sock->request);
+			TALLOC_FREE(sock->ssn);
+			TALLOC_FREE(sock->request);
 #ifdef HAVE_PTHREAD_H
 			pthread_mutex_destroy(&(sock->mutex));
 #endif
@@ -2571,7 +2568,7 @@ static rad_listen_t *listen_alloc(TALLOC_CTX *ctx, RAD_LISTEN_TYPE type)
 	this->encode = master_listen[this->type].encode;
 	this->decode = master_listen[this->type].decode;
 
-	talloc_set_destructor((void *) this, listener_free);
+	talloc_set_destructor(this, _listener_free);
 
 	this->data = talloc_zero_array(this, uint8_t, master_listen[this->type].inst_size);
 

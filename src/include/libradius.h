@@ -106,8 +106,8 @@ extern "C" {
  *  Add if (_x->da) (void) talloc_get_type_abort(_x->da, DICT_ATTR);
  *  to the macro below when dictionaries are talloced.
  */
-#  define VERIFY_VP(_x)		fr_verify_vp(_x)
-#  define VERIFY_LIST(_x)	fr_verify_list(NULL, _x)
+#  define VERIFY_VP(_x)		fr_verify_vp(__FILE__,  __LINE__, _x)
+#  define VERIFY_LIST(_x)	fr_verify_list(__FILE__,  __LINE__, NULL, _x)
 #  define VERIFY_PACKET(_x)	(void) talloc_get_type_abort(_x, RADIUS_PACKET)
 #else
 /*
@@ -143,10 +143,11 @@ extern "C" {
 #define TAG_NONE		0
 /** Check if tags are equal
  *
- * @param _s tag were matching on.
- * @param _a tag belonging to the attribute were checking.
+ * @param _x tag were matching on.
+ * @param _y tag belonging to the attribute were checking.
  */
-#define TAG_EQ(_s, _a) ((_s == _a) || (_s == TAG_ANY) || ((_s == TAG_NONE) && (_a == TAG_ANY)))
+#define TAG_EQ(_x, _y) ((_x == _y) || (_x == TAG_ANY) || ((_x == TAG_NONE) && (_y == TAG_ANY)))
+#define ATTRIBUTE_EQ(_x, _y) ((_x && _y) && (_x->da == _y->da) && (!_x->da->flags.has_tag || TAG_EQ(_x->tag, _y->tag)))
 
 #define NUM_ANY			INT_MIN
 #define NUM_JOIN		(INT_MIN + 1)
@@ -423,6 +424,8 @@ size_t		fr_print_string_len(char const *in, size_t inlen);
 
 #define		is_truncated(_ret, _max) ((_ret) >= (_max))
 #define		truncate_len(_ret, _max) (((_ret) >= (_max)) ? ((_max) - 1) : _ret)
+size_t		vp_data_prints_value(char *out, size_t outlen,
+				     DICT_ATTR const *da, value_data_t const *data, size_t data_len, int8_t quote);
 size_t   	vp_prints_value(char *out, size_t outlen, VALUE_PAIR const *vp, int8_t quote);
 size_t    	vp_prints_value_json(char *out, size_t outlen, VALUE_PAIR const *vp);
 size_t		vp_prints(char *out, size_t outlen, VALUE_PAIR const *vp);
@@ -473,16 +476,7 @@ DICT_VENDOR	*dict_vendorbyvalue(int vendor);
 #endif
 
 /* md5.c */
-
 void		fr_md5_calc(uint8_t *, uint8_t const *, unsigned int);
-
-/* hmac.c */
-
-void fr_hmac_md5(uint8_t const *text, size_t text_len, uint8_t const *key, size_t key_len, unsigned char *digest);
-
-/* hmacsha1.c */
-
-void fr_hmac_sha1(uint8_t const *text, size_t text_len, uint8_t const *key, size_t key_len, uint8_t *digest);
 
 /* radius.c */
 int		rad_send(RADIUS_PACKET *, RADIUS_PACKET const *, char const *secret);
@@ -499,7 +493,7 @@ int		rad_sign(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 			 char const *secret);
 
 int rad_digest_cmp(uint8_t const *a, uint8_t const *b, size_t length);
-RADIUS_PACKET	*rad_alloc(TALLOC_CTX *ctx, int newvector);
+RADIUS_PACKET	*rad_alloc(TALLOC_CTX *ctx, bool new_vector);
 RADIUS_PACKET	*rad_alloc_reply(TALLOC_CTX *ctx, RADIUS_PACKET *);
 RADIUS_PACKET *rad_copy_packet(TALLOC_CTX *ctx, RADIUS_PACKET const *in);
 
@@ -522,18 +516,16 @@ int		rad_attr_ok(RADIUS_PACKET const *packet, RADIUS_PACKET const *original,
 int		rad_tlv_ok(uint8_t const *data, size_t length,
 			   size_t dv_type, size_t dv_length);
 
-ssize_t		data2vp(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
+ssize_t		data2vp(TALLOC_CTX *ctx,
+			RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 			char const *secret,
 			DICT_ATTR const *da, uint8_t const *start,
 			size_t const attrlen, size_t const packetlen,
 			VALUE_PAIR **pvp);
 
-ssize_t		rad_attr2vp(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
+ssize_t		rad_attr2vp(TALLOC_CTX *ctx,
+			    RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 			    char const *secret,
-			    uint8_t const *data, size_t length,
-			    VALUE_PAIR **pvp);
-
-ssize_t		rad_data2vp(unsigned int attribute, unsigned int vendor,
 			    uint8_t const *data, size_t length,
 			    VALUE_PAIR **pvp);
 
@@ -580,6 +572,7 @@ VALUE_PAIR	*fr_cursor_next_by_da(vp_cursor_t *cursor, DICT_ATTR const *da, int8_
 		CC_HINT(nonnull);
 
 VALUE_PAIR	*fr_cursor_next(vp_cursor_t *cursor);
+VALUE_PAIR	*fr_cursor_next_peek(vp_cursor_t *cursor);
 VALUE_PAIR	*fr_cursor_current(vp_cursor_t *cursor);
 void		fr_cursor_insert(vp_cursor_t *cursor, VALUE_PAIR *vp);
 VALUE_PAIR	*fr_cursor_remove(vp_cursor_t *cursor);
@@ -600,7 +593,6 @@ void		pairvalidate_debug(TALLOC_CTX *ctx, VALUE_PAIR const *failed[2]);
 bool		pairvalidate(VALUE_PAIR const *failed[2], VALUE_PAIR *filter, VALUE_PAIR *list);
 bool 		pairvalidate_relaxed(VALUE_PAIR const *failed[2], VALUE_PAIR *filter, VALUE_PAIR *list);
 VALUE_PAIR	*paircopyvp(TALLOC_CTX *ctx, VALUE_PAIR const *vp);
-VALUE_PAIR	*paircopyvpdata(TALLOC_CTX *ctx, DICT_ATTR const *da, VALUE_PAIR const *vp);
 VALUE_PAIR	*paircopy(TALLOC_CTX *ctx, VALUE_PAIR *from);
 VALUE_PAIR	*paircopy2(TALLOC_CTX *ctx, VALUE_PAIR *from, unsigned int attr, unsigned int vendor, int8_t tag);
 VALUE_PAIR	*pairsteal(TALLOC_CTX *ctx, VALUE_PAIR *from);
@@ -609,6 +601,7 @@ void		pairmemsteal(VALUE_PAIR *vp, uint8_t const *src);
 void		pairstrsteal(VALUE_PAIR *vp, char const *src);
 void		pairstrcpy(VALUE_PAIR *vp, char const * src);
 void		pairstrncpy(VALUE_PAIR *vp, char const * src, size_t len);
+int		pairdatacpy(VALUE_PAIR *vp, DICT_ATTR const *da, value_data_t const *data, size_t len);
 void		pairsprintf(VALUE_PAIR *vp, char const * fmt, ...) CC_HINT(format (printf, 2, 3));
 void		pairmove(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from);
 void		pairfilter(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from,
@@ -628,14 +621,6 @@ int		readvp2(VALUE_PAIR **out, TALLOC_CTX *ctx, FILE *fp, bool *pfiledone);
 void		fr_strerror_printf(char const *, ...) CC_HINT(format (printf, 1, 2));
 void		fr_perror(char const *, ...) CC_HINT(format (printf, 1, 2));
 
-extern bool fr_assert_cond(char const *file, int line, char const *expr, bool cond);
-#define fr_assert(_x) fr_assert_cond(__FILE__,  __LINE__, #_x, (_x))
-
-extern void NEVER_RETURNS _fr_exit(char const *file, int line, int status);
-#define fr_exit(_x) _fr_exit(__FILE__,  __LINE__, (_x))
-
-extern void NEVER_RETURNS _fr_exit_now(char const *file, int line, int status);
-#define fr_exit_now(_x) _fr_exit_now(__FILE__,  __LINE__, (_x))
 
 extern char const *fr_strerror(void);
 extern char const *fr_syserror(int num);
@@ -654,7 +639,7 @@ void		fr_printf_log(char const *, ...) CC_HINT(format (printf, 1, 2));
  *	Several handy miscellaneous functions.
  */
 int		fr_set_signal(int sig, sig_t func);
-TALLOC_CTX	*fr_autofree_ctx(void);
+int		fr_link_talloc_ctx_free(TALLOC_CTX *parent, TALLOC_CTX *child);
 char const	*fr_inet_ntop(int af, void const *src);
 char const 	*ip_ntoa(char *, uint32_t);
 int		fr_pton4(fr_ipaddr_t *out, char const *value, size_t inlen, bool resolve, bool fallback);
@@ -667,8 +652,9 @@ uint8_t		*ifid_aton(char const *ifid_str, uint8_t *ifid);
 int		rad_lockfd(int fd, int lock_len);
 int		rad_lockfd_nonblock(int fd, int lock_len);
 int		rad_unlockfd(int fd, int lock_len);
+char		*fr_abin2hex(TALLOC_CTX *ctx, uint8_t const *bin, size_t inlen);
 size_t		fr_bin2hex(char *hex, uint8_t const *bin, size_t inlen);
-size_t		fr_hex2bin(uint8_t *bin, char const *hex, size_t outlen);
+size_t		fr_hex2bin(uint8_t *bin, size_t outlen, char const *hex, size_t inlen);
 uint32_t	fr_strtoul(char const *value, char **end);
 bool		is_whitespace(char const *value);
 bool		is_integer(char const *value);
@@ -708,7 +694,7 @@ void		fr_talloc_verify_cb(const void *ptr, int depth,
 #ifdef WITH_ASCEND_BINARY
 /* filters.c */
 int		ascend_parse_filter(VALUE_PAIR *vp, char const *value, size_t len);
-void		print_abinary(char *out, size_t outlen, VALUE_PAIR const *vp,  int8_t quote);
+void		print_abinary(char *out, size_t outlen, uint8_t const *data, size_t len, int8_t quote);
 #endif /*WITH_ASCEND_BINARY*/
 
 /* random numbers in isaac.c */
@@ -732,6 +718,7 @@ void		fr_rand_seed(void const *, size_t ); /* seed the random pool */
 int		fr_crypt_check(char const *key, char const *salt);
 
 /* cbuff.c */
+
 typedef struct fr_cbuff fr_cbuff_t;
 
 fr_cbuff_t	*fr_cbuff_alloc(TALLOC_CTX *ctx, uint32_t size, bool lock);
@@ -754,6 +741,7 @@ typedef struct fr_bt_marker fr_bt_marker_t;
 
 void		fr_debug_break(void);
 void		backtrace_print(fr_cbuff_t *cbuff, void *obj);
+int		fr_backtrace_do(fr_bt_marker_t *marker);
 fr_bt_marker_t	*fr_backtrace_attach(fr_cbuff_t **cbuff, TALLOC_CTX *obj);
 
 typedef void (*fr_fault_log_t)(char const *msg, ...) CC_HINT(format (printf, 1, 2));
@@ -768,10 +756,19 @@ void		fr_fault_set_cb(fr_fault_cb_t func);
 void		fr_fault_set_log_fn(fr_fault_log_t func);
 void		fr_fault_set_log_fd(int fd);
 
-#ifdef WITH_VERIFY_PTR
-void		fr_verify_vp(VALUE_PAIR const *vp);
-void		fr_verify_list(TALLOC_CTX *expected, VALUE_PAIR *vps);
-#endif
+#  ifdef WITH_VERIFY_PTR
+void		fr_verify_vp(char const *file, int line, VALUE_PAIR const *vp);
+void		fr_verify_list(char const *file, int line, TALLOC_CTX *expected, VALUE_PAIR *vps);
+#  endif
+
+bool		fr_assert_cond(char const *file, int line, char const *expr, bool cond);
+#  define	fr_assert(_x) fr_assert_cond(__FILE__,  __LINE__, #_x, (_x))
+
+void		NEVER_RETURNS _fr_exit(char const *file, int line, int status);
+#  define	fr_exit(_x) _fr_exit(__FILE__,  __LINE__, (_x))
+
+void		NEVER_RETURNS _fr_exit_now(char const *file, int line, int status);
+#  define	fr_exit_now(_x) _fr_exit_now(__FILE__,  __LINE__, (_x))
 
 /* rbtree.c */
 typedef struct rbtree_t rbtree_t;
@@ -793,7 +790,7 @@ typedef int (*rb_comparator_t)(void const *ctx, void const *data);
 typedef int (*rb_walker_t)(void *ctx, void *data);
 typedef void (*rb_free_t)(void *data);
 
-rbtree_t	*rbtree_create(rb_comparator_t compare, rb_free_t node_free, int flags);
+rbtree_t	*rbtree_create(TALLOC_CTX *ctx, rb_comparator_t compare, rb_free_t node_free, int flags);
 void		rbtree_free(rbtree_t *tree);
 bool		rbtree_insert(rbtree_t *tree, void *data);
 rbnode_t	*rbtree_insert_node(rbtree_t *tree, void *data);

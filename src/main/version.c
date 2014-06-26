@@ -35,7 +35,12 @@ static uint64_t libmagic = RADIUSD_MAGIC_NUMBER;
 
 static long ssl_built = OPENSSL_VERSION_NUMBER;
 
-/** Check build and linked versions of OpenSSL match
+/** Check built and linked versions of OpenSSL match
+ *
+ * OpenSSL version number consists of:
+ * MMNNFFPPS: major minor fix patch status
+ *
+ * Where status >= 0 && < 10 means beta, and status 10 means release.
  *
  * Startup check for whether the linked version of OpenSSL matches the
  * version the server was built against.

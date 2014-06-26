@@ -180,6 +180,8 @@ const FR_NAME_NUMBER mod_rcode_table[] = {
 };
 
 
+static char const *group_name[];
+
 /*
  *	Compile action && rcode for later use.
  */
@@ -191,6 +193,12 @@ static int compile_action(modcallable *c, CONF_PAIR *cp)
 	attr = cf_pair_attr(cp);
 	value = cf_pair_value(cp);
 	if (!value) return 0;
+
+	if (c->type != MOD_SINGLE) {
+		ERROR("%s[%d] Invalid return code assigment inside of a %s section",
+		      cf_pair_filename(cp), cf_pair_lineno(cp), group_name[c->type]);
+		return 0;
+	}
 
 	if (!strcasecmp(value, "return"))
 		action = MOD_ACTION_RETURN;
@@ -367,7 +375,7 @@ static char const *group_name[] = {
 	"xlat"
 };
 
-static char const *modcall_spaces = "                                                                ";
+static char const modcall_spaces[] = "                                                                ";
 
 #define MODCALL_STACK_MAX (32)
 
@@ -426,6 +434,7 @@ static void modcall_child(REQUEST *request, rlm_components_t component, int dept
 
 	return;
 }
+
 
 /*
  *	Interpret the various types of blocks.
@@ -770,8 +779,8 @@ redo:
 		 *	MOD_GROUP.
 		 */
 		if (!g->children) {
-			RDEBUG2("%.*s%s %s { ... } # empty sub-section is ignored",
-				depth + 1, modcall_spaces, cf_section_name1(g->cs), c->name);
+			RDEBUG2("%.*s%s { ... } # empty sub-section is ignored",
+				depth + 1, modcall_spaces, c->name);
 			goto next_sibling;
 		}
 
@@ -891,20 +900,20 @@ redo:
 
 	if ((c->type == MOD_LOAD_BALANCE) ||
 	    (c->type == MOD_REDUNDANT_LOAD_BALANCE)) {
-		int count = 0;
+		uint32_t count = 0;
 		modcallable *this, *found;
 		modgroup *g;
 
 		MOD_LOG_OPEN_BRACE("load-balance");
 
 		g = mod_callabletogroup(c);
-		found = NULL;
+		found = g->children;
+		rad_assert(g->children != NULL);
+
+		/*
+		 *	Choose a child at random.
+		 */
 		for (this = g->children; this; this = this->next) {
-			if (!found) {
-				found = this;
-				count = 1;
-				continue;
-			}
 			count++;
 
 			if ((count * (fr_rand() & 0xffff)) < (uint32_t) 0x10000) {
@@ -920,22 +929,20 @@ redo:
 				      &result);
 
 		} else {
-			int i;
+			this = found;
 
-			/*
-			 *	Loop over all children in this
-			 *	section.  If we get FAIL, then
-			 *	continue.  Otherwise, stop.
-			 */
-			for (i = 1; i < count; i++) {
+			do {
 				modcall_child(request, component,
-					      depth + 1, entry, found,
+					      depth + 1, entry, this,
 					      &result);
-				if (c->actions[result] == MOD_ACTION_RETURN) {
+				if (this->actions[result] == MOD_ACTION_RETURN) {
 					priority = -1;
 					break;
 				}
-			}
+
+				this = this->next;
+				if (!this) this = g->children;
+			} while (this != found);
 		}
 		MOD_LOG_CLOSE_BRACE();
 		goto calculate_result;
@@ -2503,7 +2510,8 @@ static modcallable *do_compile_modgroup(modcallable *parent,
 	c->name = cf_section_name2(cs);
 	if (!c->name) {
 		c->name = cf_section_name1(cs);
-		if (strcmp(c->name, "group") == 0) {
+		if ((strcmp(c->name, "group") == 0) ||
+		    (strcmp(c->name, "redundant") == 0)) {
 			c->name = "";
 		} else if (c->type == MOD_GROUP) {
 			c->type = MOD_POLICY;
@@ -2675,6 +2683,24 @@ set_codes:
 			} else { /* inside Auth-Type has different rules */
 				c->actions[i] = defaultactions[RLM_COMPONENT_AUTZ][parentgrouptype][i];
 			}
+		}
+	}
+
+	switch (c->type) {
+	default:
+		break;
+
+	case MOD_GROUP:
+		if (grouptype != GROUPTYPE_REDUNDANT) break;
+		/* FALL-THROUGH */
+
+	case MOD_LOAD_BALANCE:
+	case MOD_REDUNDANT_LOAD_BALANCE:
+		if (!g->children) {
+			cf_log_err_cs(g->cs, "%s sections cannot be empty",
+				      cf_section_name1(g->cs));
+			modcallable_free(&c);
+			return NULL;
 		}
 	}
 
@@ -2854,6 +2880,7 @@ static bool pass2_callback(UNUSED void *ctx, fr_cond_t *c)
 	value_pair_map_t *map;
 
 	if (c->type == COND_TYPE_EXISTS) {
+
 		if (c->data.vpt->type == VPT_TYPE_XLAT) {
 			return pass2_xlat_compile(c->ci, &c->data.vpt, true);
 		}
@@ -2861,8 +2888,21 @@ static bool pass2_callback(UNUSED void *ctx, fr_cond_t *c)
 		rad_assert(c->data.vpt->type != VPT_TYPE_REGEX);
 
 		/*
-		 *	FIXME: fix up attribute references, too!
+		 *	The existence check might have been &Foo-Bar,
+		 *	where Foo-Bar is defined by a module.
 		 */
+		if (c->pass2_fixup == PASS2_FIXUP_ATTR) {
+			value_pair_tmpl_t *vpt;
+			vpt = radius_str2tmpl(c, c->data.vpt->name, T_BARE_WORD, REQUEST_CURRENT, PAIR_LIST_REQUEST);
+			if (!vpt) {
+				cf_log_err(c->ci, "Unknown attribute '%s'", c->data.vpt->name + 1);
+				return false;
+			}
+
+			talloc_free(c->data.vpt);
+			c->data.vpt = vpt;
+			c->pass2_fixup = PASS2_FIXUP_NONE;
+		}
 		return true;
 	}
 
@@ -3330,7 +3370,6 @@ void modcall_debug(modcallable *mc, int depth)
 	modcallable *this;
 	modgroup *g;
 	value_pair_map_t *map;
-	const char *name1;
 	char buffer[1024];
 
 	for (this = mc; this != NULL; this = this->next) {
@@ -3404,14 +3443,8 @@ void modcall_debug(modcallable *mc, int depth)
 #endif
 		case MOD_GROUP:
 			g = mod_callabletogroup(this);
-			name1 = cf_section_name1(g->cs);
-			if (strcmp(name1, "group") == 0) {
-				DEBUG("%.*s%s {", depth, modcall_spaces,
-				      group_name[this->type]);
-			} else {
-				DEBUG("%.*s%s %s {", depth, modcall_spaces,
-				      name1, cf_section_name2(g->cs));
-			}
+			DEBUG("%.*s%s {", depth, modcall_spaces,
+			      group_name[this->type]);
 			modcall_debug(g->children, depth + 1);
 			DEBUG("%.*s}", depth, modcall_spaces);
 			break;

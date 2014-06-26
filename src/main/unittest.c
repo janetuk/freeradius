@@ -111,17 +111,17 @@ static REQUEST *request_setup(FILE *fp)
 	 */
 	request = request_alloc(NULL);
 
-	request->packet = rad_alloc(request, 0);
+	request->packet = rad_alloc(request, false);
 	if (!request->packet) {
 		ERROR("No memory");
-		request_free(&request);
+		talloc_free(request);
 		return NULL;
 	}
 
-	request->reply = rad_alloc(request, 0);
+	request->reply = rad_alloc(request, false);
 	if (!request->reply) {
 		ERROR("No memory");
-		request_free(&request);
+		talloc_free(request);
 		return NULL;
 	}
 
@@ -149,7 +149,7 @@ static REQUEST *request_setup(FILE *fp)
 	/*
 	 *	Set the defaults for IPs, etc.
 	 */
-	request->packet->code = PW_CODE_AUTHENTICATION_REQUEST;
+	request->packet->code = PW_CODE_ACCESS_REQUEST;
 
 	request->packet->src_ipaddr.af = AF_INET;
 	request->packet->src_ipaddr.ipaddr.ip4addr.s_addr = htonl(INADDR_LOOPBACK);

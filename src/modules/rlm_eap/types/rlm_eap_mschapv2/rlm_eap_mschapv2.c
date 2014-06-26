@@ -51,16 +51,6 @@ static void fix_mppe_keys(eap_handler_t *handler, mschapv2_opaque_t *data)
 	pairfilter(data, &data->mppe_keys, &handler->request->reply->vps, 17, VENDORPEC_MICROSOFT, TAG_ANY);
 }
 
-static void free_data(void *ptr)
-{
-	mschapv2_opaque_t *data = ptr;
-
-	pairfree(&data->mppe_keys);
-	pairfree(&data->reply);
-	talloc_free(data);
-}
-
-
 /*
  *	Attach the module.
  */
@@ -249,7 +239,6 @@ static int mschapv2_initiate(UNUSED void *instance, eap_handler_t *handler)
 	data->reply = NULL;
 
 	handler->opaque = data;
-	handler->free_opaque = free_data;
 
 	/*
 	 *	Compose the EAP-MSCHAPV2 packet out of the data structure,
@@ -302,7 +291,7 @@ static int CC_HINT(nonnull) mschap_postproxy(eap_handler_t *handler, UNUSED void
 	 *	There is only a limited number of possibilities.
 	 */
 	switch (request->reply->code) {
-	case PW_CODE_AUTHENTICATION_ACK:
+	case PW_CODE_ACCESS_ACCEPT:
 		RDEBUG2("Proxied authentication succeeded");
 
 		/*
@@ -313,7 +302,7 @@ static int CC_HINT(nonnull) mschap_postproxy(eap_handler_t *handler, UNUSED void
 		break;
 
 	default:
-	case PW_CODE_AUTHENTICATION_REJECT:
+	case PW_CODE_ACCESS_REJECT:
 		RDEBUG("Proxied authentication did not succeed");
 		return 0;
 	}
@@ -322,7 +311,7 @@ static int CC_HINT(nonnull) mschap_postproxy(eap_handler_t *handler, UNUSED void
 	 *	No response, die.
 	 */
 	if (!response) {
-		REDEBUG("Proxied reply contained no MS-CHAP-Success or MS-CHAP-Error");
+		REDEBUG("Proxied reply contained no MS-CHAP2-Success or MS-CHAP-Error");
 		return 0;
 	}
 
@@ -707,7 +696,7 @@ packet_ready:
 			n = sscanf(response->vp_strvalue, "%*cE=%d R=%d C=%32s", &err, &retry, &buf[0]);
 			if (n == 3) {
 				DEBUG2("Found new challenge from MS-CHAP-Error: err=%d retry=%d challenge=%s", err, retry, buf);
-				fr_hex2bin(data->challenge, buf, 16);
+				fr_hex2bin(data->challenge, 16, buf, strlen(buf));
 			} else {
 				DEBUG2("Could not parse new challenge from MS-CHAP-Error: %d", n);
 			}
@@ -722,7 +711,7 @@ packet_ready:
 	 *	No response, die.
 	 */
 	if (!response) {
-		REDEBUG("No MS-CHAP-Success or MS-CHAP-Error was found");
+		REDEBUG("No MS-CHAP2-Success or MS-CHAP-Error was found");
 		return 0;
 	}
 

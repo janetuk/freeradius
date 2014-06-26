@@ -274,7 +274,7 @@ static virtual_server_t *virtual_server_find(char const *name)
 	return server;
 }
 
-static int virtual_server_free(virtual_server_t *server)
+static int _virtual_server_free(virtual_server_t *server)
 {
 	if (server->components) rbtree_free(server->components);
 	return 0;
@@ -314,7 +314,7 @@ void virtual_servers_free(time_t when)
 	}
 }
 
-static int indexed_modcallable_free(indexed_modcallable *this)
+static int _indexed_modcallable_free(indexed_modcallable *this)
 {
 	modcallable_free(&this->modulelist);
 	return 0;
@@ -421,7 +421,7 @@ static int module_entry_cmp(void const *one, void const *two)
 /*
  *	Free a module entry.
  */
-static int module_entry_free(module_entry_t *this)
+static int _module_entry_free(module_entry_t *this)
 {
 #ifndef NDEBUG
 	/*
@@ -512,7 +512,7 @@ static module_entry_t *linkto_module(char const *module_name,
 
 	/* make room for the module type */
 	node = talloc_zero(cs, module_entry_t);
-	talloc_set_destructor(node, module_entry_free);
+	talloc_set_destructor(node, _module_entry_free);
 	strlcpy(node->name, module_name, sizeof(node->name));
 	node->module = module;
 	node->handle = handle;
@@ -767,7 +767,7 @@ static indexed_modcallable *new_sublist(CONF_SECTION *cs,
 		return NULL;
 	}
 
-	talloc_set_destructor(c, indexed_modcallable_free);
+	talloc_set_destructor(c, _indexed_modcallable_free);
 
 	return c;
 }
@@ -1081,18 +1081,16 @@ static int load_byserver(CONF_SECTION *cs)
 			    cf_section_filename(cs));
 	}
 
-	components = rbtree_create(indexed_modcallable_cmp, NULL, 0);
-	if (!components) {
-		ERROR("Failed to initialize components\n");
-		goto error;
-	}
-
 	server = talloc_zero(cs, virtual_server_t);
 	server->name = name;
 	server->created = time(NULL);
 	server->cs = cs;
-	server->components = components;
-	talloc_set_destructor(server, virtual_server_free);
+	server->components = components = rbtree_create(server, indexed_modcallable_cmp, NULL, 0);
+	if (!components) {
+		ERROR("Failed to initialize components");
+		goto error;
+	}
+	talloc_set_destructor(server, _virtual_server_free);
 
 	/*
 	 *	Define types first.
@@ -1554,13 +1552,13 @@ int modules_init(CONF_SECTION *config)
 	/*
 	 *	Set up the internal module struct.
 	 */
-	module_tree = rbtree_create(module_entry_cmp, NULL, 0);
+	module_tree = rbtree_create(NULL, module_entry_cmp, NULL, 0);
 	if (!module_tree) {
 		ERROR("Failed to initialize modules\n");
 		return -1;
 	}
 
-	instance_tree = rbtree_create(module_instance_cmp,
+	instance_tree = rbtree_create(NULL, module_instance_cmp,
 				      module_instance_free, 0);
 	if (!instance_tree) {
 		ERROR("Failed to initialize modules\n");

@@ -226,11 +226,11 @@ int eap_basic_compose(RADIUS_PACKET *packet, eap_packet_t *reply)
 	if (!packet->code) switch(reply->code) {
 	case PW_EAP_RESPONSE:
 	case PW_EAP_SUCCESS:
-		packet->code = PW_CODE_AUTHENTICATION_ACK;
+		packet->code = PW_CODE_ACCESS_ACCEPT;
 		rcode = RLM_MODULE_HANDLED;
 		break;
 	case PW_EAP_FAILURE:
-		packet->code = PW_CODE_AUTHENTICATION_REJECT;
+		packet->code = PW_CODE_ACCESS_REJECT;
 		rcode = RLM_MODULE_REJECT;
 		break;
 	case PW_EAP_REQUEST:
@@ -240,7 +240,7 @@ int eap_basic_compose(RADIUS_PACKET *packet, eap_packet_t *reply)
 	default:
 		/* Should never enter here */
 		ERROR("rlm_eap: reply code %d is unknown, Rejecting the request.", reply->code);
-		packet->code = PW_CODE_AUTHENTICATION_REJECT;
+		packet->code = PW_CODE_ACCESS_REJECT;
 		break;
 	}
 
@@ -396,89 +396,4 @@ void eap_add_reply(REQUEST *request,
 	}
 
 	pairmemcpy(vp, value, len);
-}
-
-VALUE_PAIR *eap_chbind_packet2vp(REQUEST *request, const eap_chbind_packet_t *packet, size_t len)
-{
-	size_t		size;
-	const uint8_t	*ptr;
-	VALUE_PAIR	*head = NULL;
-	uint8_t *octets = NULL;
-	
-	VALUE_PAIR	**tail = &head;
-	VALUE_PAIR	*vp;
-
-	ptr = (const uint8_t *) packet;
-
-	do {
-		size = len;
-		if (size > 247) size = 247;
-
-		vp = paircreate(request, PW_UKERNA_CHBIND, VENDORPEC_UKERNA);
-		if (!vp) {
-			pairfree(&head);
-			return NULL;
-		}
-		octets = talloc_array(vp, uint8_t, size);
-		rad_assert(octets);
-		memcpy(octets, ptr, size);
-		vp->vp_octets = octets;
-		vp->length = size;
-
-		*tail = vp;
-		tail = &(vp->next);
-
-		ptr += size;
-		len -= size;
-	} while (len > 0);
-
-	return head;
-}
-
-
-/*
- * Handles multiple EAP-channel-binding Message attrs
- * ie concatenates all to get the complete EAP-channel-binding packet.
- */
-size_t eap_chbind_vp2packet(VALUE_PAIR *vps, eap_chbind_packet_t **result)
-{
-	VALUE_PAIR *first, *vp;
-	eap_chbind_packet_t *eap_chbind_packet;
-	unsigned char *ptr;
-	size_t len;
-
-	first = pairfind(vps, PW_UKERNA_CHBIND, VENDORPEC_UKERNA, TAG_ANY);
-
-	/*
-	 *	Compute total length
-	 */
-	len = 0;
-	for (vp = first; vp; 
-	     vp = pairfind(vp->next, PW_UKERNA_CHBIND, VENDORPEC_UKERNA, TAG_ANY)) {
-		len += vp->length;
-	}
-
-	/*
-	 *	Now that we know the length, allocate memory.
-	 */
-	eap_chbind_packet = (eap_chbind_packet_t *) malloc(len);
-	if (eap_chbind_packet == NULL) {
-		radlog(L_ERR, "rlm_eap: out of memory");
-		return 0;
-	}
-
-	/*
-	 *	Copy the data from EAP-Message's over to our EAP packet.
-	 */
-	ptr = (unsigned char *)eap_chbind_packet;
-
-	/* RADIUS ensures order of attrs, so just concatenate all */
-	for (vp = first; vp; 
-	     vp = pairfind(vp->next, PW_UKERNA_CHBIND, VENDORPEC_UKERNA, TAG_ANY)) {
-		memcpy(ptr, vp->vp_octets, vp->length);
-		ptr += vp->length;
-	}
-
-	*result = eap_chbind_packet;
-	return len;
 }
