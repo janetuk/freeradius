@@ -1,8 +1,12 @@
-freeradius (3.0.4~rc1+moonshot1-1) UNRELEASED; urgency=low
+freeradius (3.0.4~rc1+moonshot1-1.1) UNRELEASED; urgency=low
 
+  [ Sam Hartman ]
   * New upstream version
 
- -- Sam Hartman <hartmans@debian.org>  Thu, 19 Jun 2014 11:39:34 -0400
+  [ Kevin Wasserman ]
+  * merge to tip of 3.0.x
+
+ -- Kevin Wasserman <kevin@debian>  Thu, 26 Jun 2014 13:56:50 -0400
 
 freeradius (3.0.1+moonshot1-4) unstable; urgency=medium
 
