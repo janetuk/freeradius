@@ -148,14 +148,6 @@ typedef struct eap_packet_raw {
 	uint8_t		data[1];
 } eap_packet_raw_t;
 
-/*
- * Structure to represent eap channel binding packet format *on wire*
- */
-typedef struct eap_chbind_packet_t {
-	uint8_t		code;
-	uint8_t		data[1];
-} eap_chbind_packet_t;
-
 
 /*
  * interfaces in eapcommon.c
