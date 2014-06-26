@@ -397,4 +397,3 @@ void eap_add_reply(REQUEST *request,
 
 	pairmemcpy(vp, value, len);
 }
-
