@@ -1592,8 +1592,5 @@ main(int argc, char *argv[])
 		fflush(stdout);
 	}
 }
-
-
-  
 #endif
 
