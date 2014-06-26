@@ -74,7 +74,7 @@ static ssize_t xlat_test(UNUSED void *instance, UNUSED REQUEST *request,
 
 static int encode_tlv(char *buffer, uint8_t *output, size_t outlen);
 
-static char const *hextab = "0123456789abcdef";
+static char const hextab[] = "0123456789abcdef";
 
 static int encode_data_string(char *buffer,
 			      uint8_t *output, size_t outlen)
@@ -716,8 +716,7 @@ static void process_file(const char *root_dir, char const *filename)
 			my_len = 0;
 			while (len > 0) {
 				vp = NULL;
-				my_len = rad_attr2vp(NULL, NULL, NULL,
-						     attr, len, &vp);
+				my_len = rad_attr2vp(NULL, NULL, NULL, NULL, attr, len, &vp);
 				if (my_len < 0) {
 					pairfree(&head);
 					break;

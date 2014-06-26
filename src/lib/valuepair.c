@@ -47,7 +47,7 @@ RCSID("$Id$")
 #  endif
 #endif
 
-#define attribute_eq(_x, _y) ((_x && _y) && (_x->da == _y->da) && (_x->tag == _y->tag))
+
 
 /** Free a VALUE_PAIR
  *
@@ -232,6 +232,9 @@ VALUE_PAIR *pairfind(VALUE_PAIR *vp, unsigned int attr, unsigned int vendor, int
 	vp_cursor_t 	cursor;
 	VALUE_PAIR	*i;
 
+	/* List head may be NULL if it contains no VPs */
+	if (!vp) return NULL;
+
 	VERIFY_LIST(vp);
 
 	for (i = fr_cursor_init(&cursor, &vp);
@@ -370,16 +373,11 @@ int8_t attrtagcmp(void const *a, void const *b)
 	uint8_t cmp;
 
 	cmp = fr_pointer_cmp(my_a->da, my_b->da);
-
 	if (cmp != 0) return cmp;
 
-	if (my_a->tag < my_b->tag) {
-		return -1;
-	}
+	if (my_a->tag < my_b->tag) return -1;
 
-	if (my_a->tag > my_b->tag) {
-		return 1;
-	}
+	if (my_a->tag > my_b->tag) return 1;
 
 	return 0;
 }
@@ -499,7 +497,7 @@ void pairvalidate_debug(TALLOC_CTX *ctx, VALUE_PAIR const *failed[2])
 		return;
 	}
 
-	if (TAG_EQ(filter->tag, list->tag)) {
+	if (!TAG_EQ(filter->tag, list->tag)) {
 		fr_strerror_printf("Attribute \"%s\" tag \"%i\" didn't match filter tag \"%i\"",
 				   list->da->name, list->tag, filter->tag);
 		return;
@@ -547,16 +545,18 @@ bool pairvalidate(VALUE_PAIR const *failed[2], VALUE_PAIR *filter, VALUE_PAIR *l
 
 	check = fr_cursor_init(&filter_cursor, &filter);
 	match = fr_cursor_init(&list_cursor, &list);
-
-	while (true) {
-		if (!match && !check) goto mismatch;
+	while (match || check) {
+		/*
+		 *	Lists are of different lengths
+		 */
+		if ((!match && check) || (check && !match)) goto mismatch;
 
 		/*
 		 *	The lists are sorted, so if the first
 		 *	attributes aren't of the same type, then we're
 		 *	done.
 		 */
-		if (!attribute_eq(check, match)) goto mismatch;
+		if (!ATTRIBUTE_EQ(check, match)) goto mismatch;
 
 		/*
 		 *	They're of the same type, but don't have the
@@ -565,16 +565,10 @@ bool pairvalidate(VALUE_PAIR const *failed[2], VALUE_PAIR *filter, VALUE_PAIR *l
 		 *	Note that the RFCs say that for attributes of
 		 *	the same type, order is important.
 		 */
-		if (!paircmp(check, match)) goto mismatch;
+		if (paircmp(check, match) != 1) goto mismatch;
 
 		check = fr_cursor_next(&filter_cursor);
 		match = fr_cursor_next(&list_cursor);
-
-		/*
-		 *	One list ended earlier than the others, they
-		 *	didn't match.
-		 */
-		if (!match || !check) break;
 	}
 
 	return true;
@@ -623,7 +617,7 @@ bool pairvalidate_relaxed(VALUE_PAIR const *failed[2], VALUE_PAIR *filter, VALUE
 		/*
 		 *	Were processing check attributes of a new type.
 		 */
-		if (!attribute_eq(last_check, check)) {
+		if (!ATTRIBUTE_EQ(last_check, check)) {
 			/*
 			 *	Record the start of the matching attributes in the pair list
 			 *	For every other operator we require the match to be present
@@ -642,7 +636,7 @@ bool pairvalidate_relaxed(VALUE_PAIR const *failed[2], VALUE_PAIR *filter, VALUE
 		 *	Now iterate over all attributes of the same type.
 		 */
 		for (match = fr_cursor_first(&list_cursor);
-		     attribute_eq(match, check);
+		     ATTRIBUTE_EQ(match, check);
 		     match = fr_cursor_next(&list_cursor)) {
 			/*
 			 *	This attribute passed the filter
@@ -715,118 +709,6 @@ VALUE_PAIR *paircopyvp(TALLOC_CTX *ctx, VALUE_PAIR const *vp)
 
 	return n;
 }
-
-/** Copy data from one VP to another
- *
- * Allocate a new pair using da, and copy over the value from the specified
- * vp.
- *
- * @todo Should be able to do type conversions.
- *
- * @param[in] ctx for talloc
- * @param[in] da of new attribute to alloc.
- * @param[in] vp to copy data from.
- * @return the new valuepair.
- */
-VALUE_PAIR *paircopyvpdata(TALLOC_CTX *ctx, DICT_ATTR const *da, VALUE_PAIR const *vp)
-{
-	VALUE_PAIR *n;
-
-	if (!vp) return NULL;
-
-	VERIFY_VP(vp);
-
-	/*
-	 *	The types have to be identical, OR the "from" VP has
-	 *	to be octets.
-	 */
-	if (da->type != vp->da->type) {
-		int length;
-		uint8_t *p;
-		VALUE_PAIR const **pvp;
-
-		if (vp->da->type == PW_TYPE_OCTETS) {
-			/*
-			 *	Decode the data.  It may be wrong!
-			 */
-			if (rad_data2vp(da->attr, da->vendor, vp->vp_octets, vp->length, &n) < 0) {
-				return NULL;
-			}
-
-			n->type = VT_DATA;
-			return n;
-		}
-
-		/*
-		 *	Else the destination type is octets
-		 */
-		switch (vp->da->type) {
-		default:
-			return NULL; /* can't do it */
-
-		case PW_TYPE_INTEGER:
-		case PW_TYPE_IPV4_ADDR:
-		case PW_TYPE_DATE:
-		case PW_TYPE_IFID:
-		case PW_TYPE_IPV6_ADDR:
-		case PW_TYPE_IPV6_PREFIX:
-		case PW_TYPE_BYTE:
-		case PW_TYPE_SHORT:
-		case PW_TYPE_ETHERNET:
-		case PW_TYPE_SIGNED:
-		case PW_TYPE_INTEGER64:
-		case PW_TYPE_IPV4_PREFIX:
-			break;
-		}
-
-		n = pairalloc(ctx, da);
-		if (!n) return NULL;
-
-		p = talloc_array(n, uint8_t, dict_attr_sizes[vp->da->type][1] + 2);
-
-		pvp = &vp;
-		length = rad_vp2attr(NULL, NULL, NULL, pvp, p, dict_attr_sizes[vp->da->type][1]);
-		if (length < 0) {
-			pairfree(&n);
-			return NULL;
-		}
-
-		pairmemcpy(n, p + 2, length - 2);
-		talloc_free(p);
-		return n;
-	}
-
-	n = pairalloc(ctx, da);
-	if (!n) return NULL;
-
-	memcpy(n, vp, sizeof(*n));
-	n->da = da;
-
-	if (n->type == VT_XLAT) {
-		n->value.xlat = talloc_typed_strdup(n, n->value.xlat);
-	}
-
-	if (n->data.ptr) switch (n->da->type) {
-	case PW_TYPE_TLV:
-	case PW_TYPE_OCTETS:
-		n->vp_octets = talloc_memdup(n, vp->vp_octets, n->length);
-		talloc_set_type(n->vp_octets, uint8_t);
-		break;
-
-	case PW_TYPE_STRING:
-		n->vp_strvalue = talloc_memdup(n, vp->vp_strvalue, n->length + 1);	/* NULL byte */
-		talloc_set_type(n->vp_strvalue, char);
-		break;
-
-	default:
-		break;
-	}
-
-	n->next = NULL;
-
-	return n;
-}
-
 
 /** Copy a pairlist.
  *
@@ -1084,14 +966,18 @@ void pairmove(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from)
  * Move pairs of a matching attribute number, vendor number and tag from the
  * the input list to the output list.
  *
+ * @note pairs which are moved have their parent changed to ctx.
+ *
  * @note pairfree should be called on the head of the old list to free unmoved
 	 attributes (if they're no longer needed).
  *
  * @param[in] ctx for talloc
  * @param[in,out] to destination list.
  * @param[in,out] from source list.
- * @param[in] attr to match, if PW_VENDOR_SPECIFIC and vendor 0, only VSAs will
- *	      be copied.  If 0 and 0, all attributes will match
+ * @param[in] attr to match. If attribute PW_VENDOR_SPECIFIC and vendor 0,
+ *	will match (and therefore copy) only VSAs.
+ *	If attribute 0 and vendor 0  will match (and therefore copy) all
+ *	attributes.
  * @param[in] vendor to match.
  * @param[in] tag to match, TAG_ANY matches any tag, TAG_NONE matches tagless VPs.
  */
@@ -1193,7 +1079,7 @@ void pairfilter(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from, unsigned in
 	}
 }
 
-static char const *hextab = "0123456789abcdef";
+static char const hextab[] = "0123456789abcdef";
 
 /** Convert string value to native attribute value
  *
@@ -1339,7 +1225,7 @@ int pairparsevalue(VALUE_PAIR *vp, char const *value, size_t inlen)
 
 		vp->length = len >> 1;
 		p = talloc_array(vp, uint8_t, vp->length);
-		if (fr_hex2bin(p, value + 2, len) != vp->length) {
+		if (fr_hex2bin(p, vp->length, value + 2, len) != vp->length) {
 			talloc_free(p);
 			fr_strerror_printf("Invalid hex data");
 			return -1;
@@ -1384,7 +1270,7 @@ int pairparsevalue(VALUE_PAIR *vp, char const *value, size_t inlen)
 			fr_strerror_printf("No memory");
 			return -1;
 		}
-		if (fr_hex2bin(p, value + 2, len) != vp->length) {
+		if (fr_hex2bin(p, vp->length, value + 2, len) != vp->length) {
 			fr_strerror_printf("Invalid hex data in TLV");
 			return -1;
 		}
@@ -1397,7 +1283,7 @@ int pairparsevalue(VALUE_PAIR *vp, char const *value, size_t inlen)
 	{
 		fr_ipaddr_t addr;
 
-		if (fr_pton4(&addr, value, inlen, false, false) < 0) return -1;
+		if (fr_pton4(&addr, value, inlen, fr_hostname_lookups, false) < 0) return -1;
 
 		/*
 		 *	We allow v4 addresses to have a /32 suffix as some databases (PostgreSQL)
@@ -1418,7 +1304,7 @@ int pairparsevalue(VALUE_PAIR *vp, char const *value, size_t inlen)
 	{
 		fr_ipaddr_t addr;
 
-		if (fr_pton4(&addr, value, inlen, false, false) < 0) return -1;
+		if (fr_pton4(&addr, value, inlen, fr_hostname_lookups, false) < 0) return -1;
 
 		vp->vp_ipv4prefix[1] = addr.prefix;
 		memcpy(vp->vp_ipv4prefix + 2, &addr.ipaddr.ip4addr.s_addr, sizeof(vp->vp_ipv4prefix) - 2);
@@ -1430,7 +1316,7 @@ int pairparsevalue(VALUE_PAIR *vp, char const *value, size_t inlen)
 	{
 		fr_ipaddr_t addr;
 
-		if (fr_pton6(&addr, value, inlen, false, false) < 0) return -1;
+		if (fr_pton6(&addr, value, inlen, fr_hostname_lookups, false) < 0) return -1;
 
 		/*
 		 *	We allow v6 addresses to have a /128 suffix as some databases (PostgreSQL)
@@ -1451,7 +1337,7 @@ int pairparsevalue(VALUE_PAIR *vp, char const *value, size_t inlen)
 	{
 		fr_ipaddr_t addr;
 
-		if (fr_pton6(&addr, value, inlen, false, false) < 0) return -1;
+		if (fr_pton6(&addr, value, inlen, fr_hostname_lookups, false) < 0) return -1;
 
 		vp->vp_ipv6prefix[1] = addr.prefix;
 		memcpy(vp->vp_ipv6prefix + 2, &addr.ipaddr.ip6addr.s6_addr, sizeof(vp->vp_ipv6prefix) - 2);
@@ -1815,7 +1701,7 @@ static VALUE_PAIR *pairmake_any(TALLOC_CTX *ctx,
 	vp->length = size >> 1;
 	data = talloc_array(vp, uint8_t, vp->length);
 
-	if (fr_hex2bin(data, value + 2, size) != vp->length) {
+	if (fr_hex2bin(data, vp->length, value + 2, size) != vp->length) {
 		fr_strerror_printf("Invalid hex string");
 		talloc_free(vp);
 		return NULL;
@@ -2970,6 +2856,87 @@ void pairstrncpy(VALUE_PAIR *vp, char const *src, size_t len)
 	vp->type = VT_DATA;
 	vp->length = len;
 	pairtypeset(vp);
+}
+
+/** Copy data from one VP to another
+ *
+ * Allocate a new pair using da, and copy over the value from the specified vp.
+ *
+ * @todo Should be able to do type conversions.
+ *
+ * @param[in,out] vp to update.
+ * @param[in] da Type of data represented by data.
+ * @param[in] data to copy.
+ * @param[in] len of data to copy.
+ */
+int pairdatacpy(VALUE_PAIR *vp, DICT_ATTR const *da, value_data_t const *data, size_t len)
+{
+	void *old;
+	VERIFY_VP(vp);
+
+	/*
+	 *	The da->types have to be identical, OR the "from" da->type has
+	 *	to be octets.
+	 */
+	if (vp->da->type != da->type) {
+		/*
+		 *	Decode the octets buffer using the RADIUS decoder.
+		 */
+		if (da->type == PW_TYPE_OCTETS) {
+			if (data2vp(vp, NULL, NULL, NULL, vp->da, data->octets, len, len, &vp) < 0) return -1;
+			vp->type = VT_DATA;
+			return 0;
+		}
+
+		/*
+		 *	Else if the destination da->type is octets
+		 */
+		if (vp->da->type == PW_TYPE_OCTETS) {
+			int ret;
+			uint8_t *buff;
+			VALUE_PAIR const *pvp = vp;
+
+			buff = talloc_array(vp, uint8_t, dict_attr_sizes[da->type][1] + 2);
+
+			ret = rad_vp2rfc(NULL, NULL, NULL, &pvp, buff, dict_attr_sizes[da->type][1]);
+			if (ret < 0) return -1;
+
+			pairmemcpy(vp, buff + 2, ret - 2);
+			talloc_free(buff);
+
+			return 0;
+		}
+
+		/*
+		 *	Fixme...
+		 */
+		fr_strerror_printf("Data conversion not supported");
+		return -1;
+	}
+
+	/*
+	 *	Clear existing value if there is one
+	 */
+	memcpy(&old, &vp->data.ptr, sizeof(old));
+	talloc_free(old);
+
+	switch (vp->da->type) {
+	case PW_TYPE_TLV:
+	case PW_TYPE_OCTETS:
+		pairmemcpy(vp, data->octets, len);
+		break;
+
+	case PW_TYPE_STRING:
+		pairstrncpy(vp, data->strvalue, len);
+		break;
+
+	default:
+		memcpy(&vp->data, data, sizeof(vp->data));
+		break;
+	}
+	vp->length = len;
+
+	return 0;
 }
 
 /** Print data into an "string" data type.

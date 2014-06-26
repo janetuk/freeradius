@@ -189,59 +189,6 @@ void *request_data_reference(REQUEST *request,
 }
 
 /*
- *	Free a REQUEST struct.
- */
-void request_free(REQUEST **request_ptr)
-{
-	REQUEST *request;
-
-	if (!request_ptr || !*request_ptr) {
-		return;
-	}
-
-	request = *request_ptr;
-
-	rad_assert(!request->in_request_hash);
-#ifdef WITH_PROXY
-	rad_assert(!request->in_proxy_hash);
-#endif
-	rad_assert(!request->ev);
-
-#ifdef WITH_COA
-	if (request->coa) {
-		request->coa->parent = NULL;
-		request_free(&request->coa);
-	}
-
-	if (request->parent && (request->parent->coa == request)) {
-		request->parent->coa = NULL;
-	}
-#endif
-
-#ifndef NDEBUG
-	request->magic = 0x01020304;	/* set the request to be nonsense */
-#endif
-	request->client = NULL;
-#ifdef WITH_PROXY
-	request->home_server = NULL;
-#endif
-	talloc_free(request);
-	*request_ptr = NULL;
-
-	VERIFY_ALL_TALLOC;
-}
-
-/*
- *	Free a request.
- */
-int request_opaque_free(REQUEST *request)
-{
-	request_free(&request);
-
-	return 0;
-}
-
-/*
  *	Create possibly many directories.
  *
  *	Note that the input directory name is NOT a constant!
@@ -335,6 +282,37 @@ void NEVER_RETURNS rad_assert_fail(char const *file, unsigned int line, char con
 	fr_exit_now(1);
 }
 
+/*
+ *	Free a REQUEST struct.
+ */
+static int _request_free(REQUEST *request)
+{
+	rad_assert(!request->in_request_hash);
+#ifdef WITH_PROXY
+	rad_assert(!request->in_proxy_hash);
+#endif
+	rad_assert(!request->ev);
+
+#ifdef WITH_COA
+	if (request->coa) {
+		request->coa->parent = NULL;
+	}
+
+	if (request->parent && (request->parent->coa == request)) {
+		request->parent->coa = NULL;
+	}
+#endif
+
+#ifndef NDEBUG
+	request->magic = 0x01020304;	/* set the request to be nonsense */
+#endif
+	request->client = NULL;
+#ifdef WITH_PROXY
+	request->home_server = NULL;
+#endif
+
+	return 0;
+}
 
 /*
  *	Create a new REQUEST data structure.
@@ -344,6 +322,7 @@ REQUEST *request_alloc(TALLOC_CTX *ctx)
 	REQUEST *request;
 
 	request = talloc_zero(ctx, REQUEST);
+	talloc_set_destructor(request, _request_free);
 #ifndef NDEBUG
 	request->magic = REQUEST_MAGIC;
 #endif
@@ -397,15 +376,15 @@ REQUEST *request_alloc_fake(REQUEST *request)
 	 */
 	fake->server = request->server;
 
-	fake->packet = rad_alloc(fake, 1);
+	fake->packet = rad_alloc(fake, true);
 	if (!fake->packet) {
-		request_free(&fake);
+		talloc_free(fake);
 		return NULL;
 	}
 
-	fake->reply = rad_alloc(fake, 0);
+	fake->reply = rad_alloc(fake, false);
 	if (!fake->reply) {
-		request_free(&fake);
+		talloc_free(fake);
 		return NULL;
 	}
 
@@ -463,7 +442,7 @@ REQUEST *request_alloc_coa(REQUEST *request)
 	/*
 	 *	Originate CoA requests only when necessary.
 	 */
-	if ((request->packet->code != PW_CODE_AUTHENTICATION_REQUEST) &&
+	if ((request->packet->code != PW_CODE_ACCESS_REQUEST) &&
 	    (request->packet->code != PW_CODE_ACCOUNTING_REQUEST)) return NULL;
 
 	request->coa = request_alloc_fake(request);
@@ -471,9 +450,9 @@ REQUEST *request_alloc_coa(REQUEST *request)
 
 	request->coa->packet->code = 0; /* unknown, as of yet */
 	request->coa->child_state = REQUEST_RUNNING;
-	request->coa->proxy = rad_alloc(request->coa, 0);
+	request->coa->proxy = rad_alloc(request->coa, false);
 	if (!request->coa->proxy) {
-		request_free(&request->coa);
+		TALLOC_FREE(request->coa);
 		return NULL;
 	}
 
@@ -1077,17 +1056,20 @@ void rad_regcapture(REQUEST *request, int compare, char const *value, regmatch_t
 /*
  *	Verify a packet.
  */
-static void verify_packet(REQUEST *request, RADIUS_PACKET *packet)
+static void verify_packet(char const *file, int line, REQUEST *request, RADIUS_PACKET *packet, char const *type)
 {
 	TALLOC_CTX *parent;
 
-	if (!packet) return;
+	if (!packet) {
+		fprintf(stderr, "CONSISTENCY CHECK FAILED %s[%u]: RADIUS_PACKET %s pointer was NULL", file, line, type);
+		fr_assert(0);
+		fr_exit_now(0);
+	}
 
 	parent = talloc_parent(packet);
 	if (parent != request) {
-		ERROR("Expected RADIUS_PACKET to be parented by %p (%s), "
-		      "but parented by %p (%s)",
-		      request, talloc_get_name(request),
+		ERROR("CONSISTENCY CHECK FAILED %s[%u]: Expected RADIUS_PACKET %s to be parented by %p (%s), "
+		      "but parented by %p (%s)", file, line, type, request, talloc_get_name(request),
 		      parent, parent ? talloc_get_name(parent) : "NULL");
 
 		fr_log_talloc_report(packet);
@@ -1101,27 +1083,31 @@ static void verify_packet(REQUEST *request, RADIUS_PACKET *packet)
 	if (!packet->vps) return;
 
 #ifdef WITH_VERIFY_PTR
-	fr_verify_list(packet, packet->vps);
+	fr_verify_list(file, line, packet, packet->vps);
 #endif
 }
 /*
  *	Catch horrible talloc errors.
  */
-void verify_request(REQUEST *request)
+void verify_request(char const *file, int line, REQUEST *request)
 {
-	if (!request) return;
+	if (!request) {
+		fprintf(stderr, "CONSISTENCY CHECK FAILED %s[%u]: REQUEST pointer was NULL", file, line);
+		fr_assert(0);
+		fr_exit_now(0);
+	}
 
 	(void) talloc_get_type_abort(request, REQUEST);
 
 #ifdef WITH_VERIFY_PTR
-	fr_verify_list(request, request->config_items);
+	fr_verify_list(file, line, request, request->config_items);
 #endif
 
-	if (request->packet) verify_packet(request, request->packet);
-	if (request->reply) verify_packet(request, request->reply);
+	if (request->packet) verify_packet(file, line, request, request->packet, "request");
+	if (request->reply) verify_packet(file, line, request, request->reply, "reply");
 #ifdef WITH_PROXY
-	if (request->proxy) verify_packet(request, request->proxy);
-	if (request->proxy_reply) verify_packet(request, request->proxy_reply);
+	if (request->proxy) verify_packet(file, line, request, request->proxy, "proxy-request");
+	if (request->proxy_reply) verify_packet(file, line, request, request->proxy_reply, "proxy-reply");
 #endif
 
 #ifdef WITH_COA
@@ -1133,7 +1119,7 @@ void verify_request(REQUEST *request)
 
 		rad_assert(parent == request);
 
-		verify_request(request->coa);
+		verify_request(file, line, request->coa);
 	}
 #endif
 }

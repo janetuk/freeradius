@@ -229,7 +229,7 @@ static const CONF_PARSER bootstrap_config[] = {
 static size_t config_escape_func(UNUSED REQUEST *request, char *out, size_t outlen, char const *in, UNUSED void *arg)
 {
 	size_t len = 0;
-	static char const *disallowed = "%{}\\'\"`";
+	static char const disallowed[] = "%{}\\'\"`";
 
 	while (in[0]) {
 		/*
@@ -917,7 +917,7 @@ do {\
 	 * if it is less than this.
 	 */
 	main_config.init_delay.tv_sec = 0;
-	main_config.init_delay.tv_usec = 1000000 / 3;
+	main_config.init_delay.tv_usec = 2* (1000000 / 3);
 
 	/*
 	 *	Free the old configuration items, and replace them

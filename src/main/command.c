@@ -24,6 +24,7 @@
 #ifdef WITH_COMMAND_SOCKET
 
 #include <freeradius-devel/parser.h>
+#include <freeradius-devel/md5.h>
 
 #ifdef HAVE_INTTYPES_H
 #include <inttypes.h>
@@ -385,7 +386,7 @@ static int command_show_config(rad_listen_t *listener, int argc, char *argv[])
 	return 1;		/* success */
 }
 
-static char const *tabs = "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t";
+static char const tabs[] = "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t";
 
 /*
  *	FIXME: Recurse && indent?
@@ -1302,7 +1303,7 @@ static int command_inject_file(rad_listen_t *listener, int argc, char *argv[])
 	fake->decode = null_socket_dencode;
 	fake->send = null_socket_send;
 
-	packet = rad_alloc(NULL, 0);
+	packet = rad_alloc(NULL, false);
 	packet->src_ipaddr = sock->src_ipaddr;
 	packet->src_port = 0;
 
@@ -1312,7 +1313,7 @@ static int command_inject_file(rad_listen_t *listener, int argc, char *argv[])
 	packet->id = inject_id++;
 
 	if (fake->type == RAD_LISTEN_AUTH) {
-		packet->code = PW_CODE_AUTHENTICATION_REQUEST;
+		packet->code = PW_CODE_ACCESS_REQUEST;
 		fun = rad_authenticate;
 
 	} else {
@@ -2600,9 +2601,9 @@ static int command_tcp_recv(rad_listen_t *this)
 			if (co->offset < 16) return 0;
 		}
 
-		fr_hmac_md5((void const *) sock->client->secret,
+		fr_hmac_md5(expected, (void const *) sock->client->secret,
 			    strlen(sock->client->secret),
-			    (uint8_t *) co->buffer, 16, expected);
+			    (uint8_t *) co->buffer, 16);
 
 		if (rad_digest_cmp(expected,
 				   (uint8_t *) co->buffer + 16, 16 != 0)) {

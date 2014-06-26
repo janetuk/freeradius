@@ -189,9 +189,14 @@ typedef		int (*RAD_REQUEST_FUNP)(REQUEST *);
 #define REQUEST_MAX_REGEX (8)
 
 #if defined(WITH_VERIFY_PTR)
-#define VERIFY_REQUEST(_x) (void) talloc_get_type_abort(_x, REQUEST)
+#  define VERIFY_REQUEST(_x) verify_request(__FILE__, __LINE__, _x)
 #else
-#define VERIFY_REQUEST(_x)
+/*
+ *  Even if were building without WITH_VERIFY_PTR
+ *  the pointer must not be NULL when these various macros are used
+ *  so we can add some sneaky asserts.
+ */
+#  define VERIFY_REQUEST(_x) rad_assert(_x)
 #endif
 
 typedef enum {
@@ -526,8 +531,6 @@ int		log_err (char *);
 /* util.c */
 #define MEM(x) if (!(x)) { ERROR("Out of memory"); exit(1); }
 void (*reset_signal(int signo, void (*func)(int)))(int);
-void		request_free(REQUEST **request);
-int			request_opaque_free(REQUEST *request);
 int		rad_mkdir(char *directory, mode_t mode);
 void		*rad_malloc(size_t size); /* calls exit(1) on error! */
 void		rad_const_free(void const *ptr);
@@ -550,7 +553,7 @@ int		rad_expand_xlat(REQUEST *request, char const *cmd,
 				size_t argv_buflen, char *argv_buf);
 void		rad_regcapture(REQUEST *request, int compare, char const *value,
 			       regmatch_t rxmatch[]);
-void		verify_request(REQUEST *request);			/* only for special debug builds */
+void		verify_request(char const *file, int line, REQUEST *request);	/* only for special debug builds */
 
 /* client.c */
 RADCLIENT_LIST	*clients_init(CONF_SECTION *cs);

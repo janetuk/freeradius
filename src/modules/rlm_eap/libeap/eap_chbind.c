@@ -3,35 +3,22 @@
  *
  * Version:     $Id$
  *
- * Copyright (c) 2012, JANET(UK)
- * All rights reserved.
+ *   This program is free software; you can redistribute it and/or modify
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or
+ *   (at your option) any later version.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
+ *   This program is distributed in the hope that it will be useful,
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *   GNU General Public License for more details.
  *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
+ *   You should have received a copy of the GNU General Public License
+ *   along with this program; if not, write to the Free Software
+ *   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * 3. Neither the name of JANET(UK) nor the names of its contributors
- *    may be used to endorse or promote products derived from this software
- *    without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS 
- * IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, 
- * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR 
- * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR 
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, 
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, 
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR 
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF 
- * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING 
- * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS 
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * Copyright 2014  Network RADIUS SARL
+ * Copyright 2014  The FreeRADIUS server project
  */
 
 
@@ -41,204 +28,261 @@ RCSID("$Id$")
 
 #define MAX_PACKET_LEN		4096
 
+static bool chbind_build_response(REQUEST *request, CHBIND_REQ *chbind)
+{
+	size_t length, total;
+	uint8_t *ptr, *end;
+	VALUE_PAIR const *vp;
+	vp_cursor_t cursor;
+
+	total = 0;
+	for (vp = fr_cursor_init(&cursor, &request->reply->vps);
+	     vp != NULL;
+	     vp = fr_cursor_next(&cursor)) {
+		/*
+		 *	Skip things which shouldn't be in channel bindings.
+		 */
+		if (vp->da->flags.encrypt != FLAG_ENCRYPT_NONE) continue;
+		if (!vp->da->vendor && (vp->da->attr == PW_MESSAGE_AUTHENTICATOR)) continue;
+
+		total = 2 + vp->length;
+	}
+
+	/*
+	 *	No attributes: just send a 1-byte response code.
+	 */
+	if (!total) {
+		ptr = talloc_zero_array(chbind, uint8_t, 1);
+	} else {
+		ptr = talloc_zero_array(chbind, uint8_t, total + 4);
+	}
+	if (!ptr) return false;
+	chbind->response = (chbind_packet_t *) ptr;
+
+	/*
+	 *	Set the response code.  Default to "fail" if none was
+	 *	specified.
+	 */
+	vp = pairfind(request->config_items, PW_CHBIND_RESPONSE_CODE, 0, TAG_ANY);
+	if (vp) {
+		ptr[0] = vp->vp_integer;
+	} else {
+		ptr[0] = CHBIND_CODE_FAILURE;
+	}
+
+	if (!total) return true; /* nothing to encode */
+
+	/* Write the length field into the header */
+	ptr[1] = (total >> 8) & 0xff;
+	ptr[2] = total & 0xff;
+	ptr[3] = CHBIND_NSID_RADIUS;
+
+	if ((debug_flag > 0) && fr_log_fp) {
+		RDEBUG("Sending chbind response: code %i", (int )(ptr[0]));
+		debug_pair_list(request->reply->vps);
+	}
+
+	/* Encode the chbind attributes into the response */
+	ptr += 4;
+	end = ptr + total;
+	for (vp = fr_cursor_init(&cursor, &request->reply->vps);
+	     vp != NULL;
+	     vp = fr_cursor_next(&cursor)) {
+		length = rad_vp2attr(NULL, NULL, NULL, &vp, ptr, end - ptr);
+		ptr += length;
+	}
+
+	return true;
+}
+
+
 /*
- * Process any channel bindings included in the request.
+ *	Parse channel binding packet to obtain data for a specific
+ *	NSID.
+ *
+ *	See:
+ *	http://tools.ietf.org/html/draft-ietf-emu-chbind-13#section-5.3.2
  */
-CHBIND_REQ *chbind_allocate(void)
+static size_t chbind_get_data(chbind_packet_t const *packet,
+			      int desired_nsid,
+			      uint8_t const **data)
 {
-  CHBIND_REQ *ret;
-  ret = malloc(sizeof *ret);
-  if (0 != ret)
-    memset(ret, 0, sizeof *ret);
-  return ret;
+	uint8_t const *ptr;
+	uint8_t const *end;
+
+	if (packet->code != CHBIND_CODE_REQUEST) {
+		return 0;
+	}
+
+	ptr = (uint8_t const *) packet;
+	end = ptr + talloc_array_length(packet);
+
+	ptr++;			/* skip the code at the start of the packet */
+	while (ptr < end) {
+		uint8_t nsid;
+		size_t length;
+
+		/*
+		 *	Need room for length(2) + NSID + data.
+		 */
+		if ((end - ptr) < 4) return 0;
+
+		length = (ptr[0] << 8) | ptr[1];
+		if (length == 0) return 0;
+
+		if ((ptr + length + 3) > end) return 0;
+
+		nsid = ptr[2];
+		if (nsid == desired_nsid) {
+			ptr += 3;
+			*data = ptr;
+			return length;
+		}
+
+		ptr += 3 + length;
+	}
+
+	return 0;
 }
 
-void chbind_free(CHBIND_REQ *chbind)
+
+PW_CODE chbind_process(REQUEST *request, CHBIND_REQ *chbind)
 {
-  /* free the chbind response, if allocated by chbind_process */
-  if (chbind->chbind_resp)
-    free(chbind->chbind_resp);
+	PW_CODE rcode;
+	REQUEST *fake = NULL;
+	VALUE_PAIR *vp = NULL;
+	uint8_t const *attr_data;
+	size_t data_len = 0;
 
-  free(chbind);
-}
+	/* check input parameters */
+	rad_assert((request != NULL) &&
+		   (chbind != NULL) &&
+		   (chbind->request != NULL) &&
+		   (chbind->response == NULL));
 
-int chbind_process(REQUEST *req, CHBIND_REQ *chbind_req)
-{
-  int rcode = PW_CODE_AUTHENTICATION_REJECT;
-  REQUEST *fake = NULL;
-  VALUE_PAIR *vp = NULL;
-  uint8_t *attr_data;
-  size_t datalen = 0;
+	/* Set-up the fake request */
+	fake = request_alloc_fake(request);
+	pairmake_packet("Freeradius-Proxied-To", "127.0.0.1", T_OP_EQ);
 
-  /* check input parameters */
-  rad_assert((req != NULL) && 
-	     (chbind_req != NULL) &&
-	     (chbind_req->chbind_req_pkt != NULL));
-  if (chbind_req->chbind_req_len < 4)
-    return PW_CODE_AUTHENTICATION_REJECT;  /* Is this the right response? */
+	/* Add the username to the fake request */
+	if (chbind->username) {
+		vp = paircopyvp(fake->packet, chbind->username);
+		pairadd(&fake->packet->vps, vp);
+		fake->username = vp;
+	}
 
-  /* Set-up NULL response for cases where channel bindings can't be processed */
-  chbind_req->chbind_resp = NULL;
-  chbind_req->chbind_resp_len = 0;
+	/*
+	 *	Maybe copy the State over, too?
+	 */
 
-  /* Set-up the fake request */
-  fake = request_alloc_fake(req);
-  rad_assert(fake->packet->vps == NULL);
-  pairmake(fake, &fake->packet->vps, "Freeradius-Proxied-To", "127.0.0.1", T_OP_EQ);
-  
-  /* Add the username to the fake request */
-  if (chbind_req->username) {
-    uint8_t *octets = NULL;
-    vp = paircreate(fake, PW_USER_NAME, 0);
-    rad_assert(vp);
-    octets = talloc_array(vp, uint8_t, chbind_req->username_len+1);
-    rad_assert(octets);
-    memcpy(octets, chbind_req->username, chbind_req->username_len);
-    vp->vp_octets = octets;
-    vp->length = chbind_req->username_len;
+	/* Add the channel binding attributes to the fake packet */
+	data_len = chbind_get_data(chbind->request, CHBIND_NSID_RADIUS, &attr_data);
+	if (data_len) {
+		while (data_len > 0) {
+			int attr_len = rad_attr2vp(fake->packet, NULL, NULL, NULL, attr_data, data_len, &vp);
+			if (attr_len <= 0) {
+				/* If radaddr2vp fails, return NULL string for
+				   channel binding response */
+				talloc_free(fake);
+				return PW_CODE_ACCESS_ACCEPT;
+			}
+			if (vp) {
+				pairadd(&fake->packet->vps, vp);
+			}
+			attr_data += attr_len;
+			data_len -= attr_len;
+		}
+	}
 
-    pairadd(&fake->packet->vps, vp);
-    fake->username = pairfind(fake->packet->vps, PW_USER_NAME, 0, TAG_ANY);
-  }
+	/*
+	 *	Set virtual server based on configuration for channel
+	 *	bindings, this is hard-coded for now.
+	 */
+	fake->server = "channel_bindings";
+	fake->packet->code = PW_CODE_ACCESS_REQUEST;
 
-  /* Copy the request state into the fake request */
-  /*xxx vp = paircopy(req->state);
-  if (vp)
-  pairadd(&fake->packet->vps, vp);*/
+	rcode = rad_virtual_server(fake);
 
-  /* Add the channel binding attributes to the fake packet */
-  if (0 != (datalen = chbind_get_data((CHBIND_PACKET_T *)chbind_req->chbind_req_pkt, 
-				      chbind_req->chbind_req_len, 
-				      CHBIND_NSID_RADIUS, &attr_data))) {
-	  while(datalen > 0) {
-		  int mylen = rad_attr2vp(NULL, NULL, NULL, attr_data, datalen, &vp);
-		  if (mylen <= 0) {
-			  /* If radaddr2vp fails, return NULL string for 
-			     channel binding response */
-			  request_free(&fake);
-			  return PW_CODE_AUTHENTICATION_ACK;
-		  }
-		  /* TODO: need to account for the possibility of rad_attr2vp generating 
-		     multiple vps */
-		  if (vp)
-			  pairadd(&fake->packet->vps, vp);
-		  attr_data += mylen;
-		  datalen -= mylen;
-	  }
-  }
+	switch (rcode) {
+		/* If rad_authenticate succeeded, build a reply */
+	case RLM_MODULE_OK:
+	case RLM_MODULE_HANDLED:
+		if (chbind_build_response(fake, chbind)) {
+			rcode = PW_CODE_ACCESS_ACCEPT;
+			break;
+		}
+		/* FALL-THROUGH */
 
-  /* Set virtual server based on configuration for channel bindings,
-     this is hard-coded to "chbind" for now */
-  fake->server = "chbind";
+		/* If we got any other response from rad_authenticate, it maps to a reject */
+	default:
+		rcode = PW_CODE_ACCESS_REJECT;
+		break;
+	}
 
-  /* Call rad_authenticate */
-  if ((debug_flag > 0) && fr_log_fp) {
-	  DEBUG("prcoessing chbind request");
+	talloc_free(fake);
 
-	  debug_pair_list(fake->packet->vps);
-
-	  fprintf(fr_log_fp, "server %s {\n",
-	    (fake->server == NULL) ? "" : fake->server);
-  }
-  rcode = rad_virtual_server(fake);
-
-  switch(rcode) {
-    /* If rad_authenticate succeeded, build a reply */
-  case RLM_MODULE_OK:
-  case RLM_MODULE_HANDLED:
-    if ((chbind_req->chbind_resp = chbind_build_response(fake, &chbind_req->chbind_resp_len)) != NULL)
-      rcode = PW_CODE_AUTHENTICATION_ACK;
-    else
-      rcode = PW_CODE_AUTHENTICATION_REJECT;
-    break;
-  
-  /* If we got any other response from rad_authenticate, it maps to a reject */
-  default:
-    rcode = PW_CODE_AUTHENTICATION_REJECT;
-    break;
-  }
-
-  request_free(&fake);
-
-  return rcode;
+	return rcode;
 }
 
 /*
- * Parse channel binding packet to obtain data for a specific NSID.
- * See http://tools.ietf.org/html/draft-ietf-emu-chbind-13#section-5.3.2:
- */ 
-
-size_t chbind_get_data(CHBIND_PACKET_T *chbind_packet,
-			   size_t chbind_packet_len,
-			   int desired_nsid,
-			   uint8_t **radbuf_data)
+ *	Handles multiple EAP-channel-binding Message attrs
+ *	ie concatenates all to get the complete EAP-channel-binding packet.
+ */
+chbind_packet_t *eap_chbind_vp2packet(TALLOC_CTX *ctx, VALUE_PAIR *vps)
 {
-  size_t chbind_data_len = chbind_packet_len-1;
-  size_t pos=0;
-  if (chbind_packet->code != CHBIND_CODE_REQUEST)
-    return 0;
-  while (pos + 3 < chbind_data_len) {
-    size_t len = (chbind_packet->data[pos] << 8) + 
-      chbind_packet->data[pos + 1];
-    uint8_t nsid = chbind_packet->data[pos + 2];
-    if (pos + 3 > chbind_data_len + len) {
-      /* malformed packet; warn here */
-      return 0;
-    }
-    if (nsid == desired_nsid) {
-      *radbuf_data = &chbind_packet->data[pos+3];
-      return len;
-    }
-    pos += 3 + len;
-  }
-  /* didn't find any data matching nsid */
-  if (pos != chbind_data_len) {
-    /* warn about malformed packet */
-  }
+	size_t length;
+	uint8_t *ptr;
+	VALUE_PAIR *first, *vp;
+	chbind_packet_t *packet;
+	vp_cursor_t cursor;
 
-  return 0;
+	first = pairfind(vps, PW_UKERNA_CHBIND, VENDORPEC_UKERNA, TAG_ANY);
+	if (!first) return NULL;
+
+	/*
+	 *	Compute the total length of the channel binding data.
+	 */
+	length = 0;
+	for (vp =fr_cursor_init(&cursor, first);
+	     vp != NULL;
+	     vp = fr_cursor_next_by_num(&cursor, PW_UKERNA_CHBIND, VENDORPEC_UKERNA, TAG_ANY)) {
+		length += vp->length;
+	}
+
+	if (length < 4) {
+		DEBUG("Invalid length %u for channel binding data", (unsigned int) length);
+		return NULL;
+	}
+
+	/*
+	 *	Now that we know the length, allocate memory for the packet.
+	 */
+	ptr = talloc_zero_array(ctx, uint8_t, length);
+	if (!ptr) return NULL;
+
+	/*
+	 *	Copy the data over to our packet.
+	 */
+	packet = (chbind_packet_t *) ptr;
+	for (vp = fr_cursor_init(&cursor, first);
+	     vp != NULL;
+	     vp = fr_cursor_next_by_num(&cursor, PW_UKERNA_CHBIND, VENDORPEC_UKERNA, TAG_ANY)) {
+		memcpy(ptr, vp->vp_octets, vp->length);
+		ptr += vp->length;
+	}
+
+	return packet;
 }
 
-uint8_t *chbind_build_response(REQUEST *req, size_t *resp_len)
+VALUE_PAIR *eap_chbind_packet2vp(REQUEST *request, const chbind_packet_t *packet)
 {
-  uint8_t *resp;
-  uint16_t pos, len = 0;
-  VALUE_PAIR *vp = NULL;
+	VALUE_PAIR	*vp;
 
-  *resp_len = 0;
-  resp = malloc(MAX_PACKET_LEN + 4);
-  rad_assert(resp);
+	if (!packet) return NULL; /* don't produce garbage */
 
-  /* Set-up the chbind header fields (except length, computed later) */
-  vp = pairfind(req->config_items, PW_CHBIND_RESPONSE_CODE, 0, TAG_ANY);
-  if (vp)
-    resp[0] = vp->vp_integer;
-  else resp[0] = 3; /*failure*/
-  
+	vp = paircreate(request->packet, PW_UKERNA_CHBIND, VENDORPEC_UKERNA);
+	if (!vp) return NULL;
+	pairmemcpy(vp, (const uint8_t *) packet, talloc_array_length(packet));
 
-  resp[3] = CHBIND_NSID_RADIUS;
-
-  if ((debug_flag > 0) && fr_log_fp) {
-	  DEBUG("Sending chbind response: code %i\n", (int )(resp[0]));
-	  debug_pair_list(req->reply->vps);
-	  DEBUG("end chbind response\n");
-  }
-  /* Encode the chbind attributes into the response */
-  for (vp = req->reply->vps, pos = 4; 
-       (vp != NULL) && (pos < MAX_PACKET_LEN + 4); 
-       pos += len) {
-    len = rad_vp2attr(NULL, NULL, NULL, (const VALUE_PAIR **) &vp, &resp[pos], (MAX_PACKET_LEN + 4) - pos);
-  }
-
-  len = pos-4; /*length covers ns-specific only*/
-  /* Write the length field into the header */
-  resp[1] = (uint8_t)(len >> 8);
-  resp[2] = (uint8_t)(len & 0x00FF);
-  
-  /* Output the length of the entire response (attrs + header) */
-  /* If there are no attributes, only send the code*/
-  if (req->reply->vps)
-    *resp_len = len + 4;
-  else *resp_len = 1;
-  return resp;
+	return vp;
 }

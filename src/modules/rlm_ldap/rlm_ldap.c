@@ -42,8 +42,9 @@ FR_NAME_NUMBER const ldap_scope[] = {
 	{ "sub",	LDAP_SCOPE_SUB	},
 	{ "one",	LDAP_SCOPE_ONE	},
 	{ "base",	LDAP_SCOPE_BASE },
+#ifdef LDAP_SCOPE_CHILDREN
 	{ "children",	LDAP_SCOPE_CHILDREN },
-
+#endif
 	{  NULL , -1 }
 };
 
@@ -58,6 +59,15 @@ FR_NAME_NUMBER const ldap_tls_require_cert[] = {
 	{  NULL , -1 }
 };
 #endif
+
+FR_NAME_NUMBER const ldap_dereference[] = {
+	{ "never",	LDAP_DEREF_NEVER	},
+	{ "searching",	LDAP_DEREF_SEARCHING	},
+	{ "finding",	LDAP_DEREF_FINDING	},
+	{ "always",	LDAP_DEREF_ALWAYS	},
+
+	{  NULL , -1 }
+};
 
 /*
  *	TLS Configuration
@@ -176,12 +186,16 @@ static CONF_PARSER option_config[] = {
 	 */
 	{ "ldap_debug", FR_CONF_OFFSET(PW_TYPE_INTEGER, ldap_instance_t, ldap_debug), "0x0000" },
 
+	{ "dereference", FR_CONF_OFFSET(PW_TYPE_STRING, ldap_instance_t, dereference_str), NULL },
+
 	{ "chase_referrals", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, ldap_instance_t, chase_referrals), NULL },
 
 	{ "rebind", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, ldap_instance_t, rebind), NULL },
 
+#ifdef LDAP_OPT_NETWORK_TIMEOUT
 	/* timeout on network activity */
 	{ "net_timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER, ldap_instance_t, net_timeout), "10" },
+#endif
 
 	/* timeout for search results */
 	{ "res_timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER, ldap_instance_t, res_timeout), "20" },
@@ -519,6 +533,8 @@ static int parse_sub_section(ldap_instance_t *inst, CONF_SECTION *parent, ldap_a
  */
 static int mod_instantiate(CONF_SECTION *conf, void *instance)
 {
+	static bool version_done;
+
 	CONF_SECTION *options;
 	ldap_instance_t *inst = instance;
 
@@ -532,6 +548,39 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	inst->xlat_name = cf_section_name2(conf);
 	if (!inst->xlat_name) {
 		inst->xlat_name = cf_section_name1(conf);
+	}
+
+	/*
+	 *	Get version info from the LDAP API.
+	 */
+	if (!version_done) {
+		int ldap_errno;
+		LDAPAPIInfo info;
+
+		version_done = true;
+
+		ldap_errno = ldap_get_option(NULL, LDAP_OPT_API_INFO, &info);
+		if (ldap_errno == LDAP_OPT_SUCCESS) {
+			if (strcmp(info.ldapai_vendor_name, LDAP_VENDOR_NAME) != 0) {
+				WARN("rlm_ldap: libldap vendor changed since the server was built");
+				WARN("rlm_ldap: linked: %s built: %s", info.ldapai_vendor_name, LDAP_VENDOR_NAME);
+			}
+
+			if (info.ldapai_vendor_version != LDAP_VENDOR_VERSION) {
+				WARN("rlm_ldap: libldap version changed since the server was built");
+				WARN("rlm_ldap: linked: %i built: %i",
+				     info.ldapai_vendor_version, LDAP_VENDOR_VERSION);
+			}
+
+			INFO("rlm_ldap: libldap vendor: %s version: %i", info.ldapai_vendor_name,
+			     info.ldapai_vendor_version);
+			ldap_memfree(info.ldapai_vendor_name);
+			ldap_memfree(info.ldapai_extensions);
+		} else {
+			WARN("rlm_ldap: Falling back to build time libldap version info.  Query for LDAP_OPT_API_INFO "
+			     "returned: %i", ldap_errno);
+			INFO("rlm_ldap: libldap vendor: %s version: %i", LDAP_VENDOR_NAME, LDAP_VENDOR_VERSION);
+		}
 	}
 
 	/*
@@ -569,6 +618,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 #endif
 	}
 
+#ifdef LDAP_OPT_X_TLS_NEVER
 	/*
 	 *	Workaround for servers which support LDAPS but not START TLS
 	 */
@@ -576,6 +626,19 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		inst->tls_mode = LDAP_OPT_X_TLS_HARD;
 	} else {
 		inst->tls_mode = 0;
+	}
+#endif
+
+	/*
+	 *	Convert dereference strings to enumerated constants
+	 */
+	if (inst->dereference_str) {
+		inst->dereference = fr_str2int(ldap_dereference, inst->dereference_str, -1);
+		if (inst->dereference < 0) {
+			LDAP_ERR("Invalid 'dereference' value \"%s\", expected 'never', 'searching', "
+				 "'finding' or 'always'", inst->dereference_str);
+			goto error;
+		}
 	}
 
 #if LDAP_SET_REBIND_PROC_ARGS != 3
@@ -596,22 +659,37 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	 */
 	inst->userobj_scope = fr_str2int(ldap_scope, inst->userobj_scope_str, -1);
 	if (inst->userobj_scope < 0) {
-		LDAP_ERR("Invalid 'user.scope' value \"%s\", expected 'sub', 'one', 'base' or 'children'",
-			 inst->userobj_scope_str);
+		LDAP_ERR("Invalid 'user.scope' value \"%s\", expected 'sub', 'one'"
+#ifdef LDAP_SCOPE_CHILDREN
+			 ", 'base' or 'children'"
+#else
+			 " or 'base'"
+#endif
+			 , inst->userobj_scope_str);
 		goto error;
 	}
 
 	inst->groupobj_scope = fr_str2int(ldap_scope, inst->groupobj_scope_str, -1);
 	if (inst->groupobj_scope < 0) {
-		LDAP_ERR("Invalid 'group.scope' value \"%s\", expected 'sub', 'one', 'base' or 'children'",
-			 inst->groupobj_scope_str);
+		LDAP_ERR("Invalid 'group.scope' value \"%s\", expected 'sub', 'one'"
+#ifdef LDAP_SCOPE_CHILDREN
+			 ", 'base' or 'children'"
+#else
+			 " or 'base'"
+#endif
+			 , inst->groupobj_scope_str);
 		goto error;
 	}
 
 	inst->clientobj_scope = fr_str2int(ldap_scope, inst->clientobj_scope_str, -1);
 	if (inst->clientobj_scope < 0) {
-		LDAP_ERR("Invalid 'client.scope' value \"%s\", expected 'sub', 'one', 'base' or 'children'",
-			 inst->clientobj_scope_str);
+		LDAP_ERR("Invalid 'client.scope' value \"%s\", expected 'sub', 'one'"
+#ifdef LDAP_SCOPE_CHILDREN
+			 ", 'base' or 'children'"
+#else
+			 " or 'base'"
+#endif
+			 , inst->clientobj_scope_str);
 		goto error;
 	}
 
@@ -628,7 +706,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		}
 #else
 		LDAP_ERR("Modifying 'tls.require_cert' is not supported by current version of libldap. "
-			 "Please upgrade libldap and rebuild this module");
+			 "Please upgrade or substitute current libldap and rebuild this module");
 
 		goto error;
 #endif
@@ -691,7 +769,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	/*
 	 *	Initialize the socket pool.
 	 */
-	inst->pool = fr_connection_pool_init(inst->cs, inst, mod_conn_create, NULL, mod_conn_delete, NULL);
+	inst->pool = fr_connection_pool_init(inst->cs, inst, mod_conn_create, NULL, NULL);
 	if (!inst->pool) {
 		return -1;
 	}
@@ -1129,18 +1207,19 @@ static rlm_rcode_t user_modify(ldap_instance_t *inst, REQUEST *request, ldap_acc
 			continue;
 		}
 
-		switch (cf_pair_value_type(cp))
-		{
-			case T_BARE_WORD:
-			case T_SINGLE_QUOTED_STRING:
+		switch (cf_pair_value_type(cp)) {
+		case T_BARE_WORD:
+		case T_SINGLE_QUOTED_STRING:
 			break;
-			case T_BACK_QUOTED_STRING:
-			case T_DOUBLE_QUOTED_STRING:
-				do_xlat = true;
+
+		case T_BACK_QUOTED_STRING:
+		case T_DOUBLE_QUOTED_STRING:
+			do_xlat = true;
 			break;
-			default:
-				rad_assert(0);
-				goto error;
+
+		default:
+			rad_assert(0);
+			goto error;
 		}
 
 		if (op == T_OP_CMP_FALSE) {
@@ -1171,8 +1250,7 @@ static rlm_rcode_t user_modify(ldap_instance_t *inst, REQUEST *request, ldap_acc
 
 		last_pass += 2;
 
-		switch (op)
-		{
+		switch (op) {
 		/*
 		 *  T_OP_EQ is *NOT* supported, it is impossible to
 		 *  support because of the lack of transactions in LDAP
@@ -1206,7 +1284,7 @@ static rlm_rcode_t user_modify(ldap_instance_t *inst, REQUEST *request, ldap_acc
 		 *	Now we know the value is ok, copy the pointers into
 		 *	the ldapmod struct.
 		 */
-		memcpy(&(mod_s[total].mod_type), &(attr), sizeof(mod_s[total].mod_type));
+		memcpy(&(mod_s[total].mod_type), &attr, sizeof(mod_s[total].mod_type));
 
 		mod_p[total] = &(mod_s[total]);
 		total++;

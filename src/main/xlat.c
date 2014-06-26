@@ -574,7 +574,7 @@ int xlat_register(char const *name, RAD_XLAT_FUNC func, RADIUS_ESCAPE_STRING esc
 		int i;
 #endif
 
-		xlat_root = rbtree_create(xlat_cmp, free, 0);
+		xlat_root = rbtree_create(NULL, xlat_cmp, free, 0);
 		if (!xlat_root) {
 			DEBUG("xlat_register: Failed to create tree");
 			return -1;
@@ -1145,7 +1145,7 @@ static ssize_t xlat_tokenize_literal(TALLOC_CTX *ctx, char *fmt, xlat_exp_t **he
 					return -(p - fmt);
 				}
 
-				if (!fr_hex2bin((uint8_t *) q, p, 2)) {
+				if (!fr_hex2bin((uint8_t *) q, 1, p, 2)) {
 					talloc_free(node);
 					*error = "Invalid hex characters";
 					return -(p - fmt);
@@ -1862,7 +1862,7 @@ finish:
 }
 
 #ifdef DEBUG_XLAT
-static const char *xlat_spaces = "                                                                                                                                                                                                                                                                ";
+static const char xlat_spaces[] = "                                                                                                                                                                                                                                                                ";
 #endif
 
 static char *xlat_aprint(TALLOC_CTX *ctx, REQUEST *request, xlat_exp_t const * const node,
