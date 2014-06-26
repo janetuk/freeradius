@@ -2197,19 +2197,6 @@ SSL_CTX *tls_init_ctx(fr_tls_server_conf_t *conf, int client)
 		return NULL;
 	}
 
-	/*
-	 * There are two ways PSKs can be configured for a server. The
-	 * first is the same as a client: psk_identity and
-	 * psk_hexphrase. The second is to dynamically configure PSKs
-	 * and to have the psk_xlat return them. The second is
-	 * compatible with certificates; either the PSK or cert will
-	 * be used depending on what the client uses.
-	 */
-	if (!client)
-		SSL_CTX_set_psk_server_callback(ctx,
-						psk_server_callback);
-
-
 	if (conf->psk_identity) {
 		size_t psk_len, hex_len;
 		uint8_t buffer[PSK_MAX_PSK_LEN];
