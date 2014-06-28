@@ -166,7 +166,7 @@ static void tr_response_func( TIDC_INSTANCE *inst,
       server = server->next;
     }
 			
-    if (!realms_pool_add(pool, NULL)) goto error;
+    if (!realm_pool_add(pool, NULL)) goto error;
     pool_added = 1;
   }
 		
