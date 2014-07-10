@@ -170,7 +170,7 @@ static unsigned int psk_server_callback(SSL *ssl, const char *identity,
 		return 0;
 	}
 
-		psk_len = strlen(conf->psk_password);
+	psk_len = strlen(conf->psk_password);
 	if (psk_len > (2 * max_psk_len)) return 0;
 
 	return fr_hex2bin(psk, max_psk_len, conf->psk_password, psk_len);

@@ -151,7 +151,6 @@ typedef enum {
  */
 #include <freeradius-devel/attributes.h>
 
-#define PW_CHBIND_RESPONSE_CODE		1147
 /*
  *	Integer Translations
  */
