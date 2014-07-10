@@ -157,6 +157,7 @@ static void tr_response_func( TIDC_INSTANCE *inst,
 	hs->proto = IPPROTO_TCP;
 	hs->secret = strdup("radsec");
 	hs->tls = construct_tls(inst, hs, server);
+	hs->response_window.tv_sec = 30;
 	if (hs->tls == NULL) goto error;
 	if (!realms_home_server_add(hs, NULL, 0))
 	  goto error;
