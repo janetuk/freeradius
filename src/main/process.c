@@ -1674,6 +1674,19 @@ skip_dup:
 	}
 
 	request = request_setup(listener, packet, client, fun);
+	/* 
+	 * copy tls identity from sock vps to new request
+	 */
+	if (sock) {
+		/* find identity */
+		DICT_ATTR const *da = dict_attrbyname("TLS-PSK-Identity");
+		VALUE_PAIR *vp = pairfind_da(sock->request->packet->vps, da, TAG_ANY);
+		if (vp) {
+			VALUE_PAIR *vp_copy = paircopy(sock->request->packet, vp);
+			pairadd(&sock->request->packet->vps, vp_copy);
+		}
+	}
+
 	if (!request) return 1;
 
 	/*
