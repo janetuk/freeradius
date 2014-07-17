@@ -1682,8 +1682,8 @@ skip_dup:
 		DICT_ATTR const *da = dict_attrbyname("TLS-PSK-Identity");
 		VALUE_PAIR *vp = pairfind_da(sock->request->packet->vps, da, TAG_ANY);
 		if (vp) {
-			VALUE_PAIR *vp_copy = paircopy(sock->request->packet, vp);
-			pairadd(&sock->request->packet->vps, vp_copy);
+			VALUE_PAIR *vp_copy = paircopy(request->packet, vp);
+			pairadd(&request->packet->vps, vp_copy);
 		}
 	}
 
