@@ -1680,11 +1680,10 @@ skip_dup:
 	/* 
 	 * copy tls identity from sock vps to new request
 	 */
-	if (sock && sock->ssn ) {
+	if (sock) {
 		/* find identity */
 		DICT_ATTR const *da = dict_attrbyname("TLS-PSK-Identity");
-		REQUEST *ssl_request = SSL_get_ex_data(sock->ssn->ssl, FR_TLS_EX_INDEX_REQUEST);
-		VALUE_PAIR *vp = pairfind_da(ssl_request->packet->vps, da, TAG_ANY);
+		VALUE_PAIR *vp = pairfind_da(sock->request->packet->vps, da, TAG_ANY);
 		if (vp) {
 			VALUE_PAIR *vp_copy = paircopy(request->packet, vp);
 			pairadd(&request->packet->vps, vp_copy);
