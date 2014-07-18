@@ -281,20 +281,7 @@ app:
 	packet->data = talloc_array(packet, uint8_t, sock->ssn->clean_out.used);
 	packet->data_len = sock->ssn->clean_out.used;
 	sock->ssn->record_minus(&sock->ssn->clean_out, packet->data, packet->data_len);
-
-	/*
-         * preserve psk identity, but clear any other vps from the packet
-         */
-	{
-		DICT_ATTR const *da = dict_attrbyname("TLS-PSK-Identity");
-		VALUE_PAIR *vp = pairfind_da(packet->vps, da, TAG_ANY);
-		packet->vps = NULL;
-		if (vp) {
-			VALUE_PAIR *vp_copy = paircopy(packet, vp);
-			pairadd(&packet->vps, vp_copy);
-		}
-	}
-
+	packet->vps = NULL;
 	PTHREAD_MUTEX_UNLOCK(&sock->mutex);
 
 	if (!rad_packet_ok(packet, 0, NULL)) {

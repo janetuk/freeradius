@@ -1224,15 +1224,14 @@ static void retrieve_tls_identity(REQUEST *request)
 		sock = request->listener->data;
 	}
 
-	if (sock && sock->request && sock->request->packet) {
-		/* find identity */
-		/* TODO: mutex required here? */
-		DICT_ATTR const *da = dict_attrbyname("TLS-PSK-Identity");
-		VALUE_PAIR *vp = pairfind_da(sock->request->packet->vps, da, TAG_ANY);
-		if (vp) {
-			VALUE_PAIR *vp_copy = paircopy(request->packet, vp);
-			pairadd(&request->packet->vps, vp_copy);
-			RDEBUG("copied tls identity vp from sock");
+	if (sock && sock->ssn && sock->ssn->ssl) {
+		const char *identity = SSL_get_psk_identity(sock->ssn->ssl);
+		if (identity) {
+			RDEBUG("Retrieved psk identity: %s", identity);
+			VALUE_PAIR *vp = pairmake_packet("TLS-PSK-Identity", identity, T_OP_SET);
+			if (vp) {
+				RDEBUG("Set tls-psk-identity: %s", identity);
+			}
 		}
 	}
 }
