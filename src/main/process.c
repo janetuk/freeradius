@@ -1211,6 +1211,32 @@ STATE_MACHINE_DECL(request_response_delay)
 	}
 }
 
+static void retrieve_tls_identity(REQUEST *request)
+{
+	/* 
+	 * copy tls identity from sock vps to new request
+	 */
+	listen_socket_t *sock = NULL;
+#ifdef WITH_ACCOUNTING
+	if (request->listener->type != RAD_LISTEN_DETAIL)
+#endif
+	{
+		sock = request->listener->data;
+	}
+
+	if (sock && sock->request && sock->request->packet) {
+		/* find identity */
+		/* TODO: mutex required here? */
+		DICT_ATTR const *da = dict_attrbyname("TLS-PSK-Identity");
+		VALUE_PAIR *vp = pairfind_da(sock->request->packet->vps, da, TAG_ANY);
+		if (vp) {
+			VALUE_PAIR *vp_copy = paircopy(request->packet, vp);
+			pairadd(&request->packet->vps, vp_copy);
+			RDEBUG("copied tls identity vp from sock");
+		}
+	}
+}
+
 
 static int CC_HINT(nonnull) request_pre_handler(REQUEST *request, UNUSED int action)
 {
@@ -1234,6 +1260,8 @@ static int CC_HINT(nonnull) request_pre_handler(REQUEST *request, UNUSED int act
 	}
 
 	if (!request->packet->vps) { /* FIXME: check for correct state */
+		retrieve_tls_identity(request);
+
 		rcode = request->listener->decode(request->listener, request);
 
 #ifdef WITH_UNLANG
@@ -1676,19 +1704,6 @@ skip_dup:
 	request = request_setup(listener, packet, client, fun);
 
 	if (!request) return 1;
-
-	/* 
-	 * copy tls identity from sock vps to new request
-	 */
-	if (sock) {
-		/* find identity */
-		DICT_ATTR const *da = dict_attrbyname("TLS-PSK-Identity");
-		VALUE_PAIR *vp = pairfind_da(sock->request->packet->vps, da, TAG_ANY);
-		if (vp) {
-			VALUE_PAIR *vp_copy = paircopy(request->packet, vp);
-			pairadd(&request->packet->vps, vp_copy);
-		}
-	}
 
 	/*
 	 *	Remember the request in the list.
