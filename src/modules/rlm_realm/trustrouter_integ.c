@@ -10,6 +10,7 @@ static TIDC_INSTANCE *global_tidc = NULL;
 
 
 struct resp_opaque {
+  REALM *orig_realm;
   REALM *output_realm;
   TID_RC result;
   char err_msg[1024];
@@ -108,14 +109,16 @@ static char *build_pool_name(void *talloc_ctx, TID_RESP *resp)
 static home_server_t *srvr_blk_to_home_server(
 					      void *talloc_ctx,
 					      TIDC_INSTANCE *inst,
-					      TID_SRVR_BLK *blk)
+					      TID_SRVR_BLK *blk,
+					      const char *realm_name)
 {
   home_server_t *hs = NULL;
   const struct sockaddr *sa = NULL;
   size_t sa_len = 0;
   fr_ipaddr_t home_server_ip;
   uint16_t port;
-  
+  char nametemp[256];
+
   rad_assert(blk != NULL);
   tid_srvr_get_address(blk, &sa, &sa_len);
   switch(sa->sa_family) {
@@ -139,81 +142,63 @@ static home_server_t *srvr_blk_to_home_server(
     return NULL;
   }
   
-      hs = home_server_find( &home_server_ip, port,
-			     IPPROTO_TCP);
-      if (hs) {
-	DEBUG2("Found existing home_server %s", hs->name);
-	replace_tls(hs, construct_tls(inst, hs, blk));
-      } else {
-	char nametemp[256];
-	if (0 != getnameinfo(sa, sa_len,
-			     nametemp,
-			     sizeof nametemp,
-			     NULL, 0,
-			     NI_NUMERICHOST)) {
-	  DEBUG2("getnameinfo failed");
-	  return NULL;
-	}
-	hs = talloc_zero(talloc_ctx, home_server_t);
-	if (!hs) return NULL;
-	hs->type = HOME_TYPE_AUTH;
-	hs->ipaddr = home_server_ip;
-        hs->src_ipaddr.af = home_server_ip.af;
-	hs->name = talloc_strdup(hs, nametemp);
-	hs->hostname = talloc_strdup(hs, nametemp);
-	  hs->port = port;
-	hs->proto = IPPROTO_TCP;
-	hs->secret = talloc_strdup(hs, "radsec");
-	hs->tls = construct_tls(inst, hs, blk);
-	hs->response_window.tv_sec = 30;
-	if (hs->tls == NULL) goto error;
-	if (!realm_home_server_add(hs, NULL, 0)) {
-	  DEBUG2("Failed to add home server");
-	  goto error;
-	}
-      }
-      return hs;
+  if (0 != getnameinfo(sa, sa_len,
+		       nametemp,
+		       sizeof nametemp,
+		       NULL, 0,
+		       NI_NUMERICHOST)) {
+    DEBUG2("getnameinfo failed");
+    return NULL;
+  }
+  hs = talloc_zero(talloc_ctx, home_server_t);
+  if (!hs) return NULL;
+  hs->type = HOME_TYPE_AUTH;
+  hs->ipaddr = home_server_ip;
+  hs->src_ipaddr.af = home_server_ip.af;
+  hs->name = talloc_asprintf(hs, "%s for %s", nametemp, realm_name);
+  hs->hostname = talloc_strdup(hs, nametemp);
+  hs->port = port;
+  hs->proto = IPPROTO_TCP;
+  hs->secret = talloc_strdup(hs, "radsec");
+  hs->tls = construct_tls(inst, hs, blk);
+  hs->response_window.tv_sec = 30;
+  hs->last_packet_recv = time(0);
+  if (hs->tls == NULL) goto error;
+  realm_home_server_sanitize(hs, NULL);
+
+  return hs;
  error:
-      talloc_free(hs);
-      return NULL;
+  talloc_free(hs);
+  return NULL;
 }
 
-static home_pool_t *servers_to_pool(TIDC_INSTANCE *inst,
-				   TID_RESP *resp)
+static home_pool_t *servers_to_pool(void *talloc_ctx,
+				    TIDC_INSTANCE *inst,
+				    TID_RESP *resp,
+				    const char *realm_name)
 {
   char *pool_name;
   home_pool_t *pool = NULL;
   size_t num_servers = 0, index;
   TID_SRVR_BLK *server = NULL;
   pool_name = build_pool_name( resp, resp);
-  pool = home_pool_byname(pool_name, HOME_TYPE_AUTH);
-  if (pool == NULL) {
-      num_servers = tid_resp_get_num_servers(resp);
-      pool = talloc_zero_size(NULL, sizeof(*pool) + num_servers *sizeof(home_server_t *));
-    if (pool == NULL) goto error;
-    pool->type = HOME_POOL_CLIENT_PORT_BALANCE;
-    pool->server_type = HOME_TYPE_AUTH;
-    pool->name = talloc_steal(pool, pool_name);
-    if (pool->name == NULL) goto error;
-    pool->num_home_servers = num_servers;
-
-
-    tid_resp_servers_foreach(resp, server, index) {
-      home_server_t *hs = srvr_blk_to_home_server(pool, inst, server);
-      if (NULL == hs)
-	goto error;
-      pool->servers[index] = hs;
-    }
-
-    if (!realm_pool_add(pool, NULL)) goto error;
-  } else {
-    /*Since we have fresh keys we might as well refresh them. So, go loop through the servers.  This will only update the TLS; the servers are guaranteed to exist because the pool has already been added.*/
-    tid_resp_servers_foreach(resp,  server, index)
-      (void) srvr_blk_to_home_server(pool, inst, server);
+  num_servers = tid_resp_get_num_servers(resp);
+  pool = talloc_zero_size(talloc_ctx, sizeof(*pool) + num_servers *sizeof(home_server_t *));
+  if (pool == NULL) goto error;
+  pool->type = HOME_POOL_CLIENT_PORT_BALANCE;
+  pool->server_type = HOME_TYPE_AUTH;
+  pool->name = talloc_steal(pool, pool_name);
+  if (pool->name == NULL) goto error;
+  pool->num_home_servers = num_servers;
+  tid_resp_servers_foreach(resp, server, index) {
+    home_server_t *hs = srvr_blk_to_home_server(pool, inst, server, realm_name);
+    if (NULL == hs)
+      goto error;
+    pool->servers[index] = hs;
   }
+
   return pool;
  error:
-  /*If home_pool_byname succeeds we must not get here or we'll throw away someone else's pool*/
   if (pool)
     talloc_free(pool);
   return NULL;
@@ -223,16 +208,10 @@ static void tr_response_func( TIDC_INSTANCE *inst,
 			     UNUSED TID_REQ *req, TID_RESP *resp,
 			     void *cookie)
 {
-  REALM *nr = NULL;
   struct resp_opaque  *opaque = (struct resp_opaque *) cookie;
+  REALM *nr = opaque->orig_realm;
 
 
-  /*xxx There's a race if this is called in two threads for the
-    same realm. Imagine if the home pool is not found in either
-    thread, is inserted in one thread and then the second
-    thread's insert fails. The second thread will fail. Probably
-    not a huge deal because a retransmit will make the world
-    great again.*/
   if (tid_resp_get_result(resp) != TID_SUCCESS) {
     size_t err_msg_len;
     opaque->result = tid_resp_get_result(resp);
@@ -247,22 +226,61 @@ static void tr_response_func( TIDC_INSTANCE *inst,
     return;
   }
 		
-  nr = talloc_zero(NULL, REALM);
-  if (nr == NULL) goto error;
-  nr->name = talloc_move(nr, &opaque->fr_realm_name);
-  nr->auth_pool = servers_to_pool(inst, resp);
-  if (!realm_realm_add(nr, NULL)) goto error;
+  if (nr == NULL) {
+    nr = talloc_zero(NULL, REALM);
+    if (nr == NULL) goto error;
+    nr->name = talloc_move(nr, &opaque->fr_realm_name);
+    nr->auth_pool = servers_to_pool(nr, inst, resp, opaque->fr_realm_name);
+    if (!realm_realm_add(nr, NULL)) goto error;
+  } else {
+    home_pool_t *old_pool = nr->auth_pool;
+    home_pool_t *new_pool = servers_to_pool(nr, inst, resp, opaque->fr_realm_name);
+    if (new_pool == NULL) {
+      ERROR("Unable to recreate pool for %s", opaque->fr_realm_name);
+      goto error;
+    }
+    nr->auth_pool = new_pool;
+    /*xxx Really we want to free this a few seconds from now, so that anyone who is load balancing in the new pool has gotten this update to avoid  the race or at least make it basically unlikely to ever happen.
+     */
+    talloc_free(old_pool);
+  }
+
   opaque->output_realm = nr;
-		
-		
   return;
 		
  error:
-  if (nr)
+  if (nr && !opaque->orig_realm)
     talloc_free(nr);
   return;
 }
-		
+
+static bool update_required(const REALM 		 *r)
+{
+  const home_pool_t *pool;
+  int i;
+  const home_server_t *server;
+  time_t now = time(0);
+  if (!r->auth_pool)
+    return 0; /*not ours*/
+  pool = r->auth_pool;
+  for (i = 0; i < pool->num_home_servers; i++) {
+    server = pool->servers[i];
+    if (server->cs)
+      return 0; /*we didn't allocate this*/
+    if ((server->last_packet_recv > now+5)
+	||(server->last_failed_open > now+5))
+      continue; /*nonsensical values*/
+    /*If any server has received a packet in the last 5 minutes then we don't need an update*/
+    if (now - server->last_packet_recv < 300)
+      return 0;
+    /*If we haven't had a failed open to this server in the last 10 minutes, then try an open rather than an update*/
+    if (now - server->last_failed_open > 600)
+      return 0;
+  }
+  return 1;
+}
+
+    
 
 REALM *tr_query_realm(const char *q_realm,
 		      const char  *q_community,
@@ -283,8 +301,8 @@ REALM *tr_query_realm(const char *q_realm,
   cookie.fr_realm_name = talloc_asprintf(NULL,
 					  "%s%%%s",
 					  q_community, q_realm);
-  cookie.output_realm = realm_find(cookie.fr_realm_name);
-  if (cookie.output_realm) {
+  cookie.orig_realm = cookie.output_realm = realm_find(cookie.fr_realm_name);
+  if (cookie.orig_realm && (!update_required(cookie.orig_realm))) {
     talloc_free(cookie.fr_realm_name);
     return cookie.output_realm;
   }
