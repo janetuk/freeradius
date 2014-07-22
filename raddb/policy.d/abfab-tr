@@ -19,6 +19,12 @@ abfab_pre_proxy {
 			reject
 		}
 	}
+	# check acceptor realm name is correct
+	if ("%{client:gss_acceptor_realm_name}" && "%{gss-acceptor-realm-name}") {
+		if ("%{client:gss_acceptor_realm_name}" != "%{gss-acceptor-realm-name}") {
+			reject
+		}
+	}
 	# set moonshot-coi attribute from client configuration
 	if ("%{client:moonshot_coi}") {
 		update request {
