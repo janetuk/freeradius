@@ -47,14 +47,6 @@ server abfab-idp {
 			}
 }
 
-	clients radsec {
-	        client default {
-		        ipaddr = 0.0.0.0
-			netmask = 0
-			proto = tcp
-
-	}
-}
 
 authorize {
         psk_authorize
@@ -244,4 +236,13 @@ post-proxy {
 #			detail
 #	}
 }
+}
+
+	clients radsec-abfab {
+	        client default {
+		        ipaddr = 0.0.0.0/0
+
+			proto = tls
+
+	}
 }
