@@ -724,10 +724,7 @@ static void common_socket_free(rad_listen_t *this)
 	}
 }
 #else
-static void common_socket_free(UNUSED rad_listen_t *this)
-{
-	return;
-}
+#define common_socket_free NULL
 #endif
 
 /*
@@ -2053,7 +2050,7 @@ static fr_protocol_t master_listen[RAD_LISTEN_MAX] = {
 #ifdef WITH_PROXY
 	/* proxying */
 	{ RLM_MODULE_INIT, "proxy", sizeof(listen_socket_t), NULL,
-	  common_socket_parse, NULL,
+	  common_socket_parse, common_socket_free,
 	  proxy_socket_recv, proxy_socket_send,
 	  common_socket_print, proxy_socket_encode, proxy_socket_decode },
 #endif
@@ -2750,6 +2747,7 @@ static rad_listen_t *listen_parse(CONF_SECTION *cs, char const *server)
 	CONF_PAIR	*cp;
 	char const	*value;
 	lt_dlhandle	handle;
+	CONF_SECTION	*server_cs;
 	char		buffer[32];
 
 	cp = cf_pair_find(cs, "type");
@@ -2860,6 +2858,15 @@ static rad_listen_t *listen_parse(CONF_SECTION *cs, char const *server)
 	 *	Call per-type parser.
 	 */
 	if (master_listen[type].parse(cs, this) < 0) {
+		listen_free(&this);
+		return NULL;
+	}
+
+
+	server_cs = cf_section_sub_find_name2(main_config.config, "server",
+					      this->server);
+	if (!server_cs) {
+		cf_log_err_cs(cs, "No such server \"%s\"", this->server);
 		listen_free(&this);
 		return NULL;
 	}
