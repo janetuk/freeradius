@@ -13,10 +13,16 @@ psk_authorize {
 }
 
 abfab_pre_proxy {
-	if (%{gss-acceptor-host-name} == "gss")
-		moonshot_coi := "painless-security.com"
-	else
-		reject
+	# check acceptor host name is correct
+	if ("%{client:gss_acceptor_host_name}" && "%{gss-acceptor-host-name}") {
+		if ("%{client:gss-acceptor-host-name}" != "%{gss-acceptor-host-name}")
+			reject;
+	# set moonshot-coi attribute from client configuration
+	if ("%{client:moonshot_coi}") {
+		update request {
+			moonshot-coi := "%{client:moonshot_coi}")
+		}
+	}
 }
 
 #
