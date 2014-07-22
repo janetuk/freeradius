@@ -168,7 +168,7 @@ static int send_packet(RADIUS_PACKET *req, RADIUS_PACKET **rep)
 	int i;
 	struct timeval	tv;
 
-	if (!req || !rep || !*rep) return -1;
+	if (!req || !rep) return -1;
 
 	for (i = 0; i < retries; i++) {
 		fd_set		rdfdesc;
@@ -304,7 +304,7 @@ static int process_eap_start(RADIUS_PACKET *req,
 	/* form new response clear of any EAP stuff */
 	cleanresp(rep);
 
-	if((vp = pairfind(req->vps, PW_EAP_SIM_BASE+PW_EAP_SIM_VERSION_LIST, 0, TAG_ANY)) == NULL) {
+	if((vp = pairfind(req->vps, PW_EAP_SIM_VERSION_LIST, 0, TAG_ANY)) == NULL) {
 		ERROR("illegal start message has no VERSION_LIST");
 		return 0;
 	}
@@ -363,9 +363,9 @@ static int process_eap_start(RADIUS_PACKET *req,
 	 * anyway we like, but it is illegal to have more than one
 	 * present.
 	 */
-	anyidreq_vp = pairfind(req->vps, PW_EAP_SIM_BASE+PW_EAP_SIM_ANY_ID_REQ, 0, TAG_ANY);
-	fullauthidreq_vp = pairfind(req->vps, PW_EAP_SIM_BASE+PW_EAP_SIM_FULLAUTH_ID_REQ, 0, TAG_ANY);
-	permanentidreq_vp = pairfind(req->vps, PW_EAP_SIM_BASE+PW_EAP_SIM_PERMANENT_ID_REQ, 0, TAG_ANY);
+	anyidreq_vp = pairfind(req->vps, PW_EAP_SIM_ANY_ID_REQ, 0, TAG_ANY);
+	fullauthidreq_vp = pairfind(req->vps, PW_EAP_SIM_FULLAUTH_ID_REQ, 0, TAG_ANY);
+	permanentidreq_vp = pairfind(req->vps, PW_EAP_SIM_PERMANENT_ID_REQ, 0, TAG_ANY);
 
 	if(!fullauthidreq_vp ||
 	   anyidreq_vp != NULL ||
@@ -381,7 +381,7 @@ static int process_eap_start(RADIUS_PACKET *req,
 
 	/* mark the subtype as being EAP-SIM/Response/Start */
 	newvp = paircreate(rep, PW_EAP_SIM_SUBTYPE, 0);
-	newvp->vp_integer = eapsim_start;
+	newvp->vp_integer = EAPSIM_START;
 	pairreplace(&(rep->vps), newvp);
 
 	/* insert selected version into response. */
@@ -390,7 +390,7 @@ static int process_eap_start(RADIUS_PACKET *req,
 
 		no_versions = htons(selectedversion);
 
-		newvp = paircreate(rep, PW_EAP_SIM_BASE + PW_EAP_SIM_SELECTED_VERSION, 0);
+		newvp = paircreate(rep, PW_EAP_SIM_SELECTED_VERSION, 0);
 		pairmemcpy(newvp, (uint8_t *) &no_versions, 2);
 		pairreplace(&(rep->vps), newvp);
 
@@ -411,7 +411,7 @@ static int process_eap_start(RADIUS_PACKET *req,
 		nonce[2]=fr_rand();
 		nonce[3]=fr_rand();
 
-		newvp = paircreate(rep, PW_EAP_SIM_BASE+PW_EAP_SIM_NONCE_MT, 0);
+		newvp = paircreate(rep, PW_EAP_SIM_NONCE_MT, 0);
 
 		p = talloc_zero_array(newvp, uint8_t, 18); /* 18 = 16 bytes of nonce + padding */
 		memcpy(&p[2], nonce, 16);
@@ -437,7 +437,7 @@ static int process_eap_start(RADIUS_PACKET *req,
 			ERROR("eap-sim: We need to have a User-Name attribute!");
 			return 0;
 		}
-		newvp = paircreate(rep, PW_EAP_SIM_BASE+PW_EAP_SIM_IDENTITY, 0);
+		newvp = paircreate(rep, PW_EAP_SIM_IDENTITY, 0);
 
 		idlen = strlen(vp->vp_strvalue);
 		p = talloc_zero_array(newvp, uint8_t, idlen + 2);
@@ -475,8 +475,8 @@ static int process_eap_challenge(RADIUS_PACKET *req, RADIUS_PACKET *rep)
 	uint8_t calcmac[20];
 
 	/* look for the AT_MAC and the challenge data */
-	mac   = pairfind(req->vps, PW_EAP_SIM_BASE+PW_EAP_SIM_MAC, 0, TAG_ANY);
-	randvp= pairfind(req->vps, PW_EAP_SIM_BASE+PW_EAP_SIM_RAND, 0, TAG_ANY);
+	mac   = pairfind(req->vps, PW_EAP_SIM_MAC, 0, TAG_ANY);
+	randvp= pairfind(req->vps, PW_EAP_SIM_RAND, 0, TAG_ANY);
 	if(!mac || !randvp) {
 		ERROR("challenge message needs to contain RAND and MAC");
 		return 0;
@@ -608,7 +608,7 @@ static int process_eap_challenge(RADIUS_PACKET *req, RADIUS_PACKET *rep)
 
 	/* mark the subtype as being EAP-SIM/Response/Start */
 	newvp = paircreate(rep, PW_EAP_SIM_SUBTYPE, 0);
-	newvp->vp_integer = eapsim_challenge;
+	newvp->vp_integer = EAPSIM_CHALLENGE;
 	pairreplace(&(rep->vps), newvp);
 
 	{
@@ -617,7 +617,7 @@ static int process_eap_challenge(RADIUS_PACKET *req, RADIUS_PACKET *rep)
 		 * fill the SIM_MAC with a field that will in fact get appended
 		 * to the packet before the MAC is calculated
 		 */
-		newvp = paircreate(rep, PW_EAP_SIM_BASE+PW_EAP_SIM_MAC, 0);
+		newvp = paircreate(rep, PW_EAP_SIM_MAC, 0);
 
 		p = talloc_zero_array(newvp, uint8_t, EAPSIM_SRES_SIZE*3);
 		memcpy(p+EAPSIM_SRES_SIZE * 0, sres1->vp_strvalue, EAPSIM_SRES_SIZE);
@@ -667,7 +667,7 @@ static int respond_eap_sim(RADIUS_PACKET *req, RADIUS_PACKET *resp)
 	{
 		/* must be initial request */
 		statevp = paircreate(resp, PW_EAP_SIM_STATE, 0);
-		statevp->vp_integer = eapsim_client_init;
+		statevp->vp_integer = EAPSIM_CLIENT_INIT;
 		pairreplace(&(resp->vps), statevp);
 	}
 	state = statevp->vp_integer;
@@ -687,15 +687,15 @@ static int respond_eap_sim(RADIUS_PACKET *req, RADIUS_PACKET *resp)
 	 * look for the appropriate state, and process incoming message
 	 */
 	switch(state) {
-	case eapsim_client_init:
+	case EAPSIM_CLIENT_INIT:
 		switch(subtype) {
-		case eapsim_start:
+		case EAPSIM_START:
 			newstate = process_eap_start(req, resp);
 			break;
 
-		case eapsim_challenge:
-		case eapsim_notification:
-		case eapsim_reauth:
+		case EAPSIM_CHALLENGE:
+		case EAPSIM_NOTIFICATION:
+		case EAPSIM_REAUTH:
 		default:
 			ERROR("sim in state %s message %s is illegal. Reply dropped.",
 				sim_state2name(state, statenamebuf, sizeof(statenamebuf)),
@@ -705,14 +705,14 @@ static int respond_eap_sim(RADIUS_PACKET *req, RADIUS_PACKET *resp)
 		}
 		break;
 
-	case eapsim_client_start:
+	case EAPSIM_CLIENT_START:
 		switch(subtype) {
-		case eapsim_start:
+		case EAPSIM_START:
 			/* NOT SURE ABOUT THIS ONE, retransmit, I guess */
 			newstate = process_eap_start(req, resp);
 			break;
 
-		case eapsim_challenge:
+		case EAPSIM_CHALLENGE:
 			newstate = process_eap_challenge(req, resp);
 			break;
 
@@ -941,9 +941,9 @@ static int sendrecv_eap(RADIUS_PACKET *rep)
 	} /* there WAS a password */
 
 	/* send the response, wait for the next request */
-	send_packet(req, &rep);
-	if (!rep) {
-		ERROR("Failed getting response");
+	send_packet(rep, &req);
+	if (!req) {
+		ERROR("Failed getting response (EAP-Request from server)");
 		return -1;
 	}
 
@@ -1557,7 +1557,7 @@ main(int argc, char *argv[])
 			vp_printlist(stdout, req2->vps);
 		}
 
-		vp = pairfind(req2->vps, PW_EAP_SIM_BASE+PW_EAP_SIM_MAC, 0, TAG_ANY);
+		vp = pairfind(req2->vps, PW_EAP_SIM_MAC, 0, TAG_ANY);
 		vpkey   = pairfind(req->vps, PW_EAP_SIM_KEY, 0, TAG_ANY);
 		vpextra = pairfind(req->vps, PW_EAP_SIM_EXTRA, 0, TAG_ANY);
 

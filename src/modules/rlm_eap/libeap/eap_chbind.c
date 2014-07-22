@@ -30,7 +30,8 @@ RCSID("$Id$")
 
 static bool chbind_build_response(REQUEST *request, CHBIND_REQ *chbind)
 {
-	size_t length, total;
+	int length;
+	size_t total;
 	uint8_t *ptr, *end;
 	VALUE_PAIR const *vp;
 	vp_cursor_t cursor;
@@ -93,10 +94,10 @@ static bool chbind_build_response(REQUEST *request, CHBIND_REQ *chbind)
 		 */
 		if (vp->da->flags.encrypt != FLAG_ENCRYPT_NONE) continue;
 		if (!vp->da->vendor && (vp->da->attr == PW_MESSAGE_AUTHENTICATOR)) continue;
-		if (ptr < end) {
-			length = rad_vp2attr(NULL, NULL, NULL, &vp, ptr, end - ptr);
-			ptr += length;
-		}
+
+		length = rad_vp2attr(NULL, NULL, NULL, &vp, ptr, end - ptr);
+		if (length < 0) continue;
+		ptr += length;
 	}
 
 	return true;
