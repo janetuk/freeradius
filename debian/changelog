@@ -1,3 +1,10 @@
+freeradius (3.0.4~rc1+moonshot3-4) unstable; urgency=medium
+
+  * Trust Debian to handle OpenSSL security; ignore FreeRadius
+    vulnerability check.
+
+ -- Sam Hartman <hartmans@debian.org>  Thu, 24 Jul 2014 16:26:55 -0400
+
 freeradius (3.0.4~rc1+moonshot3-3) unstable; urgency=medium
 
   * One more round of script typos
