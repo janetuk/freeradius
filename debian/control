@@ -153,3 +153,10 @@ Description: debug symbols for the FreeRADIUS packages
  FreeRADIUS is a modular, high performance and feature-rich RADIUS server.
  This package contains the detached debugging symbols for the Debian FreeRADIUS
  packages.
+
+Package: freeradius-abfab
+Depends: freeradius (= ${binary:Version})
+Architecture: all
+Description: FreeRADIUS ABFAB Support
+ This package enables sites and modules typically needed by GSS-EAP
+ (RFC 7055) identity providers and RP proxies.

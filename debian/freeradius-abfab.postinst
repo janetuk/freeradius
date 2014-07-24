@@ -1,0 +1,20 @@
+#! /bin/sh
+
+set -e
+
+case "$1" in
+  configure)
+        if [ -z "$2" ]; then
+	    for foo in abfab-tr-idp abfab-tls; do
+		test -l /etc/freeradius/sites-enabled/$foo || ln -s ../sites-available/$foo /etc/freeradius/sites-enabled
+		done
+	    for foo inabfab_psk_sql; do
+		test -l /etc/freeradius/mods-enabled/$foo || ln -s ../mods-available/$foo /etc/freeradius/mods-enabled
+		done
+	    fi
+	;;
+    esac
+
+    #DEBHELPER#
+
+exit 0

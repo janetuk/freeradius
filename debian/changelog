@@ -1,3 +1,10 @@
+freeradius (3.0.4~rc1+moonshot3-1) unstable; urgency=medium
+
+  * New upstream merge
+  * New package freeradius-abfab to create the abfab symlinks.
+
+ -- Sam Hartman <hartmans@debian.org>  Thu, 24 Jul 2014 11:29:05 -0400
+
 freeradius (3.0.4~rc1+moonshot1-1.1) UNRELEASED; urgency=low
 
   [ Sam Hartman ]
