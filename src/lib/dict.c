@@ -164,14 +164,10 @@ const size_t dict_attr_sizes[PW_TYPE_MAX][2] = {
  *	5 bits for nested TLV 3
  *	3 bits for nested TLV 4
  */
-const int fr_attr_max_tlv = MAX_TLV_NEST;
-const int fr_attr_shift[MAX_TLV_NEST + 1] = {
-  0, 8, 16, 24, 29
-};
+int const fr_attr_max_tlv = MAX_TLV_NEST;
+int const fr_attr_shift[MAX_TLV_NEST + 1] = { 0, 8, 16, 24, 29 };
 
-const int fr_attr_mask[MAX_TLV_NEST + 1] = {
-  0xff, 0xff, 0xff, 0x1f, 0x07
-};
+int const fr_attr_mask[MAX_TLV_NEST + 1] = { 0xff, 0xff, 0xff, 0x1f, 0x07 };
 
 
 /*
@@ -605,10 +601,6 @@ int dict_addvendor(char const *name, unsigned int value)
 	return 0;
 }
 
-
-/*
- *	[a-zA-Z0-9_-:.]+
- */
 const int dict_attr_allowed_chars[256] = {
 	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -628,6 +620,26 @@ const int dict_attr_allowed_chars[256] = {
 	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
+/*
+ *	[a-zA-Z0-9_-:.]+
+ */
+int dict_valid_name(char const *name)
+{
+	uint8_t const *p;
+
+	for (p = (uint8_t const *) name; *p != '\0'; p++) {
+		if (!dict_attr_allowed_chars[*p]) {
+			char buff[5];
+
+			fr_print_string((char const *)p, 1, buff, sizeof(buff));
+			fr_strerror_printf("Invalid character '%s' in attribute", buff);
+
+			return -(p - (uint8_t const *)name);
+		}
+	}
+
+	return 0;
+}
 
 /*
  *	Add an attribute to the dictionary.
@@ -637,7 +649,6 @@ int dict_addattr(char const *name, int attr, unsigned int vendor, PW_TYPE type,
 {
 	size_t namelen;
 	static int      max_attr = 0;
-	uint8_t const *p;
 	DICT_ATTR const	*da;
 	DICT_ATTR *n;
 
@@ -647,12 +658,7 @@ int dict_addattr(char const *name, int attr, unsigned int vendor, PW_TYPE type,
 		return -1;
 	}
 
-	for (p = (uint8_t const *) name; *p != '\0'; p++) {
-		if (!dict_attr_allowed_chars[*p]) {
-			fr_strerror_printf("dict_addattr: Invalid character '%c' in attribute name", *p);
-			return -1;
-		}
-	}
+	if (dict_valid_name(name) < 0) return -1;
 
 	if (flags.has_tag &&
 	    !((type == PW_TYPE_INTEGER) || (type == PW_TYPE_STRING))) {
@@ -2738,6 +2744,8 @@ DICT_ATTR const *dict_attrunknownbyname(char const *attribute, int vp_free)
 
 	DICT_VENDOR	*dv;
 	DICT_ATTR const	*da;
+
+	if (dict_valid_name(attribute) < 0) return NULL;
 
 	/*
 	 *	Pull off vendor prefix first.

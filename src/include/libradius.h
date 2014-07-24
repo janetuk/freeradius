@@ -440,6 +440,7 @@ char		*vp_aprint(TALLOC_CTX *ctx, VALUE_PAIR const *vp);
  *	Dictionary functions.
  */
 extern const int dict_attr_allowed_chars[256];
+int		dict_valid_name(char const *name);
 int		str2argv(char *str, char **argv, int max_argc);
 int		dict_str2oid(char const *ptr, unsigned int *pattr,
 			     unsigned int *pvendor, int tlv_depth);
@@ -622,8 +623,8 @@ void		fr_strerror_printf(char const *, ...) CC_HINT(format (printf, 1, 2));
 void		fr_perror(char const *, ...) CC_HINT(format (printf, 1, 2));
 
 
-extern char const *fr_strerror(void);
-extern char const *fr_syserror(int num);
+char const	*fr_strerror(void);
+char const	*fr_syserror(int num);
 extern bool	fr_dns_lookups;	/* do IP -> hostname lookups? */
 extern bool	fr_hostname_lookups; /* do hostname -> IP lookups? */
 extern int	fr_debug_flag;	/* 0 = no debugging information */
@@ -632,7 +633,7 @@ extern uint32_t	fr_max_attributes; /* per incoming packet */
 extern char const *fr_packet_codes[FR_MAX_PACKET_CODE];
 #define is_radius_code(_x) ((_x > 0) && (_x < FR_MAX_PACKET_CODE))
 extern FILE	*fr_log_fp;
-extern void rad_print_hex(RADIUS_PACKET *packet);
+void		rad_print_hex(RADIUS_PACKET *packet);
 void		fr_printf_log(char const *, ...) CC_HINT(format (printf, 1, 2));
 
 /*
