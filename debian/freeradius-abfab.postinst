@@ -5,7 +5,7 @@ set -e
 case "$1" in
   configure)
         if [ -z "$2" ]; then
-	    for foo in abfab-tr-idp abfab-tlschannel_bindings ; do
+	    for foo in abfab-tr-idp abfab-tls channel_bindings ; do
 		test -e /etc/freeradius/sites-enabled/$foo || ln -s ../sites-available/$foo /etc/freeradius/sites-enabled
 		done
 	    for foo in abfab_psk_sql ; do

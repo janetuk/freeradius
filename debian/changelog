@@ -1,3 +1,9 @@
+freeradius (3.0.4~rc1+moonshot3-5) unstable; urgency=medium
+
+  * Yet another typo fix in postinst
+
+ -- Sam Hartman <hartmans@debian.org>  Fri, 25 Jul 2014 10:06:34 -0400
+
 freeradius (3.0.4~rc1+moonshot3-4) unstable; urgency=medium
 
   * Trust Debian to handle OpenSSL security; ignore FreeRadius
