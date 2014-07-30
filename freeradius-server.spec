@@ -67,6 +67,15 @@ more.  Using RADIUS allows authentication and authorization for a network to
 be centralized, and minimizes the amount of re-configuration which has to be
 done when adding or deleting new users.
 
+%package abfab
+Group: System Environment/Daemons
+Summary: FreeRADIUS ABFAb Configuration
+Requires: %{name} = %{version}-%{release}
+
+%description abfab
+This package provides configuration required by an ABFAB (RFC 7055)
+identity provider or RP proxy.
+
 %package doc
 Group: Documentation
 Summary: FreeRADIUS documentation
@@ -212,6 +221,12 @@ make
 %install
 mkdir -p $RPM_BUILD_ROOT/%{_localstatedir}/lib/radiusd
 make install R=$RPM_BUILD_ROOT
+for foo in abfab-tr-idp abfab-tls channel_bindings ; do
+    test -e $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/sites-enabled/$foo || ln -s ../sites-available/$foo $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/sites-enabled
+    done
+for foo in abfab_psk_sql ; do
+    test -e $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/mods-enabled/$foo || ln -s ../mods-available/$foo $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/mods-enabled
+    done
 
 # logs
 mkdir -p $RPM_BUILD_ROOT/var/log/radius/radacct
@@ -260,7 +275,6 @@ rm -rf $RPM_BUILD_ROOT/etc/raddb/mods-config/sql/main/oracle
 
 # remove unsupported config files
 rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/experimental.conf
-
 # install doc files omitted by standard install
 for f in COPYRIGHT CREDITS INSTALL.rst README.rst VERSION; do
     cp $f $RPM_BUILD_ROOT/%{docdir}
@@ -390,6 +404,8 @@ exit 0
 # sites-available
 %dir %attr(750,root,radiusd) /etc/raddb/sites-available
 /etc/raddb/sites-available/README
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/abfab-tr-idp
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/abfab-tls
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/control-socket
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/channel_bindings
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/decoupled-accounting
@@ -422,6 +438,7 @@ exit 0
 # mods-available
 %dir %attr(750,root,radiusd) /etc/raddb/mods-available
 /etc/raddb/mods-available/README.rst
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/abfab_psk_sql
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/always
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/attr_filter
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/cache
@@ -518,6 +535,7 @@ exit 0
 
 # policy
 %dir %attr(750,root,radiusd) /etc/raddb/policy.d
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/abfab-tr
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/accounting
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/canonicalization
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/control
@@ -632,6 +650,15 @@ exit 0
 %doc %{_mandir}/man8/radmin.8.gz
 %doc %{_mandir}/man8/radrelay.8.gz
 
+%files abfab
+%dir %attr(750,root,radiusd) /etc/raddb/sites-enabled
+%config(missingok) /etc/raddb/sites-enabled/abfab-tr-idp
+%config(missingok) /etc/raddb/sites-enabled/abfab-tls
+%config(missingok) /etc/raddb/sites-enabled/channel_bindings
+%dir %attr(750,root,radiusd) /etc/raddb/mods-enabled
+%config(missingok) /etc/raddb/mods-enabled/abfab_psk_sql
+
+
 %files doc
 
 %doc %{docdir}/
@@ -671,7 +698,7 @@ exit 0
 %files python
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/python
 /etc/raddb/mods-config/python/example.py*
-/etc/raddb/mods-config/python/radiusd.py
+/etc/raddb/mods-config/python/radiusd.py*
 %{_libdir}/freeradius/rlm_python.so
 
 %files mysql
