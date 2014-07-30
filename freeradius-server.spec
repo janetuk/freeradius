@@ -1,6 +1,6 @@
 Summary: High-performance and highly configurable free RADIUS server
 Name: freeradius
-Version: 3.0.1
+Version: 3.0.4
 Release: 1%{?dist}
 License: GPLv2+ and LGPLv2+
 Group: System Environment/Daemons
@@ -23,7 +23,6 @@ Source103: freeradius-pam-conf
 Source104: freeradius-tmpfiles.conf
 
 Patch1: freeradius-redhat-config.patch
-Patch2: freeradius-postgres-sql.patch
 
 %global docdir %{?_pkgdocdir}%{!?_pkgdocdir:%{_docdir}/%{name}-%{version}}
 %define initddir %{?_initddir:%{_initddir}}%{!?_initddir:%{_initrddir}}
@@ -48,7 +47,7 @@ BuildRequires: tncfhh-devel
 BuildRequires: ykclient-devel
 %endif
 
-Requires: openssl
+Requires: openssl >= 1.0.1e-16.el6_5.7
 Requires(pre): shadow-utils glibc-common
 Requires(post): /sbin/chkconfig
 Requires(preun): /sbin/chkconfig
@@ -180,7 +179,6 @@ This plugin provides the unixODBC support for the FreeRADIUS server project.
 # Note: We explicitly do not make patch backup files because 'make install'
 # mistakenly includes the backup files, especially problematic for raddb config files.
 %patch1 -p1
-%patch2 -p1
 
 %build
 # Force compile/link options, extra security for network facing daemon
@@ -198,11 +196,16 @@ This plugin provides the unixODBC support for the FreeRADIUS server project.
         --with-unixodbc-lib-dir=%{_libdir} \
         --with-rlm-dbm-lib-dir=%{_libdir} \
         --with-rlm-krb5-include-dir=/usr/kerberos/include \
+        --without-rlm_couchbase \
         --without-rlm_eap_ikev2 \
+        --without-rlm_example \
+        --without-rlm_idn \
+        --without-rlm_smsotp \
+        --without-rlm_sqlhpwippool \
         --without-rlm_sql_iodbc \
         --without-rlm_sql_firebird \
         --without-rlm_sql_db2 \
-        --without-rlm_sql_oracle 
+        --without-rlm_sql_oracle
 
 make
 
@@ -236,6 +239,7 @@ rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/certs/serial*
 rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/certs/dh
 rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/certs/random
 
+
 rm -f $RPM_BUILD_ROOT/%{_mandir}/man1/radeapclient.1
 
 rm -f $RPM_BUILD_ROOT/usr/sbin/rc.radiusd
@@ -245,11 +249,14 @@ rm -rf $RPM_BUILD_ROOT/%{_libdir}/freeradius/*.la
 chrpath --delete $RPM_BUILD_ROOT/%{_libdir}/freeradius/rlm_sql_unixodbc.so
 chrpath --delete $RPM_BUILD_ROOT/%{_libdir}/freeradius/rlm_sql_postgresql.so
 
+rm -rf $RPM_BUILD_ROOT/etc/raddb/mods-available/couchbase
+
 rm -rf $RPM_BUILD_ROOT/etc/raddb/mods-config/sql/main/mssql
 
 rm -rf $RPM_BUILD_ROOT/etc/raddb/mods-config/sql/ippool/oracle
 rm -rf $RPM_BUILD_ROOT/etc/raddb/mods-config/sql/ippool-dhcp/oracle
 rm -rf $RPM_BUILD_ROOT/etc/raddb/mods-config/sql/main/oracle
+
 
 # remove unsupported config files
 rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/experimental.conf
@@ -332,6 +339,8 @@ exit 0
 %dir %attr(755,root,radiusd) /etc/raddb
 %defattr(-,root,radiusd)
 /etc/raddb/README.rst
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/panic.gdb
+
 %attr(644,root,radiusd) %config(noreplace) /etc/raddb/dictionary
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/clients.conf
 
@@ -375,12 +384,14 @@ exit 0
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/ippool-dhcp
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main
 
+%dir %attr(750,root,radiusd) /etc/raddb/mods-config/unbound
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/unbound/default.conf
 
 # sites-available
 %dir %attr(750,root,radiusd) /etc/raddb/sites-available
 /etc/raddb/sites-available/README
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/control-socket
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/chbind
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/channel_bindings
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/decoupled-accounting
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/robust-proxy-accounting
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/soh
@@ -404,6 +415,7 @@ exit 0
 # sites-enabled
 # symlink: /etc/raddb/sites-enabled/xxx -> ../sites-available/xxx
 %dir %attr(750,root,radiusd) /etc/raddb/sites-enabled
+%config(missingok) /etc/raddb/sites-enabled/channel_bindings
 %config(missingok) /etc/raddb/sites-enabled/inner-tunnel
 %config(missingok) /etc/raddb/sites-enabled/default
 
@@ -415,6 +427,7 @@ exit 0
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/cache
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/cache_eap
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/chap
+#%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/couchbase
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/counter
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/cui
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/date
@@ -463,6 +476,8 @@ exit 0
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/sqlippool
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/sradutmp
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/unix
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/unpack
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/unbound
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/utf8
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/wimax
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/yubikey
@@ -498,6 +513,7 @@ exit 0
 %config(missingok) /etc/raddb/mods-enabled/soh
 %config(missingok) /etc/raddb/mods-enabled/sradutmp
 %config(missingok) /etc/raddb/mods-enabled/unix
+%config(missingok) /etc/raddb/mods-enabled/unpack
 %config(missingok) /etc/raddb/mods-enabled/utf8
 
 # policy
@@ -576,6 +592,7 @@ exit 0
 %{_libdir}/freeradius/rlm_radutmp.so
 %{_libdir}/freeradius/rlm_realm.so
 %{_libdir}/freeradius/rlm_replicate.so
+%{_libdir}/freeradius/rlm_rest.so
 %{_libdir}/freeradius/rlm_soh.so
 %{_libdir}/freeradius/rlm_sometimes.so
 %{_libdir}/freeradius/rlm_sql.so
@@ -583,6 +600,7 @@ exit 0
 %{_libdir}/freeradius/rlm_sqlippool.so
 %{_libdir}/freeradius/rlm_sql_null.so
 %{_libdir}/freeradius/rlm_unix.so
+%{_libdir}/freeradius/rlm_unpack.so
 %{_libdir}/freeradius/rlm_utf8.so
 %{_libdir}/freeradius/rlm_wimax.so
 %{_libdir}/freeradius/rlm_yubikey.so
@@ -612,7 +630,6 @@ exit 0
 %doc %{_mandir}/man8/raddebug.8.gz
 %doc %{_mandir}/man8/radiusd.8.gz
 %doc %{_mandir}/man8/radmin.8.gz
-%doc %{_mandir}/man8/radconf2xml.8.gz
 %doc %{_mandir}/man8/radrelay.8.gz
 
 %files doc
@@ -631,7 +648,6 @@ exit 0
 %doc %{_mandir}/man1/radzap.1.gz
 %doc %{_mandir}/man1/smbencrypt.1.gz
 %doc %{_mandir}/man5/checkrad.5.gz
-#%doc %{_mandir}/man8/radconf2xml.8.gz
 %doc %{_mandir}/man8/radcrypt.8.gz
 %doc %{_mandir}/man8/radsniff.8.gz
 %doc %{_mandir}/man8/radsqlrelay.8.gz
@@ -655,6 +671,7 @@ exit 0
 %files python
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/python
 /etc/raddb/mods-config/python/example.py*
+/etc/raddb/mods-config/python/radiusd.py
 %{_libdir}/freeradius/rlm_python.so
 
 %files mysql
@@ -735,8 +752,8 @@ exit 0
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/ippool/sqlite/schema.sql
 
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/ippool-dhcp/sqlite
-#%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/ippool-dhcp/sqlite/schema.sql
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/ippool-dhcp/sqlite/queries.conf
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/ippool-dhcp/sqlite/schema.sql
 
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main/sqlite
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/main/sqlite/queries.conf
@@ -752,16 +769,28 @@ exit 0
 %{_libdir}/freeradius/rlm_sql_unixodbc.so
 
 %changelog
-* Fri Mar 21 2014 Stefan Paetow <stefan.paetow@diamond.ac.uk> - 3.0.2-1
-- Upgrade to upstream 3.0.2 release, full config compatible with 3.0.0.
-  This is a roll-up of all upstream bugs fixes found in 3.0.0-3.0.1
+* Thu Jul 10 2014 Stefan Paetow <stefan.paetow@ja.net> - 3.0.4-1
+- Upgrade to upstream 3.0.4 release, configuration compatible with 3.0.1.
+- Backported to CentOS 6.5
+
+* Wed May 14 2014 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.3-1
+- Upgrade to upstream 3.0.3 release.
+  See upstream ChangeLog for details (in freeradius-doc subpackage).
+- Minor configuration parsing change: "Double-escaping of characters in Perl,
+  and octal characters has been fixed. If your configuration has text like
+  "\\000", you will need to remove one backslash."
+- Additionally includes post-release fixes for:
+  * case-insensitive matching in compiled regular expressions not working,
+  * upstream issue #634 "3.0.3 SIGSEGV on config parse",
+  * upstream issue #635 "3.0.x - rlm_perl - strings are still
+    escaped when passed to perl from FreeRADIUS",
+  * upstream issue #639 "foreach may cause ABORT".
+- Fixes bugs 1097266 1070447
+
+* Wed May  7 2014 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.2-1
+- Upgrade to upstream 3.0.2 release, configuration compatible with 3.0.1.
   See upstream ChangeLog for details (in freeradius-doc subpackage)
-
-* Tue Mar  4 2014 Stefan Paetow <stefan.paetow@diamond.ac.uk> - 3.0.1-4
-- Inclusion of a SQLite 3 patch to unbreak SQLite support in FreeRADIUS 3.0.1
-
-* Tue Mar  4 2014 Stefan Paetow <stefan.paetow@diamond.ac.uk> - 3.0.1-4
-- Backported to CentOS 6.4
+- Fixes bugs 1058884 1061408 1070447 1079500
 
 * Mon Feb 24 2014 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.1-4
 - Fix CVE-2014-2015 "freeradius: stack-based buffer overflow flaw in rlm_pap
