@@ -21,13 +21,13 @@ abfab_pre_proxy {
 	}
 	# set trust-router-coi attribute from client configuration
 	if ("%{client:trust_router_coi}") {
-		update request {
+		update proxy-request {
 			trust-router-coi := "%{client:trust_router_coi}"
 		}
 	}
 	# set gss-acceptor-realm-name attribute from client configuration
 	if ("%{client:gss_acceptor_realm_name}") {
-		update request {
+		update proxy-request {
 			gss-acceptor-realm-name := "%{client:gss_acceptor_realm_name}"
 		}
 	}
