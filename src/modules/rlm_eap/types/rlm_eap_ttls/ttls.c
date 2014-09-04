@@ -249,7 +249,7 @@ static VALUE_PAIR *diameter2vp(REQUEST *request, REQUEST *fake, SSL *ssl,
 				goto do_octets;
 			}
 
-			fr_cursor_insert(&out, vp);
+			fr_cursor_merge(&out, vp);
 
 			goto next_attr;
 		}
@@ -1134,11 +1134,11 @@ int eapttls_process(eap_handler_t *handler, tls_session_t *tls_session)
 			 *	Some attributes are handled specially.
 			 */
 			switch (vp->da->attr) {
-				/*
-				 *	NEVER copy Message-Authenticator,
-				 *	EAP-Message, or State.  They're
-				 *	only for outside of the tunnel.
-				 */
+			/*
+			 *	NEVER copy Message-Authenticator,
+			 *	EAP-Message, or State.  They're
+			 *	only for outside of the tunnel.
+			 */
 			case PW_USER_NAME:
 			case PW_USER_PASSWORD:
 			case PW_CHAP_PASSWORD:
@@ -1148,11 +1148,10 @@ int eapttls_process(eap_handler_t *handler, tls_session_t *tls_session)
 			case PW_EAP_MESSAGE:
 			case PW_STATE:
 				continue;
-				break;
 
-				/*
-				 *	By default, copy it over.
-				 */
+			/*
+			 *	By default, copy it over.
+			 */
 			default:
 				break;
 			}
@@ -1161,7 +1160,7 @@ int eapttls_process(eap_handler_t *handler, tls_session_t *tls_session)
 			 *	Don't copy from the head, we've already
 			 *	checked it.
 			 */
-			copy = paircopy2(fake->packet, vp, vp->da->attr, vp->da->vendor, TAG_ANY);
+			copy = paircopy_by_num(fake->packet, vp, vp->da->attr, vp->da->vendor, TAG_ANY);
 			pairadd(&fake->packet->vps, copy);
 		}
 	}

@@ -385,11 +385,9 @@ static void perl_parse_config(CONF_SECTION *cs, int lvl, HV *rad_hv)
 
 	DEBUG("%*s%s {", indent_section, " ", cf_section_name1(cs));
 
-	CONF_ITEM *ci;
+	CONF_ITEM *ci = NULL;
 
-	for (ci = cf_item_find_next(cs, NULL);
-	     ci;
-	     ci = cf_item_find_next(cs, ci)) {
+	while ((ci = cf_item_find_next(cs, ci))) {
 		/*
 		 *  This is a section.
 		 *  Create a new HV, store it as a reference in current HV,
@@ -518,7 +516,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	exitstatus = perl_parse(inst->perl, xs_init, argc, embed, NULL);
 
 	end_AV = PL_endav;
-	PL_endav = Nullav;
+	PL_endav = (AV *)NULL;
 
 	if(!exitstatus) {
 		perl_run(inst->perl);
@@ -924,7 +922,6 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 	}
 
 	switch (acctstatustype) {
-
 	case PW_STATUS_START:
 
 		if (((rlm_perl_t *)instance)->func_start_accounting) {
@@ -946,10 +943,10 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 				       ((rlm_perl_t *)instance)->func_accounting);
 		}
 		break;
+
 	default:
 		return do_perl(instance, request,
 			       ((rlm_perl_t *)instance)->func_accounting);
-
 	}
 }
 

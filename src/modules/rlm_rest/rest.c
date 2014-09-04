@@ -60,7 +60,7 @@ const http_body_type_t http_body_type_supported[HTTP_BODY_NUM_ENTRIES] = {
 	HTTP_BODY_UNSUPPORTED,		// HTTP_BODY_XML
 	HTTP_BODY_UNSUPPORTED,		// HTTP_BODY_YAML
 	HTTP_BODY_INVALID,		// HTTP_BODY_HTML
-	HTTP_BODY_INVALID		// HTTP_BODY_PLAIN
+	HTTP_BODY_PLAIN			// HTTP_BODY_PLAIN
 };
 
 /*
@@ -342,6 +342,8 @@ void *mod_conn_create(TALLOC_CTX *ctx, void *instance)
 		 *  done on the first request, but we do it here to minimise
 		 *  latency.
 		 */
+		SET_OPTION(CURLOPT_SSL_VERIFYPEER, 0);
+		SET_OPTION(CURLOPT_SSL_VERIFYHOST, 0);
 		SET_OPTION(CURLOPT_CONNECT_ONLY, 1);
 		SET_OPTION(CURLOPT_URL, inst->connect_uri);
 
@@ -695,11 +697,11 @@ static size_t rest_encode_json(void *out, size_t size, size_t nmemb, void *userd
 		 *  We've encoded all the VPs
 		 */
 		if (!vp) {
-			ctx->state = READ_STATE_END;
-
 			if (freespace < 1) goto no_space;
 			*p++ = '}';
 			freespace--;
+
+			ctx->state = READ_STATE_END;
 
 			break;
 		}
@@ -708,6 +710,7 @@ static size_t rest_encode_json(void *out, size_t size, size_t nmemb, void *userd
 		 *  New attribute, write name, type, and beginning of value array.
 		 */
 		RDEBUG2("Encoding attribute \"%s\"", vp->da->name);
+
 		if (ctx->state == READ_STATE_ATTR_BEGIN) {
 			type = fr_int2str(dict_attr_types, vp->da->type, "<INVALID>");
 
@@ -725,54 +728,60 @@ static size_t rest_encode_json(void *out, size_t size, size_t nmemb, void *userd
 			ctx->state = READ_STATE_ATTR_CONT;
 		}
 
-		for (;;) {
-			len = vp_prints_value_json(p, freespace, vp);
-			if (is_truncated(len, freespace)) goto no_space;
+		if (ctx->state == READ_STATE_ATTR_CONT) {
+			for (;;) {
+				len = vp_prints_value_json(p, freespace, vp);
+				if (is_truncated(len, freespace)) goto no_space;
 
-			/*
-			 *  Show actual value length minus quotes
-			 */
-			RDEBUG3("\tLength : %zu", (size_t) (*p == '"') ? (len - 2) : len);
-			RDEBUG3("\tValue  : %s", p);
+				/*
+				 *  Show actual value length minus quotes
+				 */
+				RDEBUG3("\tLength : %zu", (size_t) (*p == '"') ? (len - 2) : len);
+				RDEBUG3("\tValue  : %s", p);
 
-			p += len;
-			freespace -= len;
+				p += len;
+				freespace -= len;
 
-			/*
-			 *  Multivalued attribute, we sorted all the attributes earlier, so multiple
-			 *  instances should occur in a contiguous block.
-			 */
-			if ((next = fr_cursor_next(&ctx->cursor)) && (vp->da == next->da)) {
+				/*
+				 *  Multivalued attribute, we sorted all the attributes earlier, so multiple
+				 *  instances should occur in a contiguous block.
+				 */
+				if ((next = fr_cursor_next(&ctx->cursor)) && (vp->da == next->da)) {
+					if (freespace < 1) goto no_space;
+					*p++ = ',';
+					freespace--;
+
+					/*
+					 *  We wrote one attribute value, record progress.
+					 */
+					encoded = p;
+					vp = next;
+					continue;
+				}
+				break;
+			}
+			ctx->state = READ_STATE_ATTR_END;
+		}
+
+		if (ctx->state == READ_STATE_ATTR_END) {
+			next = fr_cursor_current(&ctx->cursor);
+			if (freespace < 2) goto no_space;
+			*p++ = ']';
+			*p++ = '}';
+			freespace -= 2;
+
+			if (next) {
 				if (freespace < 1) goto no_space;
 				*p++ = ',';
 				freespace--;
-
-				/*
-				 *  We wrote one attribute value, record progress.
-				 */
-				encoded = p;
-				vp = next;
-				continue;
 			}
-			break;
+
+			/*
+			 *  We wrote one full attribute value pair, record progress.
+			 */
+			encoded = p;
+			ctx->state = READ_STATE_ATTR_BEGIN;
 		}
-
-		if (freespace < 2) goto no_space;
-		*p++ = ']';
-		*p++ = '}';
-		freespace -= 2;
-
-		if (next) {
-			if (freespace < 1) goto no_space;
-			*p++ = ',';
-			freespace--;
-		}
-
-		/*
-		 *  We wrote one full attribute value pair, record progress.
-		 */
-		encoded = p;
-		ctx->state = READ_STATE_ATTR_BEGIN;
 	}
 
 	*p = '\0';
@@ -888,6 +897,37 @@ static void rest_request_init(REQUEST *request, rlm_rest_request_t *ctx, bool so
 		pairsort(&request->packet->vps, attrtagcmp);
 	}
 	fr_cursor_init(&ctx->cursor, &request->packet->vps);
+}
+
+/** Converts plain response into a single VALUE_PAIR
+ *
+ * @param[in] instance configuration data.
+ * @param[in] section configuration data.
+ * @param[in] handle rlm_rest_handle_t to use.
+ * @param[in] request Current request.
+ * @param[in] raw buffer containing POST data.
+ * @param[in] rawlen Length of data in raw buffer.
+ * @return the number of VALUE_PAIRs processed or -1 on unrecoverable error.
+ */
+static int rest_decode_plain(UNUSED rlm_rest_t *instance, UNUSED rlm_rest_section_t *section,
+			     REQUEST *request, UNUSED void *handle, char *raw, size_t rawlen)
+{
+	VALUE_PAIR *vp;
+
+	/*
+	 *  Empty response?
+	 */
+	if (*raw == '\0') return 0;
+
+	/*
+	 *  Use rawlen to protect against overrun, and to cope with any binary data
+	 */
+	vp = pairmake_reply("REST-HTTP-Body", NULL, T_OP_ADD);
+	pairstrncpy(vp, raw, rawlen);
+
+	RDEBUG2("Adding reply:REST-HTTP-Body += \"%s\"", vp->vp_strvalue);
+
+	return 1;
 }
 
 /** Converts POST response into VALUE_PAIRs and adds them to the request
@@ -1231,22 +1271,22 @@ static int json_pairmake(rlm_rest_t *instance, UNUSED rlm_rest_section_t *sectio
 		 */
 		RDEBUG2("Parsing attribute \"%s\"", name);
 
-		if (radius_parse_attr(&dst, name, REQUEST_CURRENT, PAIR_LIST_REPLY) < 0) {
+		if (tmpl_from_attr_str(&dst, name, REQUEST_CURRENT, PAIR_LIST_REPLY) < 0) {
 			RWDEBUG("Failed parsing attribute: %s, skipping...", fr_strerror());
 			continue;
 		}
 
-		if (radius_request(&current, dst.vpt_request) < 0) {
+		if (radius_request(&current, dst.tmpl_request) < 0) {
 			RWDEBUG("Attribute name refers to outer request but not in a tunnel, skipping...");
 			continue;
 		}
 
-		vps = radius_list(current, dst.vpt_list);
+		vps = radius_list(current, dst.tmpl_list);
 		if (!vps) {
 			RWDEBUG("List not valid in this context, skipping...");
 			continue;
 		}
-		ctx = radius_list_ctx(current, dst.vpt_list);
+		ctx = radius_list_ctx(current, dst.tmpl_list);
 
 		/*
 		 *  Alternative JSON structure which allows operator,
@@ -1348,7 +1388,7 @@ static int json_pairmake(rlm_rest_t *instance, UNUSED rlm_rest_section_t *sectio
 						   level + 1, max_attrs);*/
 			} else {
 				vp = json_pairmake_leaf(instance, section, ctx, request,
-							dst.vpt_da, &flags, element);
+							dst.tmpl_da, &flags, element);
 				if (!vp) continue;
 			}
 			debug_pair(vp);
@@ -1696,6 +1736,30 @@ static size_t rest_response_body(void *ptr, size_t size, size_t nmemb, void *use
 	return t;
 }
 
+/** Print out the response text as error lines
+ *
+ * @param request The Current request.
+ * @param handle rlm_rest_handle_t used to execute the previous request.
+ */
+void rest_response_error(REQUEST *request, rlm_rest_handle_t *handle)
+{
+	char const *p, *q;
+	size_t len;
+
+	len = rest_get_handle_data(&p, handle);
+	if (len == 0) {
+		RERROR("Server returned no data");
+		return;
+	}
+
+	RERROR("Server returned:");
+	while ((q = strchr(p, '\n'))) {
+		RERROR("%.*s", (int) (q - p), p);
+		p = q + 1;
+	}
+	if (*p != '\0') RERROR("%s", p);
+}
+
 /** (Re-)Initialises the data in a rlm_rest_response_t.
  *
  * This resets the values of the a rlm_rest_response_t to their defaults.
@@ -2007,11 +2071,8 @@ int rest_request_config(rlm_rest_t *instance, rlm_rest_section_t *section,
 		SET_OPTION(CURLOPT_RANDOM_FILE, section->tls_random_file);
 	}
 
-	if (section->tls_check_cert) {
-		SET_OPTION(CURLOPT_SSL_VERIFYHOST, (section->tls_check_cert_cn == true) ? 2 : 0);
-	} else {
-		SET_OPTION(CURLOPT_SSL_VERIFYPEER, 0);
-	}
+	SET_OPTION(CURLOPT_SSL_VERIFYPEER, (section->tls_check_cert == true) ? 1 : 0);
+	SET_OPTION(CURLOPT_SSL_VERIFYHOST, (section->tls_check_cert_cn == true) ? 2 : 0);
 
 	/*
 	 *	Tell CURL how to get HTTP body content, and how to process incoming data.
@@ -2201,11 +2262,13 @@ int rest_response_decode(rlm_rest_t *instance, UNUSED rlm_rest_section_t *sectio
 		return 0;
 	}
 
-	RDEBUG3("Processing response body");
-
 	switch (ctx->response.type) {
 	case HTTP_BODY_NONE:
 		return 0;
+
+	case HTTP_BODY_PLAIN:
+		ret = rest_decode_plain(instance, section, request, handle, ctx->response.buffer, ctx->response.used);
+		break;
 
 	case HTTP_BODY_POST:
 		ret = rest_decode_post(instance, section, request, handle, ctx->response.buffer, ctx->response.used);

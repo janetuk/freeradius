@@ -36,15 +36,16 @@ RCSID("$Id$")
 #define EVAL_DEBUG(fmt, ...) printf("EVAL: ");printf(fmt, ## __VA_ARGS__);printf("\n");fflush(stdout)
 
 static FR_NAME_NUMBER const template_names[] = {
-	{ "literal",	VPT_TYPE_LITERAL },
-	{ "xlat",	VPT_TYPE_XLAT },
-	{ "attr",	VPT_TYPE_ATTR },
-	{ "list",	VPT_TYPE_LIST },
-	{ "regex",	VPT_TYPE_REGEX },
-	{ "exec",	VPT_TYPE_EXEC },
-	{ "data",	VPT_TYPE_DATA },
-	{ "xlat",	VPT_TYPE_XLAT_STRUCT },
-	{ "regex",	VPT_TYPE_REGEX_STRUCT },
+	{ "literal",	TMPL_TYPE_LITERAL },
+	{ "xlat",	TMPL_TYPE_XLAT },
+	{ "attr",	TMPL_TYPE_ATTR },
+	{ "list",	TMPL_TYPE_LIST },
+	{ "regex",	TMPL_TYPE_REGEX },
+	{ "exec",	TMPL_TYPE_EXEC },
+	{ "data",	TMPL_TYPE_DATA },
+	{ "xlat",	TMPL_TYPE_XLAT_STRUCT },
+	{ "regex",	TMPL_TYPE_REGEX_STRUCT },
+
 	{ NULL, 0 }
 };
 #else
@@ -87,21 +88,21 @@ static int all_digits(char const *string)
  * @param vpt to evaluate.
  * @return -1 on error, else 0.
  */
-static int radius_expand_tmpl(char **out, REQUEST *request, value_pair_tmpl_t const *vpt)
+int radius_expand_tmpl(char **out, REQUEST *request, value_pair_tmpl_t const *vpt)
 {
 	VALUE_PAIR *vp;
 	int ret;
 	*out = NULL;
 
-	rad_assert(vpt->type != VPT_TYPE_LIST);
+	rad_assert(vpt->type != TMPL_TYPE_LIST);
 
 	switch (vpt->type) {
-	case VPT_TYPE_LITERAL:
+	case TMPL_TYPE_LITERAL:
 		EVAL_DEBUG("TMPL LITERAL");
 		*out = talloc_typed_strdup(request, vpt->name);
 		break;
 
-	case VPT_TYPE_EXEC:
+	case TMPL_TYPE_EXEC:
 		EVAL_DEBUG("TMPL EXEC");
 		*out = talloc_array(request, char, 1024);
 		if (radius_exec_program(request, vpt->name, true, false, *out, 1024, EXEC_TIMEOUT, NULL, NULL) != 0) {
@@ -110,7 +111,7 @@ static int radius_expand_tmpl(char **out, REQUEST *request, value_pair_tmpl_t co
 		}
 		break;
 
-	case VPT_TYPE_REGEX:
+	case TMPL_TYPE_REGEX:
 		EVAL_DEBUG("TMPL REGEX");
 		/* Error in expansion, this is distinct from zero length expansion */
 		if (radius_axlat(out, request, vpt->name, NULL, NULL) < 0) {
@@ -119,7 +120,7 @@ static int radius_expand_tmpl(char **out, REQUEST *request, value_pair_tmpl_t co
 		}
 		break;
 
-	case VPT_TYPE_XLAT:
+	case TMPL_TYPE_XLAT:
 		EVAL_DEBUG("TMPL XLAT");
 		/* Error in expansion, this is distinct from zero length expansion */
 		if (radius_axlat(out, request, vpt->name, NULL, NULL) < 0) {
@@ -128,10 +129,10 @@ static int radius_expand_tmpl(char **out, REQUEST *request, value_pair_tmpl_t co
 		}
 		break;
 
-	case VPT_TYPE_XLAT_STRUCT:
+	case TMPL_TYPE_XLAT_STRUCT:
 		EVAL_DEBUG("TMPL XLAT_STRUCT");
 		/* Error in expansion, this is distinct from zero length expansion */
-		if (radius_axlat_struct(out, request, vpt->vpt_xlat, NULL, NULL) < 0) {
+		if (radius_axlat_struct(out, request, vpt->tmpl_xlat, NULL, NULL) < 0) {
 			rad_assert(!*out);
 			return -1;
 		}
@@ -139,19 +140,17 @@ static int radius_expand_tmpl(char **out, REQUEST *request, value_pair_tmpl_t co
 		RDEBUG2("   --> %s", *out);
 		break;
 
-	case VPT_TYPE_ATTR:
+	case TMPL_TYPE_ATTR:
 		EVAL_DEBUG("TMPL ATTR");
-		ret = radius_tmpl_get_vp(&vp, request, vpt);
+		ret = tmpl_find_vp(&vp, request, vpt);
 		if (ret < 0) return ret;
 
-		*out = vp_aprint_value(request, vp);
-		if (!*out) {
-			return -1;
-		}
+		*out = vp_aprint_value(request, vp, false);
+		if (!*out) return -1;
 		break;
 
-	case VPT_TYPE_DATA:
-	case VPT_TYPE_REGEX_STRUCT:
+	case TMPL_TYPE_DATA:
+	case TMPL_TYPE_REGEX_STRUCT:
 		rad_assert(0 == 1);
 		/* FALL-THROUGH */
 
@@ -179,7 +178,7 @@ int radius_evaluate_tmpl(REQUEST *request, int modreturn, UNUSED int depth,
 	char *buffer;
 
 	switch (vpt->type) {
-	case VPT_TYPE_LITERAL:
+	case TMPL_TYPE_LITERAL:
 		modcode = fr_str2int(modreturn_table, vpt->name, RLM_MODULE_UNKNOWN);
 		if (modcode != RLM_MODULE_UNKNOWN) {
 			rcode = (modcode == modreturn);
@@ -198,22 +197,18 @@ int radius_evaluate_tmpl(REQUEST *request, int modreturn, UNUSED int depth,
 		rcode = (vpt->name != '\0');
 		break;
 
-	case VPT_TYPE_ATTR:
-	case VPT_TYPE_LIST:
-		if (radius_tmpl_get_vp(NULL, request, vpt) < 0) {
+	case TMPL_TYPE_ATTR:
+	case TMPL_TYPE_LIST:
+		if (tmpl_find_vp(NULL, request, vpt) < 0) {
 			rcode = false;
 		} else {
 			rcode = true;
 		}
 		break;
 
-		/*
-		 *	FIXME: expand the strings
-		 *	if not empty, return!
-		 */
-	case VPT_TYPE_XLAT_STRUCT:
-	case VPT_TYPE_XLAT:
-	case VPT_TYPE_EXEC:
+	case TMPL_TYPE_XLAT_STRUCT:
+	case TMPL_TYPE_XLAT:
+	case TMPL_TYPE_EXEC:
 		if (!*vpt->name) return false;
 		rcode = radius_expand_tmpl(&buffer, request, vpt);
 		if (rcode < 0) {
@@ -227,13 +222,13 @@ int radius_evaluate_tmpl(REQUEST *request, int modreturn, UNUSED int depth,
 		/*
 		 *	Can't have a bare ... (/foo/) ...
 		 */
-	case VPT_TYPE_REGEX:
-	case VPT_TYPE_REGEX_STRUCT:
-		EVAL_DEBUG("FAIL %d", __LINE__);
+	case TMPL_TYPE_REGEX:
+	case TMPL_TYPE_REGEX_STRUCT:
 		rad_assert(0 == 1);
 		/* FALL-THROUGH */
 
 	default:
+		EVAL_DEBUG("FAIL %d", __LINE__);
 		rcode = -1;
 		break;
 	}
@@ -253,7 +248,7 @@ static int do_regex(REQUEST *request, value_pair_map_t const *map)
 	 *  Expand and then compile it.
 	 */
 	switch (map->src->type) {
-	case VPT_TYPE_REGEX:
+	case TMPL_TYPE_REGEX:
 		rcode = radius_expand_tmpl(&rhs, request, map->src);
 		if (rcode < 0) {
 			EVAL_DEBUG("FAIL %d", __LINE__);
@@ -261,7 +256,7 @@ static int do_regex(REQUEST *request, value_pair_map_t const *map)
 		}
 		rad_assert(rhs != NULL);
 
-		compare = regcomp(&reg, rhs, REG_EXTENDED | (map->src->vpt_iflag ? REG_ICASE : 0));
+		compare = regcomp(&reg, rhs, REG_EXTENDED | (map->src->tmpl_iflag ? REG_ICASE : 0));
 		if (compare != 0) {
 			if (debug_flag) {
 				char errbuf[128];
@@ -276,8 +271,8 @@ static int do_regex(REQUEST *request, value_pair_map_t const *map)
 		preg = &reg;
 		break;
 
-	case VPT_TYPE_REGEX_STRUCT:
-		preg = map->src->vpt_preg;
+	case TMPL_TYPE_REGEX_STRUCT:
+		preg = map->src->tmpl_preg;
 		break;
 
 	default:
@@ -312,40 +307,6 @@ finish:
 }
 
 /*
- *	Expand a template to a string, parse it as type of "cast", and
- *	create a VP from the data.
- */
-static VALUE_PAIR *get_cast_vp(REQUEST *request, value_pair_tmpl_t const *vpt, DICT_ATTR const *cast)
-{
-	int rcode;
-	VALUE_PAIR *vp;
-	char *str;
-
-	vp = pairalloc(request, cast);
-	if (!vp) return NULL;
-
-	if (vpt->type == VPT_TYPE_DATA) {
-		rad_assert(vp->da->type == vpt->vpt_da->type);
-		pairdatacpy(vp, vpt->vpt_da, vpt->vpt_value, vpt->vpt_length);
-		return vp;
-	}
-
-	rcode = radius_expand_tmpl(&str, request, vpt);
-	if (rcode < 0) {
-		pairfree(&vp);
-		return NULL;
-	}
-
-	if (pairparsevalue(vp, str, 0) < 0) {
-		talloc_free(str);
-		pairfree(&vp);
-		return NULL;
-	}
-
-	return vp;
-}
-
-/*
  *	Copy data from src to dst, where the attributes are of
  *	different type.
  */
@@ -354,7 +315,7 @@ static int do_cast_copy(VALUE_PAIR *dst, VALUE_PAIR const *src)
 	rad_assert(dst->da->type != src->da->type);
 
 	if (dst->da->type == PW_TYPE_STRING) {
-		dst->vp_strvalue = vp_aprint_value(dst, src);
+		dst->vp_strvalue = vp_aprint_value(dst, src, false);
 		dst->length = strlen(dst->vp_strvalue);
 		return 0;
 	}
@@ -391,6 +352,77 @@ static int do_cast_copy(VALUE_PAIR *dst, VALUE_PAIR const *src)
 	}
 
 	/*
+	 *	For integers, we allow the casting of a SMALL type to
+	 *	a larger type, but not vice-versa.
+	 */
+	if (dst->da->type == PW_TYPE_INTEGER64) {
+		switch (src->da->type) {
+		case PW_TYPE_BYTE:
+			dst->vp_integer64 = src->vp_byte;
+			break;
+
+		case PW_TYPE_SHORT:
+			dst->vp_integer64 = src->vp_short;
+			break;
+
+		case PW_TYPE_INTEGER:
+			dst->vp_integer64 = src->vp_integer;
+			break;
+
+		case PW_TYPE_OCTETS:
+			goto do_octets;
+
+		default:
+			EVAL_DEBUG("Invalid cast to integer64");
+			return -1;
+
+		}
+		return 0;
+	}
+
+	/*
+	 *	We can compare LONG integers to SHORTER ones, so long
+	 *	as the long one is on the LHS.
+	 */
+	if (dst->da->type == PW_TYPE_INTEGER) {
+		switch (src->da->type) {
+		case PW_TYPE_BYTE:
+			dst->vp_integer = src->vp_byte;
+			break;
+
+		case PW_TYPE_SHORT:
+			dst->vp_integer = src->vp_short;
+			break;
+
+		case PW_TYPE_OCTETS:
+			goto do_octets;
+
+		default:
+			EVAL_DEBUG("Invalid cast to integer");
+			return -1;
+
+		}
+		return 0;
+	}
+
+	if (dst->da->type == PW_TYPE_SHORT) {
+		switch (src->da->type) {
+		case PW_TYPE_BYTE:
+			dst->vp_short = src->vp_byte;
+			break;
+
+		case PW_TYPE_OCTETS:
+			goto do_octets;
+
+		default:
+			EVAL_DEBUG("Invalid cast to short");
+			return -1;
+
+		}
+		return 0;
+	}
+
+	/*
 	 *	The attribute we've found has to have a size which is
 	 *	compatible with the type of the destination cast.
 	 */
@@ -401,11 +433,11 @@ static int do_cast_copy(VALUE_PAIR *dst, VALUE_PAIR const *src)
 	}
 
 	if (src->da->type == PW_TYPE_OCTETS) {
+	do_octets:
 		switch (dst->da->type) {
 		case PW_TYPE_INTEGER64:
 			dst->vp_integer = ntohll(*(uint64_t const *) src->vp_octets);
 			break;
-
 
 		case PW_TYPE_INTEGER:
 		case PW_TYPE_DATE:
@@ -473,22 +505,22 @@ int radius_evaluate_map(REQUEST *request, UNUSED int modreturn, UNUSED int depth
 	rad_assert(c->type == COND_TYPE_MAP);
 	map = c->data.map;
 
-	rad_assert(map->dst->type != VPT_TYPE_UNKNOWN);
-	rad_assert(map->src->type != VPT_TYPE_UNKNOWN);
-	rad_assert(map->dst->type != VPT_TYPE_LIST);
-	rad_assert(map->src->type != VPT_TYPE_LIST);
-	rad_assert(map->dst->type != VPT_TYPE_REGEX);
-	rad_assert(map->dst->type != VPT_TYPE_REGEX_STRUCT);
+	rad_assert(map->dst->type != TMPL_TYPE_UNKNOWN);
+	rad_assert(map->src->type != TMPL_TYPE_UNKNOWN);
+	rad_assert(map->dst->type != TMPL_TYPE_LIST);
+	rad_assert(map->src->type != TMPL_TYPE_LIST);
+	rad_assert(map->dst->type != TMPL_TYPE_REGEX);
+	rad_assert(map->dst->type != TMPL_TYPE_REGEX_STRUCT);
 
-	EVAL_DEBUG("Map %s ? %s",
+	EVAL_DEBUG("MAP TYPES LHS: %s, RHS: %s",
 		   fr_int2str(template_names, map->dst->type, "???"),
 		   fr_int2str(template_names, map->src->type, "???"));
 
 	/*
 	 *	Verify regexes.
 	 */
-	if ((map->src->type == VPT_TYPE_REGEX) ||
-	    (map->src->type == VPT_TYPE_REGEX_STRUCT)) {
+	if ((map->src->type == TMPL_TYPE_REGEX) ||
+	    (map->src->type == TMPL_TYPE_REGEX_STRUCT)) {
 		rad_assert(map->op == T_OP_REG_EQ);
 	} else {
 		rad_assert(!((map->op == T_OP_REG_EQ) || (map->op == T_OP_REG_NE)));
@@ -499,14 +531,42 @@ int radius_evaluate_map(REQUEST *request, UNUSED int modreturn, UNUSED int depth
 	 *
 	 *	LHS is DST.  RHS is SRC <sigh>
 	 */
-	if (!c->cast && (map->src->type == VPT_TYPE_ATTR) && (map->dst->type == VPT_TYPE_ATTR)) {
-		VALUE_PAIR *lhs_vp, *rhs_vp;
+	if (!c->cast && (map->src->type == TMPL_TYPE_ATTR) && (map->dst->type == TMPL_TYPE_ATTR)) {
+		VALUE_PAIR *lhs_vp, *rhs_vp, *cast_vp;
 
 		EVAL_DEBUG("ATTR to ATTR");
-		if ((radius_tmpl_get_vp(&lhs_vp, request, map->dst) < 0) ||
-		    (radius_tmpl_get_vp(&rhs_vp, request, map->src) < 0)) return false;
+		if ((tmpl_find_vp(&lhs_vp, request, map->dst) < 0) ||
+		    (tmpl_find_vp(&rhs_vp, request, map->src) < 0)) return false;
 
-		return paircmp_op(lhs_vp, map->op, rhs_vp);
+		if (map->dst->tmpl_da->type == map->src->tmpl_da->type) {
+			return paircmp_op(lhs_vp, map->op, rhs_vp);
+		}
+
+		/*
+		 *	Compare a large integer (lhs) to a small integer (rhs).
+		 *	We allow this without a cast.
+		 */
+		rad_assert((map->dst->tmpl_da->type == PW_TYPE_INTEGER64) ||
+			   (map->dst->tmpl_da->type == PW_TYPE_INTEGER) ||
+			   (map->dst->tmpl_da->type == PW_TYPE_SHORT));
+		rad_assert((map->src->tmpl_da->type == PW_TYPE_INTEGER) ||
+			   (map->src->tmpl_da->type == PW_TYPE_SHORT) ||
+			   (map->src->tmpl_da->type == PW_TYPE_BYTE));
+
+		cast_vp = pairalloc(request, lhs_vp->da);
+		if (!cast_vp) return false;
+
+		/*
+		 *	Copy the RHS to the casted type.
+		 */
+		if (do_cast_copy(cast_vp, rhs_vp) < 0) {
+			talloc_free(cast_vp);
+			return false;
+		}
+
+		rcode = paircmp_op(lhs_vp, map->op, cast_vp);
+		talloc_free(cast_vp);
+		return rcode;
 	}
 
 	/*
@@ -521,10 +581,10 @@ int radius_evaluate_map(REQUEST *request, UNUSED int modreturn, UNUSED int depth
 		 *	casted, instead of printing it to a string and
 		 *	then re-parsing it.
 		 */
-		if (map->dst->type == VPT_TYPE_ATTR) {
+		if (map->dst->type == TMPL_TYPE_ATTR) {
 			VALUE_PAIR *cast_vp;
 
-			if (radius_tmpl_get_vp(&cast_vp, request, map->dst) < 0) return false;
+			if (tmpl_find_vp(&cast_vp, request, map->dst) < 0) return false;
 
 			lhs_vp = pairalloc(request, c->cast);
 			if (!lhs_vp) return false;
@@ -538,18 +598,17 @@ int radius_evaluate_map(REQUEST *request, UNUSED int modreturn, UNUSED int depth
 			}
 
 		} else {
-			lhs_vp = get_cast_vp(request, map->dst, c->cast);
+			if (tmpl_cast_to_vp(&lhs_vp, request, map->dst, c->cast) < 0) return false;
 		}
-		if (!lhs_vp) return false;
 
 		/*
 		 *	Get either a real VP, or parse the RHS into a
 		 *	VP, and return that.
 		 */
-		if (map->src->type == VPT_TYPE_ATTR) {
-			if (radius_tmpl_get_vp(&rhs_vp, request, map->src) < 0) return false;
+		if (map->src->type == TMPL_TYPE_ATTR) {
+			if (tmpl_find_vp(&rhs_vp, request, map->src) < 0) return false;
 		} else {
-			rhs_vp = get_cast_vp(request, map->src, c->cast);
+			if (tmpl_cast_to_vp(&rhs_vp, request, map->src, c->cast) < 0) return false;
 		}
 
 		if (!rhs_vp) return false;
@@ -560,7 +619,7 @@ int radius_evaluate_map(REQUEST *request, UNUSED int modreturn, UNUSED int depth
 
 		rcode = paircmp_op(lhs_vp, map->op, rhs_vp);
 		pairfree(&lhs_vp);
-		if (map->src->type != VPT_TYPE_ATTR) {
+		if (map->src->type != TMPL_TYPE_ATTR) {
 			pairfree(&rhs_vp);
 		}
 		return rcode;
@@ -569,17 +628,16 @@ int radius_evaluate_map(REQUEST *request, UNUSED int modreturn, UNUSED int depth
 	/*
 	 *	Might be a virtual comparison
 	 */
-	if ((map->dst->type == VPT_TYPE_ATTR) &&
-	    (map->src->type != VPT_TYPE_REGEX) &&
-	    (map->src->type != VPT_TYPE_REGEX_STRUCT) &&
+	if ((map->dst->type == TMPL_TYPE_ATTR) &&
+	    (map->src->type != TMPL_TYPE_REGEX) &&
+	    (map->src->type != TMPL_TYPE_REGEX_STRUCT) &&
 	    (c->pass2_fixup == PASS2_PAIRCOMPARE)) {
 		int ret;
 		VALUE_PAIR *lhs_vp;
 
 		EVAL_DEBUG("virtual ATTR to DATA");
 
-		lhs_vp = get_cast_vp(request, map->src, map->dst->vpt_da);
-		if (!lhs_vp) return false;
+		if (tmpl_cast_to_vp(&lhs_vp, request, map->src, map->dst->tmpl_da) < 0) return false;
 
 		/*
 		 *	paircompare requires the operator be set for the
@@ -599,16 +657,14 @@ int radius_evaluate_map(REQUEST *request, UNUSED int modreturn, UNUSED int depth
 	 *	RHS has been pre-parsed into binary data.  Go check
 	 *	that.
 	 */
-	if ((map->dst->type == VPT_TYPE_ATTR) &&
-	    (map->src->type == VPT_TYPE_DATA)) {
+	if ((map->dst->type == TMPL_TYPE_ATTR) &&
+	    (map->src->type == TMPL_TYPE_DATA)) {
 		VALUE_PAIR *lhs_vp, *rhs_vp;
 
 		EVAL_DEBUG("ATTR to DATA");
 
-		if (radius_tmpl_get_vp(&lhs_vp, request, map->dst) < 0) return false;
-
-		rhs_vp = get_cast_vp(request, map->src, map->dst->vpt_da);
-		if (!rhs_vp) return false;
+		if (tmpl_find_vp(&lhs_vp, request, map->dst) < 0) return false;
+		if (tmpl_cast_to_vp(&rhs_vp, request, map->src, map->dst->tmpl_da) < 0) return false;
 
 #ifdef WITH_EVAL_DEBUG
 		debug_pair(lhs_vp);
@@ -620,15 +676,15 @@ int radius_evaluate_map(REQUEST *request, UNUSED int modreturn, UNUSED int depth
 		return rcode;
 	}
 
-	rad_assert(map->src->type != VPT_TYPE_DATA);
-	rad_assert(map->dst->type != VPT_TYPE_DATA);
+	rad_assert(map->src->type != TMPL_TYPE_DATA);
+	rad_assert(map->dst->type != TMPL_TYPE_DATA);
 
 #ifdef HAVE_REGEX_H
 	/*
 	 *	Parse regular expressions.
 	 */
-	if ((map->src->type == VPT_TYPE_REGEX) ||
-	    (map->src->type == VPT_TYPE_REGEX_STRUCT)) {
+	if ((map->src->type == TMPL_TYPE_REGEX) ||
+	    (map->src->type == TMPL_TYPE_REGEX_STRUCT)) {
 		return do_regex(request, map);
 	}
 #endif
@@ -652,7 +708,7 @@ int radius_evaluate_map(REQUEST *request, UNUSED int modreturn, UNUSED int depth
 	 *
 	 *	The LHS may be a virtual attribute, too.
 	 */
-	if (map->dst->type == VPT_TYPE_ATTR) {
+	if (map->dst->type == TMPL_TYPE_ATTR) {
 		VALUE_PAIR *lhs_vp, *rhs_vp;
 
 		EVAL_DEBUG("ATTR to non-REGEX");
@@ -660,14 +716,14 @@ int radius_evaluate_map(REQUEST *request, UNUSED int modreturn, UNUSED int depth
 		/*
 		 *	No LHS means no match
 		 */
-		if (radius_tmpl_get_vp(&lhs_vp, request, map->dst) < 0) {
+		if (tmpl_find_vp(&lhs_vp, request, map->dst) < 0) {
 			/*
 			 *	Not a real attr: might be a dynamic comparison.
 			 */
-			if ((map->dst->type == VPT_TYPE_ATTR) &&
-			    (map->dst->vpt_da->vendor == 0) &&
-			    radius_find_compare(map->dst->vpt_da)) {
-				rhs_vp = pairalloc(request, map->dst->vpt_da);
+			if ((map->dst->type == TMPL_TYPE_ATTR) &&
+			    (map->dst->tmpl_da->vendor == 0) &&
+			    radius_find_compare(map->dst->tmpl_da)) {
+				rhs_vp = pairalloc(request, map->dst->tmpl_da);
 				rad_assert(rhs_vp != NULL);
 				if (pairparsevalue(rhs_vp, rhs, 0) < 0) {
 					talloc_free(rhs);
@@ -687,7 +743,7 @@ int radius_evaluate_map(REQUEST *request, UNUSED int modreturn, UNUSED int depth
 		/*
 		 *	Get VP for RHS
 		 */
-		rhs_vp = pairalloc(request, map->dst->vpt_da);
+		rhs_vp = pairalloc(request, map->dst->tmpl_da);
 		rad_assert(rhs_vp != NULL);
 		if (pairparsevalue(rhs_vp, rhs, 0) < 0) {
 			talloc_free(rhs);

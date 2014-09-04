@@ -204,7 +204,6 @@ static rlm_rcode_t CC_HINT(nonnull) mod_do_linelog(void *instance, REQUEST *requ
 
 #ifdef HAVE_GRP_H
 	gid_t gid;
-	struct group *grp;
 	char *endptr;
 #endif
 
@@ -282,12 +281,10 @@ static rlm_rcode_t CC_HINT(nonnull) mod_do_linelog(void *instance, REQUEST *requ
 		if (inst->group != NULL) {
 			gid = strtol(inst->group, &endptr, 10);
 			if (*endptr != '\0') {
-				grp = getgrnam(inst->group);
-				if (!grp) {
+				if (!fr_getgid(inst->group, &gid)) {
 					RDEBUG2("Unable to find system group \"%s\"", inst->group);
 					goto skip_group;
 				}
-				gid = grp->gr_gid;
 			}
 
 			if (chown(buffer, -1, gid) == -1) {

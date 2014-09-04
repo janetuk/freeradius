@@ -554,6 +554,8 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	int r;
 	rlm_preprocess_t *inst = instance;
 
+	VALUE_PAIR *vp;
+
 	/*
 	 *	Mangle the username, to get rid of stupid implementation
 	 *	bugs.
@@ -595,6 +597,16 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	}
 
 	/*
+	 *	Add an event timestamp. Means Event-Timestamp can be used
+	 *	consistently instead of one letter expansions.
+	 */
+	vp = pairfind(request->packet->vps, PW_EVENT_TIMESTAMP, 0, TAG_ANY);
+	if (!vp) {
+		vp = radius_paircreate(request->packet, &request->packet->vps, PW_EVENT_TIMESTAMP, 0);
+		vp->vp_date = request->packet->timestamp.tv_sec;
+	}
+
+	/*
 	 *	Note that we add the Request-Src-IP-Address to the request
 	 *	structure BEFORE checking huntgroup access.  This allows
 	 *	the Request-Src-IP-Address to be used for huntgroup
@@ -613,8 +625,6 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	 */
 	if (pairfind(request->packet->vps, PW_CHAP_PASSWORD, 0, TAG_ANY) &&
 	    pairfind(request->packet->vps, PW_CHAP_CHALLENGE, 0, TAG_ANY) == NULL) {
-		VALUE_PAIR *vp;
-
 		vp = radius_paircreate(request->packet, &request->packet->vps, PW_CHAP_CHALLENGE, 0);
 		pairmemcpy(vp, request->packet->vector, AUTH_VECTOR_LEN);
 	}

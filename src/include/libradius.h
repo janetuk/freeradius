@@ -98,6 +98,10 @@ RCSIDH(libradius_h, "$Id$")
 extern "C" {
 #endif
 
+#ifndef HAVE_SIG_T
+typedef void (*sig_t)(int);
+#endif
+
 #if defined(WITH_VERIFY_PTR)
 #  define FREE_MAGIC (0xF4EEF4EE)
 
@@ -126,7 +130,7 @@ extern "C" {
 #define FR_MAX_VENDOR		(1 << 24) /* RFC limitations */
 
 #ifdef _LIBRADIUS
-#  define AUTH_HDR_LEN		20
+#  define RADIUS_HDR_LEN		20
 #  define VENDORPEC_USR		429
 #define VENDORPEC_LUCENT	4846
 #define VENDORPEC_STARENT	8164
@@ -150,7 +154,7 @@ extern "C" {
 #define ATTRIBUTE_EQ(_x, _y) ((_x && _y) && (_x->da == _y->da) && (!_x->da->flags.has_tag || TAG_EQ(_x->tag, _y->tag)))
 
 #define NUM_ANY			INT_MIN
-#define NUM_JOIN		(INT_MIN + 1)
+#define NUM_ALL			(INT_MIN + 1)
 #define NUM_COUNT		(INT_MIN + 2)
 
 #define PAD(_x, _y)		(_y - ((_x) % _y))
@@ -432,8 +436,8 @@ size_t		vp_prints(char *out, size_t outlen, VALUE_PAIR const *vp);
 void		vp_print(FILE *, VALUE_PAIR const *);
 void		vp_printlist(FILE *, VALUE_PAIR const *);
 char		*vp_aprint_type(TALLOC_CTX *ctx, PW_TYPE type);
-char     	*vp_aprint_value(TALLOC_CTX *ctx, VALUE_PAIR const *vp);
-char		*vp_aprint(TALLOC_CTX *ctx, VALUE_PAIR const *vp);
+char     	*vp_aprint_value(TALLOC_CTX *ctx, VALUE_PAIR const *vp, bool escape);
+char		*vp_aprint(TALLOC_CTX *ctx, VALUE_PAIR const *vp, bool escape);
 #define		fprint_attr_val vp_print
 
 /*
@@ -576,15 +580,16 @@ VALUE_PAIR	*fr_cursor_next(vp_cursor_t *cursor);
 VALUE_PAIR	*fr_cursor_next_peek(vp_cursor_t *cursor);
 VALUE_PAIR	*fr_cursor_current(vp_cursor_t *cursor);
 void		fr_cursor_insert(vp_cursor_t *cursor, VALUE_PAIR *vp);
+void		fr_cursor_merge(vp_cursor_t *cursor, VALUE_PAIR *vp);
 VALUE_PAIR	*fr_cursor_remove(vp_cursor_t *cursor);
 VALUE_PAIR	*fr_cursor_replace(vp_cursor_t *cursor, VALUE_PAIR *new);
 void		pairdelete(VALUE_PAIR **, unsigned int attr, unsigned int vendor, int8_t tag);
 void		pairadd(VALUE_PAIR **, VALUE_PAIR *);
 void		pairreplace(VALUE_PAIR **first, VALUE_PAIR *add);
-int8_t		paircmp_value(VALUE_PAIR const *a, VALUE_PAIR const *b);
-int8_t		paircmp_op(VALUE_PAIR const *a, FR_TOKEN op, VALUE_PAIR const *b);
-int8_t		paircmp(VALUE_PAIR *a, VALUE_PAIR *b);
-int8_t		pairlistcmp(VALUE_PAIR *a, VALUE_PAIR *b);
+int		paircmp_value(VALUE_PAIR const *a, VALUE_PAIR const *b);
+int		paircmp_op(VALUE_PAIR const *a, FR_TOKEN op, VALUE_PAIR const *b);
+int		paircmp(VALUE_PAIR *a, VALUE_PAIR *b);
+int		pairlistcmp(VALUE_PAIR *a, VALUE_PAIR *b);
 
 typedef int8_t (*fr_cmp_t)(void const *a, void const *b);
 int8_t		attrcmp(void const *a, void const *b);
@@ -595,7 +600,7 @@ bool		pairvalidate(VALUE_PAIR const *failed[2], VALUE_PAIR *filter, VALUE_PAIR *
 bool 		pairvalidate_relaxed(VALUE_PAIR const *failed[2], VALUE_PAIR *filter, VALUE_PAIR *list);
 VALUE_PAIR	*paircopyvp(TALLOC_CTX *ctx, VALUE_PAIR const *vp);
 VALUE_PAIR	*paircopy(TALLOC_CTX *ctx, VALUE_PAIR *from);
-VALUE_PAIR	*paircopy2(TALLOC_CTX *ctx, VALUE_PAIR *from, unsigned int attr, unsigned int vendor, int8_t tag);
+VALUE_PAIR	*paircopy_by_num(TALLOC_CTX *ctx, VALUE_PAIR *from, unsigned int attr, unsigned int vendor, int8_t tag);
 VALUE_PAIR	*pairsteal(TALLOC_CTX *ctx, VALUE_PAIR *from);
 void		pairmemcpy(VALUE_PAIR *vp, uint8_t const * src, size_t len);
 void		pairmemsteal(VALUE_PAIR *vp, uint8_t const *src);

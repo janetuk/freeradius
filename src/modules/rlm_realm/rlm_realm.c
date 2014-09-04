@@ -25,7 +25,7 @@ RCSID("$Id$")
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/modules.h>
 
-#include "trustrouter_integ.h"
+#include "trustrouter.h"
 
 #define  REALM_FORMAT_PREFIX   0
 #define  REALM_FORMAT_SUFFIX   1
@@ -36,10 +36,12 @@ typedef struct realm_config_t {
 	char const	*delim;
 	bool		ignore_default;
 	bool		ignore_null;
-	char		const *default_community;
-	char		const *rp_realm;
-	char const 		*trust_router;
-	unsigned int	tr_port;
+#ifdef HAVE_TRUST_ROUTER_TR_DH_H
+	char const	*default_community;
+	char const	*rp_realm;
+	char const	*trust_router;
+	uint32_t	tr_port;
+#endif
 } realm_config_t;
 
 #define stringify(s) #s
@@ -49,14 +51,14 @@ static CONF_PARSER module_config[] = {
   { "delimiter", FR_CONF_OFFSET(PW_TYPE_STRING, realm_config_t, delim), "@" },
   { "ignore_default", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, realm_config_t, ignore_default), "no" },
   { "ignore_null", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, realm_config_t, ignore_null), "no" },
-{ "default_community", FR_CONF_OFFSET(PW_TYPE_STRING,
-    realm_config_t,default_community),  "none" },
-{ "rp_realm", FR_CONF_OFFSET(PW_TYPE_STRING,
-    realm_config_t,rp_realm),  "none" },
-{ "trust_router", FR_CONF_OFFSET(PW_TYPE_STRING,
-    realm_config_t,trust_router),  "none" },
-{ "tr_port", FR_CONF_OFFSET(PW_TYPE_INTEGER,
-    realm_config_t,tr_port),  "0" },
+
+#ifdef HAVE_TRUST_ROUTER_TR_DH_H
+  { "default_community", FR_CONF_OFFSET(PW_TYPE_STRING, realm_config_t,default_community),  "none" },
+  { "rp_realm", FR_CONF_OFFSET(PW_TYPE_STRING, realm_config_t,rp_realm),  "none" },
+  { "trust_router", FR_CONF_OFFSET(PW_TYPE_STRING, realm_config_t,trust_router),  "none" },
+  { "tr_port", FR_CONF_OFFSET(PW_TYPE_INTEGER, realm_config_t,tr_port),  "0" },
+#endif
+
   { NULL, -1, 0, NULL, NULL }    /* end the list */
 };
 
@@ -119,8 +121,7 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 
 	switch(inst->format) {
 	case REALM_FORMAT_SUFFIX:
-
-	  /* DEBUG2("  rlm_realm: Checking for suffix after \"%c\"", inst->delim[0]); */
+		RDEBUG2("Checking for suffix after \"%c\"", inst->delim[0]);
 		ptr = strrchr(username, inst->delim[0]);
 		if (ptr) {
 			*ptr = '\0';
@@ -129,15 +130,13 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 		break;
 
 	case REALM_FORMAT_PREFIX:
-
-		/* DEBUG2("  rlm_realm: Checking for prefix before \"%c\"", inst->delim[0]); */
-
+		RDEBUG2("Checking for prefix before \"%c\"", inst->delim[0]);
 		ptr = strchr(username, inst->delim[0]);
 		if (ptr) {
 			*ptr = '\0';
-		     ptr++;
-		     realmname = username;
-		     username = ptr;
+			ptr++;
+			realmname = username;
+			username = ptr;
 		}
 		break;
 
@@ -162,23 +161,27 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 			return RLM_MODULE_NOOP;
 		}
 		RDEBUG2("No '%c' in User-Name = \"%s\", looking up realm NULL",
-		       inst->delim[0], request->username->vp_strvalue);
+			inst->delim[0], request->username->vp_strvalue);
 	}
 
 	/*
 	 *	Allow DEFAULT realms unless told not to.
 	 */
 	realm = realm_find(realmname);
-       	if (!realm) 
-	  realm = tr_query_realm(realmname, inst->default_community, inst->rp_realm, inst->trust_router, inst->tr_port);
+#ifdef HAVE_TRUST_ROUTER_TR_DH_H
+	/*
+	 *	Try querying for the dynamic realm.
+	 */
+	if (!realm)
+		realm = tr_query_realm(realmname, inst->default_community, inst->rp_realm, inst->trust_router, inst->tr_port);
+#endif
 	if (!realm) {
-		RDEBUG2("No such realm \"%s\"",
-			(!realmname) ? "NULL" : realmname);
+		RDEBUG2("No such realm \"%s\"", (!realmname) ? "NULL" : realmname);
 		talloc_free(namebuf);
 		return RLM_MODULE_NOOP;
 	}
-	if( inst->ignore_default &&
-	    (strcmp(realm->name, "DEFAULT")) == 0) {
+
+	if (inst->ignore_default && (strcmp(realm->name, "DEFAULT")) == 0) {
 		RDEBUG2("Found DEFAULT, but skipping due to config");
 		talloc_free(namebuf);
 		return RLM_MODULE_NOOP;
@@ -367,6 +370,11 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 			      inst->delim);
 	     return -1;
 	}
+
+#ifdef HAVE_TRUST_ROUTER_TR_DH_H
+	/* initialize the trust router integration code */
+	if (!tr_init()) return -1;
+#endif
 
 	return 0;
 }

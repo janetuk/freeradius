@@ -1364,7 +1364,7 @@ STATE_MACHINE_DECL(request_finish)
 	/*
 	 *	Copy Proxy-State from the request to the reply.
 	 */
-	vp = paircopy2(request->reply, request->packet->vps,
+	vp = paircopy_by_num(request->reply, request->packet->vps,
 		       PW_PROXY_STATE, 0, TAG_ANY);
 	if (vp) pairadd(&request->reply->vps, vp);
 
@@ -1539,7 +1539,7 @@ STATE_MACHINE_DECL(request_running)
 			 *	up the post proxy fail
 			 *	handler.
 			 */
-			if (request_proxy(request, 0) < 0) goto finished;
+			if (request_proxy(request, 0) < 0) goto req_finished;
 		} else
 #endif
 		{
@@ -1557,7 +1557,7 @@ STATE_MACHINE_DECL(request_running)
 #endif
 
 #ifdef WITH_PROXY
-		finished:
+		req_finished:
 #endif
 			request_finish(request, action);
 		}
@@ -2694,7 +2694,7 @@ static int request_will_proxy(REQUEST *request)
 			/* Insert at the START of the list */
 			/* FIXME: Can't make assumptions about ordering */
 			fr_cursor_init(&cursor, &vp);
-			fr_cursor_insert(&cursor, request->proxy->vps);
+			fr_cursor_merge(&cursor, request->proxy->vps);
 			request->proxy->vps = vp;
 		}
 		pairstrcpy(vp, strippedname->vp_strvalue);
@@ -4286,7 +4286,7 @@ static int event_new_fd(rad_listen_t *this)
 				INFO(" ... adding new socket %s (%u of %u)", buffer,
 				     home->limit.num_connections, home->limit.max_connections);
 			}
-		
+
 #endif
 		} else {
 			INFO(" ... adding new socket %s", buffer);

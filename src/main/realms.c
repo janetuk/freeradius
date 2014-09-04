@@ -32,6 +32,9 @@ RCSID("$Id$")
 #include <fcntl.h>
 
 static rbtree_t *realms_byname = NULL;
+#ifdef WITH_TCP
+bool home_servers_udp = false;
+#endif
 
 #ifdef HAVE_REGEX_H
 typedef struct realm_regex_t {
@@ -261,6 +264,8 @@ void realms_free(void)
 	}
 #endif
 
+	realm_pool_free(NULL);
+
 	talloc_free(realm_config);
 	realm_config = NULL;
 }
@@ -352,6 +357,81 @@ static void null_free(UNUSED void *data)
 {
 }
 
+/*
+ *	Ensure that all of the parameters in the home server are OK.
+ */
+void realm_home_server_sanitize(home_server_t *home, CONF_SECTION *cs)
+{
+	CONF_SECTION *parent = NULL;
+
+	FR_INTEGER_BOUND_CHECK("max_outstanding", home->max_outstanding, >=, 8);
+	FR_INTEGER_BOUND_CHECK("max_outstanding", home->max_outstanding, <=, 65536*16);
+
+	FR_INTEGER_BOUND_CHECK("ping_interval", home->ping_interval, >=, 6);
+	FR_INTEGER_BOUND_CHECK("ping_interval", home->ping_interval, <=, 120);
+
+	FR_TIMEVAL_BOUND_CHECK("response_window", &home->response_window, >=, 0, 1000);
+	FR_TIMEVAL_BOUND_CHECK("response_window", &home->response_window, <=, 60, 0);
+	FR_TIMEVAL_BOUND_CHECK("response_window", &home->response_window, <=,
+			       main_config.max_request_time, 0);
+
+	FR_INTEGER_BOUND_CHECK("response_timeouts", home->max_response_timeouts, >=, 1);
+	FR_INTEGER_BOUND_CHECK("response_timeouts", home->max_response_timeouts, <=, 1000);
+
+	/*
+	 *	Track the minimum response window, so that we can
+	 *	correctly set the timers in process.c
+	 */
+	if (timercmp(&main_config.init_delay, &home->response_window, >)) {
+		main_config.init_delay = home->response_window;
+	}
+
+	FR_INTEGER_BOUND_CHECK("zombie_period", home->zombie_period, >=, 1);
+	FR_INTEGER_BOUND_CHECK("zombie_period", home->zombie_period, <=, 120);
+	FR_INTEGER_BOUND_CHECK("zombie_period", home->zombie_period, >=, (uint32_t) home->response_window.tv_sec);
+
+	FR_INTEGER_BOUND_CHECK("num_pings_to_alive", home->num_pings_to_alive, >=, 3);
+	FR_INTEGER_BOUND_CHECK("num_pings_to_alive", home->num_pings_to_alive, <=, 10);
+
+	FR_INTEGER_BOUND_CHECK("check_timeout", home->ping_timeout, >=, 1);
+	FR_INTEGER_BOUND_CHECK("check_timeout", home->ping_timeout, <=, 10);
+
+	FR_INTEGER_BOUND_CHECK("revive_interval", home->revive_interval, >=, 60);
+	FR_INTEGER_BOUND_CHECK("revive_interval", home->revive_interval, <=, 3600);
+
+#ifdef WITH_COA
+	FR_INTEGER_BOUND_CHECK("coa_irt", home->coa_irt, >=, 1);
+	FR_INTEGER_BOUND_CHECK("coa_irt", home->coa_irt, <=, 5);
+
+	FR_INTEGER_BOUND_CHECK("coa_mrc", home->coa_mrc, <=, 20);
+
+	FR_INTEGER_BOUND_CHECK("coa_mrt", home->coa_mrt, <=, 30);
+
+	FR_INTEGER_BOUND_CHECK("coa_mrd", home->coa_mrd, >=, 5);
+	FR_INTEGER_BOUND_CHECK("coa_mrd", home->coa_mrd, <=, 60);
+#endif
+
+	FR_INTEGER_BOUND_CHECK("max_connections", home->limit.max_connections, <=, 1024);
+
+#ifdef WITH_TCP
+	/*
+	 *	UDP sockets can't be connection limited.
+	 */
+	if (home->proto != IPPROTO_TCP) home->limit.max_connections = 0;
+#endif
+
+	if ((home->limit.idle_timeout > 0) && (home->limit.idle_timeout < 5))
+		home->limit.idle_timeout = 5;
+	if ((home->limit.lifetime > 0) && (home->limit.lifetime < 5))
+		home->limit.lifetime = 5;
+	if ((home->limit.lifetime > 0) && (home->limit.idle_timeout > home->limit.lifetime))
+		home->limit.idle_timeout = 0;
+
+	parent = cf_item_parent(cf_sectiontoitem(cs));
+	if (parent && strcmp(cf_section_name1(parent), "server") == 0) {
+		home->parent_server = cf_section_name2(parent);
+	}
+}
 
 static int home_server_add(realm_config_t *rc, CONF_SECTION *cs)
 {
@@ -509,9 +589,13 @@ static int home_server_add(realm_config_t *rc, CONF_SECTION *cs)
 
 	home->proto = IPPROTO_UDP;
 #ifdef WITH_TCP
-	if (hs_proto) {
+	if (!hs_proto) {
+		home_servers_udp = true;
+
+	} else {
 		if (strcmp(hs_proto, "udp") == 0) {
 			hs_proto = NULL;
+			home_servers_udp = true;
 
 		} else if (strcmp(hs_proto, "tcp") == 0) {
 			hs_proto = NULL;
@@ -614,80 +698,6 @@ static int home_server_add(realm_config_t *rc, CONF_SECTION *cs)
 	hs_srcipaddr = NULL;
 
 	return realm_home_server_add(home, cs, dual);
-}
-
-void realm_home_server_sanitize(home_server_t *home,
-				CONF_SECTION *cs)
-{
-	CONF_SECTION *parent = NULL;
-  	FR_INTEGER_BOUND_CHECK("max_outstanding", home->max_outstanding, >=, 8);
-	FR_INTEGER_BOUND_CHECK("max_outstanding", home->max_outstanding, <=, 65536*16);
-
-	FR_INTEGER_BOUND_CHECK("ping_interval", home->ping_interval, >=, 6);
-	FR_INTEGER_BOUND_CHECK("ping_interval", home->ping_interval, <=, 120);
-
-	FR_TIMEVAL_BOUND_CHECK("response_window", &home->response_window, >=, 0, 1000);
-	FR_TIMEVAL_BOUND_CHECK("response_window", &home->response_window, <=, 60, 0);
-	FR_TIMEVAL_BOUND_CHECK("response_window", &home->response_window, <=,
-			       main_config.max_request_time, 0);
-
-	FR_INTEGER_BOUND_CHECK("response_timeouts", home->max_response_timeouts, >=, 1);
-	FR_INTEGER_BOUND_CHECK("response_timeouts", home->max_response_timeouts, <=, 1000);
-
-	/*
-	 *	Track the minimum response window, so that we can
-	 *	correctly set the timers in process.c
-	 */
-	if (timercmp(&main_config.init_delay, &home->response_window, >)) {
-		main_config.init_delay = home->response_window;
-	}
-
-	FR_INTEGER_BOUND_CHECK("zombie_period", home->zombie_period, >=, 1);
-	FR_INTEGER_BOUND_CHECK("zombie_period", home->zombie_period, <=, 120);
-	FR_INTEGER_BOUND_CHECK("zombie_period", home->zombie_period, >=, (uint32_t) home->response_window.tv_sec);
-
-	FR_INTEGER_BOUND_CHECK("num_pings_to_alive", home->num_pings_to_alive, >=, 3);
-	FR_INTEGER_BOUND_CHECK("num_pings_to_alive", home->num_pings_to_alive, <=, 10);
-
-	FR_INTEGER_BOUND_CHECK("check_timeout", home->ping_timeout, >=, 1);
-	FR_INTEGER_BOUND_CHECK("check_timeout", home->ping_timeout, <=, 10);
-
-	FR_INTEGER_BOUND_CHECK("revive_interval", home->revive_interval, >=, 60);
-	FR_INTEGER_BOUND_CHECK("revive_interval", home->revive_interval, <=, 3600);
-
-#ifdef WITH_COA
-	FR_INTEGER_BOUND_CHECK("coa_irt", home->coa_irt, >=, 1);
-	FR_INTEGER_BOUND_CHECK("coa_irt", home->coa_irt, <=, 5);
-
-	FR_INTEGER_BOUND_CHECK("coa_mrc", home->coa_mrc, <=, 20);
-
-	FR_INTEGER_BOUND_CHECK("coa_mrt", home->coa_mrt, <=, 30);
-
-	FR_INTEGER_BOUND_CHECK("coa_mrd", home->coa_mrd, >=, 5);
-	FR_INTEGER_BOUND_CHECK("coa_mrd", home->coa_mrd, <=, 60);
-#endif
-
-	FR_INTEGER_BOUND_CHECK("max_connections", home->limit.max_connections, <=, 1024);
-
-#ifdef WITH_TCP
-	/*
-	 *	UDP sockets can't be connection limited.
-	 */
-	if (home->proto != IPPROTO_TCP) home->limit.max_connections = 0;
-#endif
-
-	if ((home->limit.idle_timeout > 0) && (home->limit.idle_timeout < 5))
-		home->limit.idle_timeout = 5;
-	if ((home->limit.lifetime > 0) && (home->limit.lifetime < 5))
-		home->limit.lifetime = 5;
-	if ((home->limit.lifetime > 0) && (home->limit.idle_timeout > home->limit.lifetime))
-		home->limit.idle_timeout = 0;
-
-	parent = cf_item_parent(cf_sectiontoitem(cs));
-	if (parent && strcmp(cf_section_name1(parent), "server") == 0) {
-		home->parent_server = cf_section_name2(parent);
-	}
-
 }
 
 int realm_home_server_add(home_server_t *home, CONF_SECTION *cs, int dual)
@@ -860,6 +870,104 @@ static int pool_check_home_server(UNUSED realm_config_t *rc, CONF_PAIR *cp,
 }
 
 
+#ifndef HAVE_PTHREAD_H
+void realm_pool_free(home_pool_t *pool)
+{
+	if (!realms_initialized) return;
+	if (!realm_config->dynamic) return;
+
+	talloc_free(pool);
+}
+#else  /* HAVE_PTHREAD_H */
+typedef struct pool_list_t pool_list_t;
+
+struct pool_list_t {
+	pool_list_t	*next;
+	home_pool_t	*pool;
+	time_t		when;
+};
+
+static bool		pool_free_init = false;
+static pthread_mutex_t	pool_free_mutex;
+static pool_list_t	*pool_list = NULL;
+
+void realm_pool_free(home_pool_t *pool)
+{
+	int i;
+	time_t now;
+	pool_list_t *this, **last;
+
+	if (!realms_initialized) return;
+	if (!realm_config->dynamic) return;
+
+	if (pool) {
+		/*
+		 *	Double-check that the realm wasn't loaded from the
+		 *	configuration files.
+		 */
+		for (i = 0; i < pool->num_home_servers; i++) {
+			if (pool->servers[i]->cs) {
+				rad_assert(0 == 1);
+				return;
+			}
+		}
+	}
+
+	if (!pool_free_init) {
+		pthread_mutex_init(&pool_free_mutex, NULL);
+		pool_free_init = true;
+	}
+
+	pthread_mutex_lock(&pool_free_mutex);
+
+	/*
+	 *	Free all of the pools.
+	 */
+	if (!pool) {
+		while ((this = pool_list) != NULL) {
+			pool_list = this->next;
+			talloc_free(this->pool);
+			talloc_free(this);
+		}
+		pthread_mutex_lock(&pool_free_mutex);
+		return;
+	}
+
+	now = time(NULL);
+
+	/*
+	 *	Free the oldest pool(s)
+	 */
+	while ((this = pool_list) != NULL) {
+		if (this->when > now) break;
+
+		pool_list = this->next;
+		talloc_free(this->pool);
+		talloc_free(this);
+	}
+
+	/*
+	 *	Add this pool to the end of the list.
+	 */
+	for (last = &pool_list;
+	     *last != NULL;
+	     last = &((*last))->next) {
+		/* do nothing */
+	}
+
+	*last = this = talloc(NULL, pool_list_t);
+	if (!this) {
+		talloc_free(pool); /* hope for the best */
+		pthread_mutex_unlock(&pool_free_mutex);
+		return;
+	}
+
+	this->next = NULL;
+	this->when = now + 60;
+	this->pool = pool;
+}
+#endif	/* HAVE_PTHREAD_H */
+
 int realm_pool_add(home_pool_t *pool, UNUSED CONF_SECTION *cs)
 {
 	/*
@@ -915,7 +1023,6 @@ static int server_pool_add(realm_config_t *rc,
 
 		if (!pool_check_home_server(rc, cp, cf_pair_value(cp),
 					    server_type, &home)) {
-			DEBUG("SHIT %d", __LINE__);
 			return 0;
 		}
 	}
@@ -2124,10 +2231,12 @@ home_server_t *home_server_ldb(char const *realmname,
 			hash = fr_hash(&request->packet->src_ipaddr.ipaddr.ip4addr,
 					 sizeof(request->packet->src_ipaddr.ipaddr.ip4addr));
 			break;
+
 		case AF_INET6:
 			hash = fr_hash(&request->packet->src_ipaddr.ipaddr.ip6addr,
 					 sizeof(request->packet->src_ipaddr.ipaddr.ip6addr));
 			break;
+
 		default:
 			hash = 0;
 			break;
@@ -2141,10 +2250,12 @@ home_server_t *home_server_ldb(char const *realmname,
 			hash = fr_hash(&request->packet->src_ipaddr.ipaddr.ip4addr,
 					 sizeof(request->packet->src_ipaddr.ipaddr.ip4addr));
 			break;
+
 		case AF_INET6:
 			hash = fr_hash(&request->packet->src_ipaddr.ipaddr.ip6addr,
 					 sizeof(request->packet->src_ipaddr.ipaddr.ip6addr));
 			break;
+
 		default:
 			hash = 0;
 			break;

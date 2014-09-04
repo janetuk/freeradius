@@ -697,15 +697,19 @@ void tls_session_information(tls_session_t *tls_session)
 		case SSL3_RT_CHANGE_CIPHER_SPEC:
 			str_content_type = "ChangeCipherSpec";
 			break;
+
 		case SSL3_RT_ALERT:
 			str_content_type = "Alert";
 			break;
+
 		case SSL3_RT_HANDSHAKE:
 			str_content_type = "Handshake";
 			break;
+
 		case SSL3_RT_APPLICATION_DATA:
 			str_content_type = "ApplicationData";
 			break;
+
 		default:
 			str_content_type = "UnknownContentType";
 			break;
@@ -730,69 +734,91 @@ void tls_session_information(tls_session_t *tls_session)
 				case SSL3_AD_CLOSE_NOTIFY:
 					str_details2 = " close_notify";
 					break;
+
 				case SSL3_AD_UNEXPECTED_MESSAGE:
 					str_details2 = " unexpected_message";
 					break;
+
 				case SSL3_AD_BAD_RECORD_MAC:
 					str_details2 = " bad_record_mac";
 					break;
+
 				case TLS1_AD_DECRYPTION_FAILED:
 					str_details2 = " decryption_failed";
 					break;
+
 				case TLS1_AD_RECORD_OVERFLOW:
 					str_details2 = " record_overflow";
 					break;
+
 				case SSL3_AD_DECOMPRESSION_FAILURE:
 					str_details2 = " decompression_failure";
 					break;
+
 				case SSL3_AD_HANDSHAKE_FAILURE:
 					str_details2 = " handshake_failure";
 					break;
+
 				case SSL3_AD_BAD_CERTIFICATE:
 					str_details2 = " bad_certificate";
 					break;
+
 				case SSL3_AD_UNSUPPORTED_CERTIFICATE:
 					str_details2 = " unsupported_certificate";
 					break;
+
 				case SSL3_AD_CERTIFICATE_REVOKED:
 					str_details2 = " certificate_revoked";
 					break;
+
 				case SSL3_AD_CERTIFICATE_EXPIRED:
 					str_details2 = " certificate_expired";
 					break;
+
 				case SSL3_AD_CERTIFICATE_UNKNOWN:
 					str_details2 = " certificate_unknown";
 					break;
+
 				case SSL3_AD_ILLEGAL_PARAMETER:
 					str_details2 = " illegal_parameter";
 					break;
+
 				case TLS1_AD_UNKNOWN_CA:
 					str_details2 = " unknown_ca";
 					break;
+
 				case TLS1_AD_ACCESS_DENIED:
 					str_details2 = " access_denied";
 					break;
+
 				case TLS1_AD_DECODE_ERROR:
 					str_details2 = " decode_error";
 					break;
+
 				case TLS1_AD_DECRYPT_ERROR:
 					str_details2 = " decrypt_error";
 					break;
+
 				case TLS1_AD_EXPORT_RESTRICTION:
 					str_details2 = " export_restriction";
 					break;
+
 				case TLS1_AD_PROTOCOL_VERSION:
 					str_details2 = " protocol_version";
 					break;
+
 				case TLS1_AD_INSUFFICIENT_SECURITY:
 					str_details2 = " insufficient_security";
 					break;
+
 				case TLS1_AD_INTERNAL_ERROR:
 					str_details2 = " internal_error";
 					break;
+
 				case TLS1_AD_USER_CANCELLED:
 					str_details2 = " user_canceled";
 					break;
+
 				case TLS1_AD_NO_RENEGOTIATION:
 					str_details2 = " no_renegotiation";
 					break;
@@ -803,35 +829,43 @@ void tls_session_information(tls_session_t *tls_session)
 		if (tls_session->info.content_type == SSL3_RT_HANDSHAKE) {
 			str_details1 = "???";
 
-			if (tls_session->info.record_len > 0)
-			switch (tls_session->info.handshake_type) {
+			if (tls_session->info.record_len > 0) switch (tls_session->info.handshake_type) {
 			case SSL3_MT_HELLO_REQUEST:
 				str_details1 = ", HelloRequest";
 				break;
+
 			case SSL3_MT_CLIENT_HELLO:
 				str_details1 = ", ClientHello";
 				break;
+
 			case SSL3_MT_SERVER_HELLO:
 				str_details1 = ", ServerHello";
 				break;
+
 			case SSL3_MT_CERTIFICATE:
 				str_details1 = ", Certificate";
 				break;
+
 			case SSL3_MT_SERVER_KEY_EXCHANGE:
 				str_details1 = ", ServerKeyExchange";
 				break;
+
 			case SSL3_MT_CERTIFICATE_REQUEST:
 				str_details1 = ", CertificateRequest";
 				break;
+
 			case SSL3_MT_SERVER_DONE:
 				str_details1 = ", ServerHelloDone";
 				break;
+
 			case SSL3_MT_CERTIFICATE_VERIFY:
 				str_details1 = ", CertificateVerify";
 				break;
+
 			case SSL3_MT_CLIENT_KEY_EXCHANGE:
 				str_details1 = ", ClientKeyExchange";
 				break;
+
 			case SSL3_MT_FINISHED:
 				str_details1 = ", Finished";
 				break;
@@ -1330,7 +1364,14 @@ static int ocsp_check(X509_STORE *store, X509 *issuer_cert, X509 *client_cert,
 	/* Setup BIO socket to OCSP responder */
 	cbio = BIO_new_connect(host);
 
-	bio_out = BIO_new_fp(stdout, BIO_NOCLOSE);
+	bio_out = NULL;
+	if (debug_flag) {
+		if (default_log.dst == L_DST_STDOUT) {
+			bio_out = BIO_new_fp(stdout, BIO_NOCLOSE);
+		} else if (default_log.dst == L_DST_STDERR) {
+			bio_out = BIO_new_fp(stderr, BIO_NOCLOSE);
+		}
+	}
 
 	BIO_set_conn_port(cbio, port);
 #if OPENSSL_VERSION_NUMBER < 0x1000003f
@@ -1413,17 +1454,23 @@ static int ocsp_check(X509_STORE *store, X509 *issuer_cert, X509 *client_cert,
 	}
 
 	if (!OCSP_check_validity(thisupd, nextupd, nsec, maxage)) {
-		BIO_puts(bio_out, "WARNING: Status times invalid.\n");
-		ERR_print_errors(bio_out);
+		if (bio_out) {
+			BIO_puts(bio_out, "WARNING: Status times invalid.\n");
+			ERR_print_errors(bio_out);
+		}
 		goto ocsp_end;
 	}
-	BIO_puts(bio_out, "\tThis Update: ");
-	ASN1_GENERALIZEDTIME_print(bio_out, thisupd);
-	BIO_puts(bio_out, "\n");
-	if (nextupd) {
-		BIO_puts(bio_out, "\tNext Update: ");
-		ASN1_GENERALIZEDTIME_print(bio_out, nextupd);
+
+
+	if (bio_out) {
+		BIO_puts(bio_out, "\tThis Update: ");
+		ASN1_GENERALIZEDTIME_print(bio_out, thisupd);
 		BIO_puts(bio_out, "\n");
+		if (nextupd) {
+			BIO_puts(bio_out, "\tNext Update: ");
+			ASN1_GENERALIZEDTIME_print(bio_out, nextupd);
+			BIO_puts(bio_out, "\n");
+		}
 	}
 
 	switch (status) {
@@ -1437,9 +1484,12 @@ static int ocsp_check(X509_STORE *store, X509 *issuer_cert, X509 *client_cert,
 		DEBUG2("[ocsp] --> Cert status: %s",OCSP_cert_status_str(status));
 		if (reason != -1)
 			DEBUG2("[ocsp] --> Reason: %s", OCSP_crl_reason_str(reason));
-		BIO_puts(bio_out, "\tRevocation Time: ");
-		ASN1_GENERALIZEDTIME_print(bio_out, rev);
-		BIO_puts(bio_out, "\n");
+
+		if (bio_out) {
+			BIO_puts(bio_out, "\tRevocation Time: ");
+			ASN1_GENERALIZEDTIME_print(bio_out, rev);
+			BIO_puts(bio_out, "\n");
+		}
 		break;
 	}
 
@@ -1451,6 +1501,7 @@ ocsp_end:
 	free(port);
 	free(path);
 	BIO_free_all(cbio);
+	if (bio_out) BIO_free(bio_out);
 	OCSP_BASICRESP_free(bresp);
 
  ocsp_skip:
@@ -1773,10 +1824,10 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 	}
 
 	switch (ctx->error) {
-
 	case X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT:
 		ERROR("issuer= %s\n", issuer);
 		break;
+
 	case X509_V_ERR_CERT_NOT_YET_VALID:
 	case X509_V_ERR_ERROR_IN_CERT_NOT_BEFORE_FIELD:
 		ERROR("notBefore=");
@@ -1784,6 +1835,7 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 		ASN1_TIME_print(bio_err, X509_get_notBefore(ctx->current_cert));
 #endif
 		break;
+
 	case X509_V_ERR_CERT_HAS_EXPIRED:
 	case X509_V_ERR_ERROR_IN_CERT_NOT_AFTER_FIELD:
 		ERROR("notAfter=");
@@ -2064,7 +2116,7 @@ void tls_global_cleanup(void)
 }
 
 /*
- *	Create Global context SSL and use it in every new session
+ *	Create SSL context
  *
  *	- Load the trusted CAs
  *	- Load the Private key & the certificate
@@ -2683,16 +2735,16 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 
 		fr_bin2hex(buffer, ssn->ssl->session->session_id, size);
 
-		vp = paircopy2(talloc_ctx, request->reply->vps, PW_USER_NAME, 0, TAG_ANY);
+		vp = paircopy_by_num(talloc_ctx, request->reply->vps, PW_USER_NAME, 0, TAG_ANY);
 		if (vp) pairadd(&vps, vp);
 
-		vp = paircopy2(talloc_ctx, request->packet->vps, PW_STRIPPED_USER_NAME, 0, TAG_ANY);
+		vp = paircopy_by_num(talloc_ctx, request->packet->vps, PW_STRIPPED_USER_NAME, 0, TAG_ANY);
 		if (vp) pairadd(&vps, vp);
 
-		vp = paircopy2(talloc_ctx, request->reply->vps, PW_CHARGEABLE_USER_IDENTITY, 0, TAG_ANY);
+		vp = paircopy_by_num(talloc_ctx, request->reply->vps, PW_CHARGEABLE_USER_IDENTITY, 0, TAG_ANY);
 		if (vp) pairadd(&vps, vp);
 
-		vp = paircopy2(talloc_ctx, request->reply->vps, PW_CACHED_SESSION_POLICY, 0, TAG_ANY);
+		vp = paircopy_by_num(talloc_ctx, request->reply->vps, PW_CACHED_SESSION_POLICY, 0, TAG_ANY);
 		if (vp) pairadd(&vps, vp);
 
 		certs = (VALUE_PAIR **)SSL_get_ex_data(ssn->ssl, fr_tls_ex_index_certs);
@@ -2922,7 +2974,7 @@ fr_tls_status_t tls_ack_handler(tls_session_t *ssn, REQUEST *request)
 		return FR_TLS_FAIL;
 
 	case handshake:
-		if ((ssn->info.handshake_type == finished) &&
+		if ((ssn->info.handshake_type == handshake_finished) &&
 		    (ssn->dirty_out.used == 0)) {
 			RDEBUG2("ACK handshake is finished");
 

@@ -503,8 +503,8 @@ void pairvalidate_debug(TALLOC_CTX *ctx, VALUE_PAIR const *failed[2])
 		return;
 	}
 
-	pair = vp_aprint(ctx, filter);
-	value = vp_aprint_value(ctx, list);
+	pair = vp_aprint(ctx, filter, true);
+	value = vp_aprint_value(ctx, list, true);
 
 	fr_strerror_printf("Attribute value \"%s\" didn't match filter \"%s\"", value, pair);
 
@@ -676,13 +676,6 @@ VALUE_PAIR *paircopyvp(TALLOC_CTX *ctx, VALUE_PAIR const *vp)
 
 	memcpy(n, vp, sizeof(*n));
 
-	/*
-	 *	Now copy the value
-	 */
-	if (vp->type == VT_XLAT) {
-		n->value.xlat = talloc_typed_strdup(n, n->value.xlat);
-	}
-
 	n->da = dict_attr_copy(vp->da, true);
 	if (!n->da) {
 		talloc_free(n);
@@ -690,6 +683,15 @@ VALUE_PAIR *paircopyvp(TALLOC_CTX *ctx, VALUE_PAIR const *vp)
 	}
 
 	n->next = NULL;
+
+	/*
+	 *	If it's an xlat, copy the raw string and return early,
+	 *	so we don't pre-expand or otherwise mangle the VALUE_PAIR.
+	 */
+	if (vp->type == VT_XLAT) {
+		n->value.xlat = talloc_typed_strdup(n, n->value.xlat);
+		return n;
+	}
 
 	switch (vp->da->type) {
 	case PW_TYPE_TLV:
@@ -752,8 +754,7 @@ VALUE_PAIR *paircopy(TALLOC_CTX *ctx, VALUE_PAIR *from)
  * @param[in] tag to match, TAG_ANY matches any tag, TAG_NONE matches tagless VPs.
  * @return the head of the new VALUE_PAIR list or NULL on error.
  */
-VALUE_PAIR *paircopy2(TALLOC_CTX *ctx, VALUE_PAIR *from,
-		      unsigned int attr, unsigned int vendor, int8_t tag)
+VALUE_PAIR *paircopy_by_num(TALLOC_CTX *ctx, VALUE_PAIR *from, unsigned int attr, unsigned int vendor, int8_t tag)
 {
 	vp_cursor_t src, dst;
 
@@ -859,99 +860,99 @@ void pairmove(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from)
 		 */
 
 		switch (i->op) {
+		/*
+		 *	Anything else are operators which
+		 *	shouldn't occur.  We ignore them, and
+		 *	leave them in place.
+		 */
+		default:
+			tail_from = &(i->next);
+			continue;
+
+		/*
+		 *	Add it to the "to" list, but only if
+		 *	it doesn't already exist.
+		 */
+		case T_OP_EQ:
+			found = pairfind(*to, i->da->attr, i->da->vendor, TAG_ANY);
+			if (!found) goto do_add;
+
+			tail_from = &(i->next);
+			continue;
+
+		/*
+		 *	Add it to the "to" list, and delete any attribute
+		 *	of the same vendor/attr which already exists.
+		 */
+		case T_OP_SET:
+			found = pairfind(*to, i->da->attr, i->da->vendor, TAG_ANY);
+			if (!found) goto do_add;
+
 			/*
-			 *	Anything else are operators which
-			 *	shouldn't occur.  We ignore them, and
-			 *	leave them in place.
+			 *	Do NOT call pairdelete() here,
+			 *	due to issues with re-writing
+			 *	"request->username".
+			 *
+			 *	Everybody calls pairmove, and
+			 *	expects it to work.  We can't
+			 *	update request->username here,
+			 *	so instead we over-write the
+			 *	vp that it's pointing to.
 			 */
+			switch (found->da->type) {
+				VALUE_PAIR *j;
+
 			default:
-				tail_from = &(i->next);
-				continue;
+				j = found->next;
+				memcpy(found, i, sizeof(*found));
+				found->next = j;
+				break;
+
+			case PW_TYPE_TLV:
+				pairmemsteal(found, i->vp_tlv);
+				i->vp_tlv = NULL;
+				break;
+
+			case PW_TYPE_OCTETS:
+				pairmemsteal(found, i->vp_octets);
+				i->vp_octets = NULL;
+				break;
+
+			case PW_TYPE_STRING:
+				pairstrsteal(found, i->vp_strvalue);
+				i->vp_strvalue = NULL;
+				found->tag = i->tag;
+				break;
+			}
 
 			/*
-			 *	Add it to the "to" list, but only if
-			 *	it doesn't already exist.
+			 *	Delete *all* of the attributes
+			 *	of the same number.
 			 */
-			case T_OP_EQ:
-				found = pairfind(*to, i->da->attr, i->da->vendor, TAG_ANY);
-				if (!found) goto do_add;
-
-				tail_from = &(i->next);
-				continue;
+			pairdelete(&found->next,
+				   found->da->attr,
+				   found->da->vendor, TAG_ANY);
 
 			/*
-			 *	Add it to the "to" list, and delete any attribute
-			 *	of the same vendor/attr which already exists.
+			 *	Remove this attribute from the
+			 *	"from" list.
 			 */
-			case T_OP_SET:
-				found = pairfind(*to, i->da->attr, i->da->vendor, TAG_ANY);
-				if (!found) goto do_add;
+			*tail_from = i->next;
+			i->next = NULL;
+			pairfree(&i);
+			continue;
 
-				/*
-				 *	Do NOT call pairdelete() here,
-				 *	due to issues with re-writing
-				 *	"request->username".
-				 *
-				 *	Everybody calls pairmove, and
-				 *	expects it to work.  We can't
-				 *	update request->username here,
-				 *	so instead we over-write the
-				 *	vp that it's pointing to.
-				 */
-				switch (found->da->type) {
-					VALUE_PAIR *j;
-
-					default:
-						j = found->next;
-						memcpy(found, i, sizeof(*found));
-						found->next = j;
-						break;
-
-					case PW_TYPE_TLV:
-						pairmemsteal(found, i->vp_tlv);
-						i->vp_tlv = NULL;
-						break;
-
-					case PW_TYPE_OCTETS:
-						pairmemsteal(found, i->vp_octets);
-						i->vp_octets = NULL;
-						break;
-
-					case PW_TYPE_STRING:
-						pairstrsteal(found, i->vp_strvalue);
-						i->vp_strvalue = NULL;
-						found->tag = i->tag;
-						break;
-				}
-
-				/*
-				 *	Delete *all* of the attributes
-				 *	of the same number.
-				 */
-				pairdelete(&found->next,
-					   found->da->attr,
-					   found->da->vendor, TAG_ANY);
-
-				/*
-				 *	Remove this attribute from the
-				 *	"from" list.
-				 */
-				*tail_from = i->next;
-				i->next = NULL;
-				pairfree(&i);
-				continue;
-
-			/*
-			 *	Move it from the old list and add it
-			 *	to the new list.
-			 */
-			case T_OP_ADD:
-		do_add:
-				*tail_from = i->next;
-				i->next = NULL;
-				*tail_new = talloc_steal(ctx, i);
-				tail_new = &(i->next);
-				continue;
+		/*
+		 *	Move it from the old list and add it
+		 *	to the new list.
+		 */
+		case T_OP_ADD:
+	do_add:
+			*tail_from = i->next;
+			i->next = NULL;
+			*tail_new = talloc_steal(ctx, i);
+			tail_new = &(i->next);
+			continue;
 		}
 	} /* loop over the "from" list. */
 
@@ -1994,6 +1995,17 @@ FR_TOKEN pairread(char const **ptr, VALUE_PAIR_RAW *raw)
 			break;
 		}
 
+		/*
+		 *	Attribute:=value is NOT
+		 *
+		 *	Attribute:
+		 *	=
+		 *	value
+		 */
+		if ((*p == ':') && (!isdigit((int) p[1]))) {
+			break;
+		}
+
 		*(q++) = *(p++);
 	}
 
@@ -2209,7 +2221,7 @@ int readvp2(VALUE_PAIR **out, TALLOC_CTX *ctx, FILE *fp, bool *pfiledone)
 			break;
 		}
 
-		fr_cursor_insert(&cursor, vp);
+		fr_cursor_merge(&cursor, vp);
 		buf[0] = '\0';
 	}
 
@@ -2230,9 +2242,9 @@ error:
  * @param[in] two the second attribute.
  * @return -1 if one is less than two, 0 if both are equal, 1 if one is more than two, < -1 on error.
  */
-int8_t paircmp_value(VALUE_PAIR const *one, VALUE_PAIR const *two)
+int paircmp_value(VALUE_PAIR const *one, VALUE_PAIR const *two)
 {
-	int64_t compare = 0;
+	int compare = 0;
 
 	VERIFY_VP(one);
 	VERIFY_VP(two);
@@ -2249,6 +2261,7 @@ int8_t paircmp_value(VALUE_PAIR const *one, VALUE_PAIR const *two)
 	switch (one->da->type) {
 	case PW_TYPE_ABINARY:
 	case PW_TYPE_OCTETS:
+	case PW_TYPE_STRING:	/* We use memcmp to be \0 safe */
 	{
 		size_t length;
 
@@ -2273,41 +2286,53 @@ int8_t paircmp_value(VALUE_PAIR const *one, VALUE_PAIR const *two)
 	}
 		break;
 
-	case PW_TYPE_STRING:
-		fr_assert(one->vp_strvalue);
-		fr_assert(two->vp_strvalue);
-		compare = strcmp(one->vp_strvalue, two->vp_strvalue);
+		/*
+		 *	Short-hand for simplicity.
+		 */
+#define CHECK(_type) if (one->vp_##_type < two->vp_##_type)   { compare = -1; \
+		} else if (one->vp_##_type > two->vp_##_type) { compare = +1; }
+
+	case PW_TYPE_BOOLEAN:	/* this isn't a RADIUS type, and shouldn't really ever be used */
+	case PW_TYPE_BYTE:
+		CHECK(byte);
 		break;
 
-	case PW_TYPE_BOOLEAN:
-	case PW_TYPE_BYTE:
+
 	case PW_TYPE_SHORT:
-	case PW_TYPE_INTEGER:
+		CHECK(short);
+		break;
+
 	case PW_TYPE_DATE:
-		compare = (int64_t) one->vp_integer - (int64_t) two->vp_integer;
+		CHECK(date);
+		break;
+
+	case PW_TYPE_INTEGER:
+		CHECK(integer);
 		break;
 
 	case PW_TYPE_SIGNED:
-		compare = one->vp_signed - two->vp_signed;
+		CHECK(signed);
 		break;
 
 	case PW_TYPE_INTEGER64:
-		/*
-		 *	Don't want integer overflow!
-		 */
-		if (one->vp_integer64 < two->vp_integer64) {
-			compare = -1;
-		} else if (one->vp_integer64 > two->vp_integer64) {
-			compare = 1;
-		}
+		CHECK(integer64);
 		break;
 
 	case PW_TYPE_ETHERNET:
 		compare = memcmp(&one->vp_ether, &two->vp_ether, sizeof(one->vp_ether));
 		break;
 
-	case PW_TYPE_IPV4_ADDR:
-		compare = (int64_t) ntohl(one->vp_ipaddr) - (int64_t) ntohl(two->vp_ipaddr);
+	case PW_TYPE_IPV4_ADDR: {
+			uint32_t a, b;
+
+			a = ntohl(one->vp_ipaddr);
+			b = ntohl(two->vp_ipaddr);
+			if (a < b) {
+				compare = -1;
+			} else if (a > b) {
+				compare = +1;
+			}
+		}
 		break;
 
 	case PW_TYPE_IPV6_ADDR:
@@ -2330,8 +2355,8 @@ int8_t paircmp_value(VALUE_PAIR const *one, VALUE_PAIR const *two)
 	 *	None of the types below should be in the REQUEST
 	 */
 	case PW_TYPE_INVALID:		/* We should never see these */
-	case PW_TYPE_IP_ADDR:		/* This should of been converted into IPADDR/IPV6ADDR */
-	case PW_TYPE_IP_PREFIX:	/* This should of been converted into IPADDR/IPV6ADDR */
+	case PW_TYPE_IP_ADDR:		/* This should have been converted into IPADDR/IPV6ADDR */
+	case PW_TYPE_IP_PREFIX:		/* This should have been converted into IPADDR/IPV6ADDR */
 	case PW_TYPE_TLV:
 	case PW_TYPE_EXTENDED:
 	case PW_TYPE_LONG_EXTENDED:
@@ -2476,9 +2501,9 @@ static int paircmp_op_cidr(FR_TOKEN op, int bytes,
  * @param[in] b the second attribute
  * @return 1 if true, 0 if false, -1 on error.
  */
-int8_t paircmp_op(VALUE_PAIR const *a, FR_TOKEN op, VALUE_PAIR const *b)
+int paircmp_op(VALUE_PAIR const *a, FR_TOKEN op, VALUE_PAIR const *b)
 {
-	int compare;
+	int compare = 0;
 
 	if (!a || !b) return -1;
 
@@ -2597,7 +2622,7 @@ int8_t paircmp_op(VALUE_PAIR const *a, FR_TOKEN op, VALUE_PAIR const *b)
  * @param[in] b the second attribute
  * @return 1 if true, 0 if false, -1 on error.
  */
-int8_t paircmp(VALUE_PAIR *a, VALUE_PAIR *b)
+int paircmp(VALUE_PAIR *a, VALUE_PAIR *b)
 {
 	if (!a) return -1;
 
@@ -2670,7 +2695,7 @@ int8_t paircmp(VALUE_PAIR *a, VALUE_PAIR *b)
  * @param b second list of VALUE_PAIRs.
  * @return -1 if a < b, 0 if the two lists are equal, 1 if a > b, -2 on error.
  */
-int8_t pairlistcmp(VALUE_PAIR *a, VALUE_PAIR *b)
+int pairlistcmp(VALUE_PAIR *a, VALUE_PAIR *b)
 {
 	vp_cursor_t a_cursor, b_cursor;
 	VALUE_PAIR *a_p, *b_p;

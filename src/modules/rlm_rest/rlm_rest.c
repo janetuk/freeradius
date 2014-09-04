@@ -60,6 +60,7 @@ static const CONF_PARSER section_config[] = {
 	{ "method", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, method_str), "GET" },
 	{ "body", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, body_str), "none" },
 	{ "data", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, data), NULL },
+	{ "force_to", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, force_to_str), NULL },
 
 	/* User authentication */
 	{ "auth", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, auth_str), "none" },
@@ -221,10 +222,9 @@ static ssize_t rest_xlat(void *instance, REQUEST *request,
 	case 403:
 	case 401:
 	{
-error:
-		len = rest_get_handle_data(&body, handle);
-		if (len > 0) REDEBUG("%s", body);
 		outlen = -1;
+error:
+		rest_response_error(request, handle);
 		goto finish;
 	}
 	case 204:
@@ -281,6 +281,8 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	int rcode = RLM_MODULE_OK;
 	int ret;
 
+	if (!section->name) return RLM_MODULE_NOOP;
+
 	handle = fr_connection_get(inst->conn_pool);
 	if (!handle) return RLM_MODULE_FAIL;
 
@@ -336,6 +338,17 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	}
 
 finish:
+	switch (rcode) {
+	case RLM_MODULE_INVALID:
+	case RLM_MODULE_FAIL:
+	case RLM_MODULE_USERLOCK:
+		rest_response_error(request, handle);
+		break;
+
+	default:
+		break;
+	}
+
 	rlm_rest_cleanup(instance, section, handle);
 
 	fr_connection_release(inst->conn_pool, handle);
@@ -358,6 +371,8 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, UNUSED REQU
 
 	VALUE_PAIR const *username;
 	VALUE_PAIR const *password;
+
+	if (!section->name) return RLM_MODULE_NOOP;
 
 	username = request->username;
 	if (!request->username) {
@@ -428,6 +443,17 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, UNUSED REQU
 	}
 
 finish:
+	switch (rcode) {
+	case RLM_MODULE_INVALID:
+	case RLM_MODULE_FAIL:
+	case RLM_MODULE_USERLOCK:
+		rest_response_error(request, handle);
+		break;
+
+	default:
+		break;
+	}
+
 	rlm_rest_cleanup(instance, section, handle);
 
 	fr_connection_release(inst->conn_pool, handle);
@@ -448,6 +474,8 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, UNUSED REQUES
 	int rcode = RLM_MODULE_OK;
 	int ret;
 
+	if (!section->name) return RLM_MODULE_NOOP;
+
 	handle = fr_connection_get(inst->conn_pool);
 	if (!handle) return RLM_MODULE_FAIL;
 
@@ -472,6 +500,16 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, UNUSED REQUES
 	}
 
 finish:
+	switch (rcode) {
+	case RLM_MODULE_INVALID:
+	case RLM_MODULE_FAIL:
+		rest_response_error(request, handle);
+		break;
+
+	default:
+		break;
+	}
+
 	rlm_rest_cleanup(inst, section, handle);
 
 	fr_connection_release(inst->conn_pool, handle);
@@ -492,6 +530,8 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, UNUSED REQUEST
 	int rcode = RLM_MODULE_OK;
 	int ret;
 
+	if (!section->name) return RLM_MODULE_NOOP;
+
 	handle = fr_connection_get(inst->conn_pool);
 	if (!handle) return RLM_MODULE_FAIL;
 
@@ -516,6 +556,16 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, UNUSED REQUEST
 	}
 
 finish:
+	switch (rcode) {
+	case RLM_MODULE_INVALID:
+	case RLM_MODULE_FAIL:
+		rest_response_error(request, handle);
+		break;
+
+	default:
+		break;
+	}
+
 	rlm_rest_cleanup(inst, section, handle);
 
 	fr_connection_release(inst->conn_pool, handle);
@@ -531,11 +581,12 @@ static int parse_sub_section(CONF_SECTION *parent, rlm_rest_section_t *config, r
 
 	cs = cf_section_sub_find(parent, name);
 	if (!cs) {
-		/* TODO: Should really setup section with default values */
+		config->name = NULL;
 		return 0;
 	}
 
 	if (cf_section_parse(cs, config, section_config) < 0) {
+		config->name = NULL;
 		return -1;
 	}
 
@@ -615,6 +666,33 @@ static int parse_sub_section(CONF_SECTION *parent, rlm_rest_section_t *config, r
 		body = fr_str2int(http_body_type_table, config->body_str, HTTP_BODY_UNKNOWN);
 		if (body != HTTP_BODY_UNKNOWN) {
 			config->body_str = fr_int2str(http_content_type_table, body, config->body_str);
+		}
+	}
+
+	if (config->force_to_str) {
+		config->force_to = fr_str2int(http_body_type_table, config->force_to_str, HTTP_BODY_UNKNOWN);
+		if (config->force_to == HTTP_BODY_UNKNOWN) {
+			config->force_to = fr_str2int(http_content_type_table, config->force_to_str, HTTP_BODY_UNKNOWN);
+		}
+
+		if (config->force_to == HTTP_BODY_UNKNOWN) {
+			cf_log_err_cs(cs, "Unknown forced response body type '%s'", config->force_to_str);
+			return -1;
+		}
+
+		switch (http_body_type_supported[config->force_to]) {
+		case HTTP_BODY_UNSUPPORTED:
+			cf_log_err_cs(cs, "Unsupported forced response body type \"%s\", please submit patches",
+				      config->force_to_str);
+			return -1;
+
+		case HTTP_BODY_INVALID:
+			cf_log_err_cs(cs, "Invalid HTTP forced response body type.  \"%s\" is not a valid web API data "
+				      "markup format", config->force_to_str);
+			return -1;
+
+		default:
+			break;
 		}
 	}
 

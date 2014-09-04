@@ -134,8 +134,7 @@ struct fr_connection_pool_t {
 	uint64_t	count;		//!< Number of connections spawned over
 					//!< the lifetime of the pool.
 	uint32_t       	num;		//!< Number of connections in the pool.
-	int		active;	 	//!< Number of currently reserved
-					//!< connections.
+	uint32_t	active;	 	//!< Number of currently reserved connections.
 
 	fr_connection_t	*head;		//!< Start of the connection list.
 	fr_connection_t *tail;		//!< End of the connection list.
@@ -313,9 +312,7 @@ static fr_connection_t *fr_connection_spawn(fr_connection_pool_t *pool,
 	if (pool->spawning) {
 		pthread_mutex_unlock(&pool->mutex);
 
-		ERROR("%s: Cannot open new connection, "
-		      "connection spawning already in "
-		      "progress", pool->log_prefix);
+		ERROR("%s: Cannot open new connection, connection spawning already in progress", pool->log_prefix);
 		return NULL;
 	}
 
@@ -421,7 +418,6 @@ static fr_connection_t *fr_connection_spawn(fr_connection_pool_t *pool,
  *
  * @param[in,out] pool to modify.
  * @param[in,out] this Connection to delete.
-
  */
 static void fr_connection_close(fr_connection_pool_t *pool,
 				fr_connection_t *this)
@@ -436,7 +432,7 @@ static void fr_connection_close(fr_connection_pool_t *pool,
 #endif
 		this->in_use = false;
 
-		rad_assert(pool->active > 0);
+		rad_assert(pool->active != 0);
 		pool->active--;
 	}
 
@@ -614,7 +610,7 @@ fr_connection_pool_t *fr_connection_pool_module_init(CONF_SECTION *module,
 	 */
 	mycs = cf_section_sub_find(module, "pool");
 	if (!mycs) {
-		DEBUG4("%s: Adding pool section to \"%s\" to store pool references", prefix,
+		DEBUG4("%s: Adding pool section to config item \"%s\" to store pool references", prefix,
 		       cf_section_name(module));
 
 		mycs = cf_section_alloc(module, "pool", NULL);
@@ -640,16 +636,16 @@ fr_connection_pool_t *fr_connection_pool_module_init(CONF_SECTION *module,
 	 */
 	pool = cf_data_find(cs, CONNECTION_POOL_CF_KEY);
 	if (!pool) {
-		DEBUG4("%s: No pool reference found in \"%s.pool\"", prefix, parent_name(cs));
+		DEBUG4("%s: No pool reference found for config item \"%s.pool\"", prefix, parent_name(cs));
 		pool = fr_connection_pool_init(module, cs, opaque, c, a, prefix);
 		if (!pool) return NULL;
 
-		DEBUG4("%s: Adding pool reference %p to \"%s.pool\"", prefix, pool, parent_name(cs));
+		DEBUG4("%s: Adding pool reference %p to config item \"%s.pool\"", prefix, pool, parent_name(cs));
 		cf_data_add(cs, CONNECTION_POOL_CF_KEY, pool, NULL);
 		return pool;
 	}
 
-	DEBUG4("%s: Found pool reference %p in \"%s.pool\"", prefix, pool, parent_name(cs));
+	DEBUG4("%s: Found pool reference %p in config item \"%s.pool\"", prefix, pool, parent_name(cs));
 
 	/*
 	 *	We're reusing pool data add it to our local config
@@ -657,8 +653,8 @@ fr_connection_pool_t *fr_connection_pool_module_init(CONF_SECTION *module,
 	 *	re-use a pool through this module.
 	 */
 	if (mycs != cs) {
-		DEBUG4("%s: Copying pool reference %p from \"%s.pool\" to \"%s.pool\"", prefix, pool,
-		       parent_name(cs), parent_name(mycs));
+		DEBUG4("%s: Copying pool reference %p from config item \"%s.pool\" to config item \"%s.pool\"",
+		       prefix, pool, parent_name(cs), parent_name(mycs));
 		cf_data_add(mycs, CONNECTION_POOL_CF_KEY, pool, NULL);
 	}
 
@@ -844,7 +840,7 @@ static int fr_connection_manage(fr_connection_pool_t *pool,
 }
 
 
-/** Check whether any connections needs to be removed from the pool
+/** Check whether any connections need to be removed from the pool
  *
  * Maintains the number of connections in the pool as per the configuration
  * parameters for the connection pool.
@@ -936,6 +932,7 @@ static int fr_connection_pool_check(fr_connection_pool_t *pool)
 	}
 
 	if (spawn) {
+		INFO("%s: %i of %u connections in use.  Need more spares", pool->log_prefix, pool->active, pool->num);
 		pthread_mutex_unlock(&pool->mutex);
 		fr_connection_spawn(pool, now, false); /* ignore return code */
 		pthread_mutex_lock(&pool->mutex);
@@ -998,18 +995,17 @@ static int fr_connection_pool_check(fr_connection_pool_t *pool)
 static void *fr_connection_get_internal(fr_connection_pool_t *pool, int spawn)
 {
 	time_t now;
-	fr_connection_t *this, *next;
+	fr_connection_t *this;
 
 	if (!pool) return NULL;
 
 	pthread_mutex_lock(&pool->mutex);
 
 	now = time(NULL);
-	for (this = pool->head; this != NULL; this = next) {
-		next = this->next;
-
+	for (this = pool->head; this != NULL; this = this->next) {
 		if (!this->in_use) goto do_return;
 	}
+	rad_assert(pool->active == pool->num);
 
 	if (pool->num == pool->max) {
 		bool complain = false;
@@ -1035,6 +1031,8 @@ static void *fr_connection_get_internal(fr_connection_pool_t *pool, int spawn)
 
 	if (!spawn) return NULL;
 
+	WARN("%s: %i of %u connections in use.  You probably need to increase \"spare\"", pool->log_prefix,
+	     pool->active, pool->num);
 	this = fr_connection_spawn(pool, now, true); /* MY connection! */
 	if (!this) return NULL;
 	pthread_mutex_lock(&pool->mutex);
@@ -1130,7 +1128,7 @@ void fr_connection_release(fr_connection_pool_t *pool, void *conn)
 		}
 	}
 
-	rad_assert(pool->active > 0);
+	rad_assert(pool->active != 0);
 	pool->active--;
 
 	DEBUG("%s: Released connection (%" PRIu64 ")", pool->log_prefix, this->number);

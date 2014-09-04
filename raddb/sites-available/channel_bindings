@@ -17,4 +17,3 @@ authorize {
 	# need a separate channel binding policy.
 	abfab_channel_bindings
 }
-}
