@@ -350,9 +350,6 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 {
 	struct realm_config_t *inst = instance;
 
-	/* initialize the trust router integration code */
-	if (tr_init() < 0)
-	       return -1;
 	if (strcasecmp(inst->format_string, "suffix") == 0) {
 	     inst->format = REALM_FORMAT_SUFFIX;
 
