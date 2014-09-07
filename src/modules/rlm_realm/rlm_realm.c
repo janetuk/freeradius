@@ -36,6 +36,7 @@ typedef struct realm_config_t {
 	char const	*delim;
 	bool		ignore_default;
 	bool		ignore_null;
+
 #ifdef HAVE_TRUST_ROUTER_TR_DH_H
 	char const	*default_community;
 	char const	*rp_realm;
@@ -43,8 +44,6 @@ typedef struct realm_config_t {
 	uint32_t	tr_port;
 #endif
 } realm_config_t;
-
-#define stringify(s) #s
 
 static CONF_PARSER module_config[] = {
   { "format", FR_CONF_OFFSET(PW_TYPE_STRING, realm_config_t, format_string), "suffix" },
@@ -475,7 +474,6 @@ static rlm_rcode_t mod_realm_recv_coa(UNUSED void *instance, REQUEST *request)
 
 	realm = realm_find(vp->vp_strvalue + 1);
 	if (!realm) return RLM_MODULE_NOTFOUND;
-
 
 	if (!realm->coa_pool) {
 		RDEBUG2("CoA realm is LOCAL");
