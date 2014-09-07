@@ -36,7 +36,7 @@ static rbtree_t *realms_byname = NULL;
 bool home_servers_udp = false;
 #endif
 
-#ifdef HAVE_REGEX_H
+#ifdef HAVE_REGEX
 typedef struct realm_regex_t {
 	REALM	*realm;
 	struct realm_regex_t *next;
@@ -44,7 +44,7 @@ typedef struct realm_regex_t {
 
 static realm_regex_t *realms_regex = NULL;
 
-#endif /* HAVE_REGEX_H */
+#endif /* HAVE_REGEX */
 
 typedef struct realm_config_t {
 	CONF_SECTION	*cs;
@@ -251,7 +251,7 @@ void realms_free(void)
 	rbtree_free(realms_byname);
 	realms_byname = NULL;
 
-#ifdef HAVE_REGEX_H
+#ifdef HAVE_REGEX
 	if (realms_regex) {
 		realm_regex_t *this, *next;
 
@@ -1806,8 +1806,11 @@ static int realm_add(realm_config_t *rc, CONF_SECTION *cs)
 	return 0;
 }
 
-
+#ifdef HAVE_REGEX
 int realm_realm_add(REALM *r, CONF_SECTION *cs)
+#else
+int realm_realm_add(REALM *r, UNUSED CONF_SECTION *cs)
+#endif
 {
 	/*
 	 *	The structs aren't mutex protected.  Refuse to destroy
@@ -1818,7 +1821,7 @@ int realm_realm_add(REALM *r, CONF_SECTION *cs)
 		return 0;
 	}
 
-#ifdef HAVE_REGEX_H
+#ifdef HAVE_REGEX
 	/*
 	 *	It's a regex.  Sanity check it, and add it to a
 	 *	separate list.
@@ -2056,7 +2059,7 @@ REALM *realm_find2(char const *name)
 	realm = rbtree_finddata(realms_byname, &myrealm);
 	if (realm) return realm;
 
-#ifdef HAVE_REGEX_H
+#ifdef HAVE_REGEX
 	if (realms_regex) {
 		realm_regex_t *this;
 
@@ -2090,7 +2093,7 @@ REALM *realm_find(char const *name)
 	realm = rbtree_finddata(realms_byname, &myrealm);
 	if (realm) return realm;
 
-#ifdef HAVE_REGEX_H
+#ifdef HAVE_REGEX
 	if (realms_regex) {
 		realm_regex_t *this;
 

@@ -1,10 +1,25 @@
+<<<<<<< HEAD
 #Module for PSK authorizations from ABFAb trust router
+=======
+# -*- text -*-
+##
+## Module for PSK authorizations from ABFAB trust router
+##
+##	$Id$
+
+>>>>>>> v3.0.x
 sql psksql {
 
         driver = "rlm_sql_sqlite"
 
 	sqlite {
 	        filename = "/var/lib/trust_router/keys"
+<<<<<<< HEAD
 		}
 
 	}
+=======
+	}
+
+}
+>>>>>>> v3.0.x

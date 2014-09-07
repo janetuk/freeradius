@@ -1,32 +1,22 @@
 #
+#	This file represents a server that is implementing an identity
+#	provider for GSS-EAP (RFC 7055) using the trust router
+#	protocol for dynamic realm discovery.  Any ABFAB identity
+#	provider is also an ABFAB relying party proxy.
+#
+#	This file does not include a TLS listener; see abfab-tls for a simple
+#	example of a RADSEC listener for ABFAB.
+#
 #	$Id$
 #
-######################################################################
-#
-#	Read "man radiusd" before editing this file.  See the section
-#	titled DEBUGGING.  It outlines a method where you can quickly
-#	obtain the configuration you want, without running into
-#	trouble.  See also "man unlang", which documents the format
-#	of this file.
-
-
-# This file represents a server that is implementing an identity
-# provider for GSS-EAP (RFC 7055) using the trust router protocol for
-# dynamic realm discovery.  Any ABFAB identity provider is also an
-# ABFAB relying party proxy.
-
-#This file does not include a TLS listener; see abfab-tls for a simple
-# example of a RADSEC listener for ABFAB.
 
 server abfab-idp {
-
-
-
 authorize {
         psk_authorize
 	filter_username
 	preprocess
-		#  If you intend to use CUI and you require that the Operator-Name
+
+	#  If you intend to use CUI and you require that the Operator-Name
 	#  be set for CUI generation and you want to generate CUI also
 	#  for your local clients then uncomment the operator-name
 	#  below and set the operator-name for your clients in clients.conf
@@ -37,6 +27,7 @@ authorize {
 	#  send proper CUI requests, then uncomment the
 	#  cui below and set "add_cui = yes" for these clients in clients.conf
 #	cui
+
 	suffix {
 	        updated = 1
 		noop = reject
@@ -48,27 +39,13 @@ authorize {
 	#
 	expiration
 	logintime
-#	Autz-Type Status-Server {
-#
-#	}
 }
+
 authenticate {
 	#
 	#  Allow EAP authentication.
 	eap
 }
-
-#  Session database, used for checking Simultaneous-Use. Either the radutmp
-#  or rlm_sql module can handle this.
-#  The rlm_sql module is *much* faster
-session {
-#	radutmp
-
-	#
-	#  See "Simultaneous Use Checking Queries" in sql.conf
-#	sql
-}
-
 
 #  Post-Authentication
 #  Once we KNOW that the user has been authenticated, there are

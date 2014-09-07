@@ -26,10 +26,10 @@ RCSID("$Id$")
 
 #include <ctype.h>
 
-#ifdef HAVE_PCREPOSIX_H
+#ifdef HAVE_PCRE
 #  define WITH_REGEX
 #  include <pcreposix.h>
-#elif defined(HAVE_REGEX_H)
+#elif defined(HAVE_REGEX)
 #  include <regex.h>
 #  define WITH_REGEX
 
@@ -1835,14 +1835,12 @@ VALUE_PAIR *pairmake(TALLOC_CTX *ctx, VALUE_PAIR **vps,
 	case T_OP_REG_EQ:	/* =~ */
 	case T_OP_REG_NE:	/* !~ */
 	{
-
-		int compare;
-		regex_t reg;
 #ifndef WITH_REGEX
 		fr_strerror_printf("Regular expressions are not supported");
 		return NULL;
-
 #else
+		int compare;
+		regex_t reg;
 
 		/*
 		 *	Someone else will fill in the value.
