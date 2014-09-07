@@ -700,6 +700,7 @@ static int home_server_add(realm_config_t *rc, CONF_SECTION *cs)
 	return realm_home_server_add(home, cs, dual);
 }
 
+
 int realm_home_server_add(home_server_t *home, CONF_SECTION *cs, int dual)
 {
 	const char *name2 = home->name;
@@ -2191,7 +2192,6 @@ void home_server_update_request(home_server_t *home, REQUEST *request)
 	request->proxy->proto = home->proto;
 #endif
 	request->home_server = home;
-	talloc_reference(request, request->home_server);
 
 	/*
 	 *	Access-Requests have a Message-Authenticator added,
