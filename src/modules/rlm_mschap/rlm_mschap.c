@@ -72,64 +72,64 @@ static int pdb_decode_acct_ctrl(char const *p)
 
 	for (p++; *p && !done; p++) {
 		switch (*p) {
-			case 'N': /* 'N'o password. */
-			  acct_ctrl |= ACB_PWNOTREQ;
-			  break;
+		case 'N': /* 'N'o password. */
+			acct_ctrl |= ACB_PWNOTREQ;
+			break;
 
-			case 'D':  /* 'D'isabled. */
-			  acct_ctrl |= ACB_DISABLED ;
-			  break;
+		case 'D':  /* 'D'isabled. */
+			acct_ctrl |= ACB_DISABLED ;
+			break;
 
-			case 'H':  /* 'H'omedir required. */
-			  acct_ctrl |= ACB_HOMDIRREQ;
-			  break;
+		case 'H':  /* 'H'omedir required. */
+			acct_ctrl |= ACB_HOMDIRREQ;
+			break;
 
-			case 'T': /* 'T'emp account. */
-			  acct_ctrl |= ACB_TEMPDUP;
-			  break;
+		case 'T': /* 'T'emp account. */
+			acct_ctrl |= ACB_TEMPDUP;
+			break;
 
-			case 'U': /* 'U'ser account (normal). */
-			  acct_ctrl |= ACB_NORMAL;
-			  break;
+		case 'U': /* 'U'ser account (normal). */
+			acct_ctrl |= ACB_NORMAL;
+			break;
 
-			case 'M': /* 'M'NS logon user account. What is this? */
-			  acct_ctrl |= ACB_MNS;
-			  break;
+		case 'M': /* 'M'NS logon user account. What is this? */
+			acct_ctrl |= ACB_MNS;
+			break;
 
-			case 'W': /* 'W'orkstation account. */
-			  acct_ctrl |= ACB_WSTRUST;
-			  break;
+		case 'W': /* 'W'orkstation account. */
+			acct_ctrl |= ACB_WSTRUST;
+			break;
 
-			case 'S': /* 'S'erver account. */
-			  acct_ctrl |= ACB_SVRTRUST;
-			  break;
+		case 'S': /* 'S'erver account. */
+			acct_ctrl |= ACB_SVRTRUST;
+			break;
 
-			case 'L': /* 'L'ocked account. */
-			  acct_ctrl |= ACB_AUTOLOCK;
-			  break;
+		case 'L': /* 'L'ocked account. */
+			acct_ctrl |= ACB_AUTOLOCK;
+			break;
 
-			case 'X': /* No 'X'piry on password */
-			  acct_ctrl |= ACB_PWNOEXP;
-			  break;
+		case 'X': /* No 'X'piry on password */
+			acct_ctrl |= ACB_PWNOEXP;
+			break;
 
-			case 'I': /* 'I'nterdomain trust account. */
-			  acct_ctrl |= ACB_DOMTRUST;
-			  break;
+		case 'I': /* 'I'nterdomain trust account. */
+			acct_ctrl |= ACB_DOMTRUST;
+			break;
 
-			case 'e': /* 'e'xpired, the password has */
-			  acct_ctrl |= ACB_PW_EXPIRED;
-			  break;
+		case 'e': /* 'e'xpired, the password has */
+			acct_ctrl |= ACB_PW_EXPIRED;
+			break;
 
-			case ' ': /* ignore spaces */
-			  break;
+		case ' ': /* ignore spaces */
+			break;
 
-			case ':':
-			case '\n':
-			case '\0':
-			case ']':
-			default:
-			  done = 1;
-			  break;
+		case ':':
+		case '\n':
+		case '\0':
+		case ']':
+		default:
+			done = 1;
+			break;
 		}
 	}
 
@@ -326,7 +326,7 @@ static ssize_t mschap_xlat(void *instance, REQUEST *request,
 		}
 
 		/*
-		 *	For MS-CHAPv1, the NT-Response exists only
+		 *	For MS-CHAPv1, the LM-Response exists only
 		 *	if the second octet says so.
 		 */
 		if ((response->vp_octets[1] & 0x01) != 0) {
@@ -448,7 +448,6 @@ static ssize_t mschap_xlat(void *instance, REQUEST *request,
 		 */
 	} else if (strncasecmp(fmt, "NT-Hash ", 8) == 0) {
 		char const *p;
-		char buf2[1024];
 
 		p = fmt + 8;	/* 7 is the length of 'NT-Hash' */
 		if ((p == '\0')	 || (outlen <= 32))
@@ -456,12 +455,7 @@ static ssize_t mschap_xlat(void *instance, REQUEST *request,
 
 		while (isspace(*p)) p++;
 
-		if (radius_xlat(buf2, sizeof(buf2), request, p, NULL, NULL) < 0) {
-			*buffer = '\0';
-			return 0;
-		}
-
-		if (mschap_ntpwdhash(buffer, buf2) < 0) {
+		if (mschap_ntpwdhash(buffer, p) < 0) {
 			REDEBUG("Failed generating NT-Password");
 			*buffer = '\0';
 			return -1;
@@ -469,7 +463,7 @@ static ssize_t mschap_xlat(void *instance, REQUEST *request,
 
 		fr_bin2hex(out, buffer, NT_DIGEST_LENGTH);
 		out[32] = '\0';
-		RDEBUG("NT-Hash of %s = %s", buf2, out);
+		RDEBUG("NT-Hash of %s = %s", p, out);
 		return 32;
 
 		/*
@@ -477,7 +471,6 @@ static ssize_t mschap_xlat(void *instance, REQUEST *request,
 		 */
 	} else if (strncasecmp(fmt, "LM-Hash ", 8) == 0) {
 		char const *p;
-		char buf2[1024];
 
 		p = fmt + 8;	/* 7 is the length of 'LM-Hash' */
 		if ((p == '\0') || (outlen <= 32))
@@ -485,15 +478,10 @@ static ssize_t mschap_xlat(void *instance, REQUEST *request,
 
 		while (isspace(*p)) p++;
 
-		if (radius_xlat(buf2, sizeof(buf2), request, p, NULL, NULL) < 0) {
-			*buffer = '\0';
-			return 0;
-		}
-
-		smbdes_lmpwdhash(buf2, buffer);
+		smbdes_lmpwdhash(p, buffer);
 		fr_bin2hex(out, buffer, LM_DIGEST_LENGTH);
 		out[32] = '\0';
-		RDEBUG("LM-Hash of %s = %s", buf2, out);
+		RDEBUG("LM-Hash of %s = %s", p, out);
 		return 32;
 	} else {
 		REDEBUG("Unknown expansion string '%s'", fmt);

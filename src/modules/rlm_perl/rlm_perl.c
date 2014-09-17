@@ -340,11 +340,30 @@ static ssize_t perl_xlat(void *instance, REQUEST *request, char const *fmt, char
 
 		PUSHMARK(SP);
 
-		p = fmt;
-		while ((q = strchr(p, ' '))) {
-			XPUSHs(sv_2mortal(newSVpvn(p, p - q)));
+		p = q = fmt;
+		while (*p == ' ') {
+			p++;
+			q++;
+		}
+		while (*q) {
+			if (*q == ' ') {
+				XPUSHs(sv_2mortal(newSVpvn(p, q - p)));
+				p = q + 1;
 
-			p = q + 1;
+				/*
+				 *	Don't use an empty string
+				 */
+				while (*p == ' ') p++;
+				q = p;
+			}
+			q++;
+		}
+
+		/*
+		 *	And the last bit.
+		 */
+		if (*p) {
+			XPUSHs(sv_2mortal(newSVpvn(p, strlen(p))));
 		}
 
 		PUTBACK;
@@ -385,11 +404,9 @@ static void perl_parse_config(CONF_SECTION *cs, int lvl, HV *rad_hv)
 
 	DEBUG("%*s%s {", indent_section, " ", cf_section_name1(cs));
 
-	CONF_ITEM *ci;
+	CONF_ITEM *ci = NULL;
 
-	for (ci = cf_item_find_next(cs, NULL);
-	     ci;
-	     ci = cf_item_find_next(cs, ci)) {
+	while ((ci = cf_item_find_next(cs, ci))) {
 		/*
 		 *  This is a section.
 		 *  Create a new HV, store it as a reference in current HV,
@@ -518,7 +535,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	exitstatus = perl_parse(inst->perl, xs_init, argc, embed, NULL);
 
 	end_AV = PL_endav;
-	PL_endav = Nullav;
+	PL_endav = (AV *)NULL;
 
 	if(!exitstatus) {
 		perl_run(inst->perl);
@@ -924,7 +941,6 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 	}
 
 	switch (acctstatustype) {
-
 	case PW_STATUS_START:
 
 		if (((rlm_perl_t *)instance)->func_start_accounting) {
@@ -946,10 +962,10 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 				       ((rlm_perl_t *)instance)->func_accounting);
 		}
 		break;
+
 	default:
 		return do_perl(instance, request,
 			       ((rlm_perl_t *)instance)->func_accounting);
-
 	}
 }
 

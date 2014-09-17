@@ -81,6 +81,9 @@
 /* Define to 1 if you have the `getaddrinfo' function. */
 #undef HAVE_GETADDRINFO
 
+/* Define to 1 if you have the getgrnam_r. */
+#undef HAVE_GETGRNAM_R
+
 /* Define to 1 if you have the `getnameinfo' function. */
 #undef HAVE_GETNAMEINFO
 
@@ -92,6 +95,9 @@
 
 /* Define to 1 if you have the `getpeereid' function. */
 #undef HAVE_GETPEEREID
+
+/* Define to 1 if you have the getpwnam_r. */
+#undef HAVE_GETPWNAM_R
 
 /* Define to 1 if you have the `getresuid' function. */
 #undef HAVE_GETRESUID
@@ -237,8 +243,8 @@
 /* Define to 1 if you have the <pcap.h> header file. */
 #undef HAVE_PCAP_H
 
-/* define this if we have the <pcreposix.h> header file */
-#undef HAVE_PCREPOSIX_H
+/* define this if we have libpcre */
+#undef HAVE_PCRE
 
 /* Define to 1 if you have the <prot.h> header file. */
 #undef HAVE_PROT_H
@@ -264,8 +270,8 @@
 /* Define to 1 if you have the <readline/readline.h> header file. */
 #undef HAVE_READLINE_READLINE_H
 
-/* define if we have any regex */
-#undef HAVE_REGEX_H
+/* Define if we have any regular expression library */
+#undef HAVE_REGEX
 
 /* define this if we have REG_EXTENDED (from <regex.h>) */
 #undef HAVE_REG_EXTENDED

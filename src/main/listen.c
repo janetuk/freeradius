@@ -72,6 +72,14 @@ static int command_tcp_send(rad_listen_t *listener, REQUEST *request);
 static int command_write_magic(int newfd, listen_socket_t *sock);
 #endif
 
+#ifdef WITH_TCP
+/*
+ *	We want to avoid opening a UDP proxy listener
+ *	when all of the home servers are TCP.
+ */
+extern bool home_servers_udp;
+#endif
+
 static fr_protocol_t master_listen[RAD_LISTEN_MAX];
 
 /*
@@ -896,6 +904,7 @@ int common_socket_parse(CONF_SECTION *cs, rad_listen_t *this)
 	char const	*section_name = NULL;
 	CONF_SECTION	*client_cs, *parentcs;
 	CONF_SECTION	*subcs;
+	CONF_PAIR	*cp;
 
 	this->cs = cs;
 
@@ -1103,12 +1112,9 @@ int common_socket_parse(CONF_SECTION *cs, rad_listen_t *this)
 	 *	If we can bind to interfaces, do so,
 	 *	else don't.
 	 */
-	if (cf_pair_find(cs, "interface")) {
-		char const *value;
-		CONF_PAIR *cp = cf_pair_find(cs, "interface");
-
-		rad_assert(cp != NULL);
-		value = cf_pair_value(cp);
+	cp = cf_pair_find(cs, "interface");
+	if (cp) {
+		char const *value = cf_pair_value(cp);
 		if (!value) {
 			cf_log_err_cs(cs,
 				   "No interface name given");
@@ -1121,23 +1127,20 @@ int common_socket_parse(CONF_SECTION *cs, rad_listen_t *this)
 	/*
 	 *	If we can do broadcasts..
 	 */
-	if (cf_pair_find(cs, "broadcast")) {
+	cp = cf_pair_find(cs, "broadcast");
+	if (cp) {
 #ifndef SO_BROADCAST
 		cf_log_err_cs(cs,
 			   "System does not support broadcast sockets.  Delete this line from the configuration file");
 		return -1;
 #else
-		char const *value;
-		CONF_PAIR *cp = cf_pair_find(cs, "broadcast");
-
 		if (this->type != RAD_LISTEN_DHCP) {
 			cf_log_err_cp(cp,
 				   "Broadcast can only be set for DHCP listeners.  Delete this line from the configuration file");
 			return -1;
 		}
 
-		rad_assert(cp != NULL);
-		value = cf_pair_value(cp);
+		char const *value = cf_pair_value(cp);
 		if (!value) {
 			cf_log_err_cs(cs,
 				   "No broadcast value given");
@@ -1195,6 +1198,11 @@ int common_socket_parse(CONF_SECTION *cs, rad_listen_t *this)
 		}
 	} /* else there was no "clients = " entry. */
 
+	/*
+	 *	The "listen" section wasn't given an explicit client list.
+	 *	Look for (a) clients in this virtual server, or
+	 *	(b) the global client list.
+	 */
 	if (!client_cs) {
 		CONF_SECTION *server_cs;
 
@@ -1356,7 +1364,7 @@ static int stats_socket_recv(rad_listen_t *listener)
 
 	FR_STATS_INC(auth, total_requests);
 
-	if (rcode < 20) {	/* AUTH_HDR_LEN */
+	if (rcode < 20) {	/* RADIUS_HDR_LEN */
 		FR_STATS_INC(auth, total_malformed_requests);
 		return 0;
 	}
@@ -1424,7 +1432,7 @@ static int auth_socket_recv(rad_listen_t *listener)
 
 	FR_STATS_INC(auth, total_requests);
 
-	if (rcode < 20) {	/* AUTH_HDR_LEN */
+	if (rcode < 20) {	/* RADIUS_HDR_LEN */
 		FR_STATS_INC(auth, total_malformed_requests);
 		return 0;
 	}
@@ -1531,7 +1539,7 @@ static int acct_socket_recv(rad_listen_t *listener)
 
 	FR_STATS_INC(acct, total_requests);
 
-	if (rcode < 20) {	/* AUTH_HDR_LEN */
+	if (rcode < 20) {	/* RADIUS_HDR_LEN */
 		FR_STATS_INC(acct, total_malformed_requests);
 		return 0;
 	}
@@ -1711,7 +1719,7 @@ static int rad_coa_recv(REQUEST *request)
 	 *	Copy State from the request to the reply.
 	 *	See RFC 5176 Section 3.3.
 	 */
-	vp = paircopy2(request->reply, request->packet->vps, PW_STATE, 0, TAG_ANY);
+	vp = paircopy_by_num(request->reply, request->packet->vps, PW_STATE, 0, TAG_ANY);
 	if (vp) pairadd(&request->reply->vps, vp);
 
 	/*
@@ -1779,7 +1787,7 @@ static int coa_socket_recv(rad_listen_t *listener)
 	rcode = rad_recv_header(listener->fd, &src_ipaddr, &src_port, &code);
 	if (rcode < 0) return 0;
 
-	if (rcode < 20) {	/* AUTH_HDR_LEN */
+	if (rcode < 20) {	/* RADIUS_HDR_LEN */
 		FR_STATS_INC(coa, total_requests);
 		FR_STATS_INC(coa, total_malformed_requests);
 		return 0;
@@ -1989,10 +1997,34 @@ static int client_socket_encode(UNUSED rad_listen_t *listener, REQUEST *request)
 
 static int client_socket_decode(UNUSED rad_listen_t *listener, REQUEST *request)
 {
+#ifdef WITH_TLS
+	listen_socket_t *sock;
+#endif
+
 	if (rad_verify(request->packet, NULL,
 		       request->client->secret) < 0) {
 		return -1;
 	}
+
+#ifdef WITH_TLS
+	sock = request->listener->data;
+	rad_assert(sock != NULL);
+
+	/*
+	 *	FIXME: Add the rest of the TLS parameters, too?  But
+	 *	how do we separate EAP-TLS parameters from RADIUS/TLS
+	 *	parameters?
+	 */
+	if (sock->ssn && sock->ssn->ssl) {
+#ifdef PSK_MAX_IDENTITY_LEN
+		const char *identity = SSL_get_psk_identity(sock->ssn->ssl);
+		if (identity) {
+			RDEBUG("Retrieved psk identity: %s", identity);
+			pairmake_packet("TLS-PSK-Identity", identity, T_OP_SET);
+		}
+#endif
+	}
+#endif
 
 	return rad_decode(request->packet, NULL,
 			  request->client->secret);
@@ -2609,8 +2641,6 @@ rad_listen_t *proxy_new_listener(home_server_t *home, uint16_t src_port)
 	sock->other_ipaddr = home->ipaddr;
 	sock->other_port = home->port;
 	sock->home = home;
-	if (home->name) /*Not the default proxy listener*/
-		talloc_reference(sock, sock->home); /*In case dynamic home server is freed*/
 
 	sock->my_ipaddr = home->src_ipaddr;
 	sock->my_port = src_port;
@@ -2864,8 +2894,8 @@ static rad_listen_t *listen_parse(CONF_SECTION *cs, char const *server)
 
 
 	server_cs = cf_section_sub_find_name2(main_config.config, "server",
-					      this->server);
-	if (!server_cs) {
+					      this->server);	
+	if (!server_cs && this->server) {
 		cf_log_err_cs(cs, "No such server \"%s\"", this->server);
 		listen_free(&this);
 		return NULL;
@@ -3189,6 +3219,10 @@ add_sockets:
 		}
 	}
 
+#ifdef WITH_TCP
+	if (!home_servers_udp) defined_proxy = true;
+#endif
+
 	/*
 	 *	If we're proxying requests, open the proxy FD.
 	 *	Otherwise, don't do anything.
@@ -3203,7 +3237,7 @@ add_sockets:
 		memset(&home, 0, sizeof(home));
 
 		/*
-		 *
+		 *	Open a default UDP port
 		 */
 		home.proto = IPPROTO_UDP;
 		home.src_ipaddr = server_ipaddr;

@@ -574,10 +574,12 @@ static rlm_rcode_t rlm_sql_process_groups(rlm_sql_t *inst, REQUEST *request, rlm
 		rcode = RLM_MODULE_NOTFOUND;
 		goto finish;
 	}
+	rad_assert(head);
 
 	RDEBUG2("User found in the group table");
 
-	for (entry = head; entry != NULL && (*do_fall_through == FALL_THROUGH_YES); entry = entry->next) {
+	entry = head;
+	do {
 		/*
 		 *	Add the Sql-Group attribute to the request list so we know
 		 *	which group we're retrieving attributes for
@@ -655,10 +657,10 @@ static rlm_rcode_t rlm_sql_process_groups(rlm_sql_t *inst, REQUEST *request, rlm
 		}
 
 		pairdelete(&request->packet->vps, PW_SQL_GROUP, 0, TAG_ANY);
-	}
+		entry = entry->next;
+	} while (entry != NULL && (*do_fall_through == FALL_THROUGH_YES));
 
-	finish:
-
+finish:
 	talloc_free(head);
 	pairdelete(&request->packet->vps, PW_SQL_GROUP, 0, TAG_ANY);
 
@@ -1012,27 +1014,27 @@ skipreply:
 		RDEBUG3("... falling-through to group processing");
 		ret = rlm_sql_process_groups(inst, request, &handle, &do_fall_through);
 		switch (ret) {
-			/*
-			 *	Nothing bad happened, continue...
-			 */
-			case RLM_MODULE_UPDATED:
-				rcode = RLM_MODULE_UPDATED;
-				/* FALL-THROUGH */
-			case RLM_MODULE_OK:
-				if (rcode != RLM_MODULE_UPDATED) {
-					rcode = RLM_MODULE_OK;
-				}
-				/* FALL-THROUGH */
-			case RLM_MODULE_NOOP:
-				user_found = true;
-				break;
+		/*
+		 *	Nothing bad happened, continue...
+		 */
+		case RLM_MODULE_UPDATED:
+			rcode = RLM_MODULE_UPDATED;
+			/* FALL-THROUGH */
+		case RLM_MODULE_OK:
+			if (rcode != RLM_MODULE_UPDATED) {
+				rcode = RLM_MODULE_OK;
+			}
+			/* FALL-THROUGH */
+		case RLM_MODULE_NOOP:
+			user_found = true;
+			break;
 
-			case RLM_MODULE_NOTFOUND:
-				break;
+		case RLM_MODULE_NOTFOUND:
+			break;
 
-			default:
-				rcode = ret;
-				goto release;
+		default:
+			rcode = ret;
+			goto release;
 		}
 	}
 
@@ -1067,27 +1069,27 @@ skipreply:
 
 		ret = rlm_sql_process_groups(inst, request, &handle, &do_fall_through);
 		switch (ret) {
-			/*
-			 *	Nothing bad happened, continue...
-			 */
-			case RLM_MODULE_UPDATED:
-				rcode = RLM_MODULE_UPDATED;
-				/* FALL-THROUGH */
-			case RLM_MODULE_OK:
-				if (rcode != RLM_MODULE_UPDATED) {
-					rcode = RLM_MODULE_OK;
-				}
-				/* FALL-THROUGH */
-			case RLM_MODULE_NOOP:
-				user_found = true;
-				break;
+		/*
+		 *	Nothing bad happened, continue...
+		 */
+		case RLM_MODULE_UPDATED:
+			rcode = RLM_MODULE_UPDATED;
+			/* FALL-THROUGH */
+		case RLM_MODULE_OK:
+			if (rcode != RLM_MODULE_UPDATED) {
+				rcode = RLM_MODULE_OK;
+			}
+			/* FALL-THROUGH */
+		case RLM_MODULE_NOOP:
+			user_found = true;
+			break;
 
-			case RLM_MODULE_NOTFOUND:
-				break;
+		case RLM_MODULE_NOTFOUND:
+			break;
 
-			default:
-				rcode = ret;
-				goto release;
+		default:
+			rcode = ret;
+			goto release;
 		}
 	}
 

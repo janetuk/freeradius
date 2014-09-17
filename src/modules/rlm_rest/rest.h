@@ -114,6 +114,7 @@ typedef struct rlm_rest_section_t {
 	char const		*body_str;	//!< The string version of the encoding/content type.
 	http_body_type_t	body;		//!< What encoding type should be used.
 
+	char const		*force_to_str;	//!< Force decoding with this decoder.
 	http_body_type_t	force_to;	//!< Override the Content-Type header in the response
 						//!< to force decoding as a particular type.
 
@@ -164,6 +165,7 @@ typedef enum {
 	READ_STATE_INIT	= 0,
 	READ_STATE_ATTR_BEGIN,
 	READ_STATE_ATTR_CONT,
+	READ_STATE_ATTR_END,
 	READ_STATE_END,
 } read_state_t;
 
@@ -268,6 +270,8 @@ int rest_request_perform(rlm_rest_t *instance,
 int rest_response_decode(rlm_rest_t *instance,
 			UNUSED rlm_rest_section_t *section, REQUEST *request,
 			void *handle);
+
+void rest_response_error(REQUEST *request, rlm_rest_handle_t *handle);
 
 void rest_request_cleanup(rlm_rest_t *instance, rlm_rest_section_t *section,
 			  void *handle);

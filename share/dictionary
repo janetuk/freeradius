@@ -111,6 +111,7 @@ $INCLUDE dictionary.rfc6911
 $INCLUDE dictionary.rfc6929
 $INCLUDE dictionary.rfc6930
 $INCLUDE dictionary.rfc7055
+$INCLUDE dictionary.rfc7268
 
 #
 #	Mostly values which have been allocated by IANA under
@@ -159,8 +160,10 @@ $INCLUDE dictionary.cisco.asa
 #$INCLUDE dictionary.cisco.vpn3000
 $INCLUDE dictionary.cisco.vpn5000
 $INCLUDE dictionary.cisco.bbsm
+$INCLUDE dictionary.citrix
 $INCLUDE dictionary.clavister
 $INCLUDE dictionary.colubris
+$INCLUDE dictionary.compatible
 $INCLUDE dictionary.cosine
 $INCLUDE dictionary.dante
 $INCLUDE dictionary.dlink
@@ -231,8 +234,10 @@ $INCLUDE dictionary.quiconnect
 $INCLUDE dictionary.quintum
 $INCLUDE dictionary.redback
 $INCLUDE dictionary.redcreek
+$INCLUDE dictionary.riverbed
 $INCLUDE dictionary.riverstone
 $INCLUDE dictionary.roaringpenguin
+$INCLUDE dictionary.ruckus
 $INCLUDE dictionary.shasta
 $INCLUDE dictionary.sg
 $INCLUDE dictionary.shiva

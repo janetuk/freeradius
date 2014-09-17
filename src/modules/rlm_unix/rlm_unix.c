@@ -70,6 +70,36 @@ static const CONF_PARSER module_config[] = {
 };
 
 
+#ifndef HAVE_GETGRNAM_R
+#define fr_getgrnam(_a, _b) getgrnam(_b)
+#else
+static struct group *fr_getgrnam(TALLOC_CTX *ctx, char const *name)
+{
+	struct group	*grp, my_group;
+	char		*group_buffer;
+	size_t		group_size = 1024;
+
+	grp = NULL;
+	group_buffer = talloc_array(ctx, char, group_size);
+	while (group_buffer) {
+		int err;
+
+		err = getgrnam_r(name, &my_group, group_buffer, group_size, &grp);
+		if (err == ERANGE) {
+			group_size *= 2;
+			talloc_free(group_buffer);
+			group_buffer = talloc_array(ctx, char, group_size);
+			continue;
+		}
+
+		if (err) errno = err; /* so the caller knows what went wrong */
+		break;
+	}
+
+	return grp;
+}
+#endif	/* HAVE_GETGRNAM_R */
+
 /*
  *	The Group = handler.
  */
@@ -81,6 +111,10 @@ static int groupcmp(UNUSED void *instance, REQUEST *req, UNUSED VALUE_PAIR *requ
 	struct group	*grp;
 	char		**member;
 	int		retval;
+#ifdef HAVE_GETPWNAM_R
+	struct passwd	my_pwd;
+	char		pwd_buffer[1024];
+#endif
 
 	/*
 	 *	No user name, doesn't compare.
@@ -89,11 +123,17 @@ static int groupcmp(UNUSED void *instance, REQUEST *req, UNUSED VALUE_PAIR *requ
 		return -1;
 	}
 
+#ifdef HAVE_GETPWNAM_R
+	if (getpwnam_r(req->username->vp_strvalue, &my_pwd, pwd_buffer, sizeof(pwd_buffer), &pwd) != 0) {
+		pwd = NULL;
+	}
+#else
 	pwd = getpwnam(req->username->vp_strvalue);
+#endif
 	if (!pwd)
 		return -1;
 
-	grp = getgrnam(check->vp_strvalue);
+	grp = fr_getgrnam(req, check->vp_strvalue);
 	if (!grp)
 		return -1;
 
@@ -104,6 +144,7 @@ static int groupcmp(UNUSED void *instance, REQUEST *req, UNUSED VALUE_PAIR *requ
 				retval = 0;
 		}
 	}
+
 	return retval;
 }
 
@@ -399,32 +440,35 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 	     vp;
 	     vp = fr_cursor_next(&cursor)) {
 		if (!vp->da->vendor) switch (vp->da->attr) {
-			case PW_USER_NAME:
-				if (vp->length >= sizeof(ut.ut_name)) {
-					memcpy(ut.ut_name, vp->vp_strvalue, sizeof(ut.ut_name));
-				} else {
-					strlcpy(ut.ut_name, vp->vp_strvalue, sizeof(ut.ut_name));
-				}
-				break;
-			case PW_LOGIN_IP_HOST:
-			case PW_FRAMED_IP_ADDRESS:
-				framed_address = vp->vp_ipaddr;
+		case PW_USER_NAME:
+			if (vp->length >= sizeof(ut.ut_name)) {
+				memcpy(ut.ut_name, vp->vp_strvalue, sizeof(ut.ut_name));
+			} else {
+				strlcpy(ut.ut_name, vp->vp_strvalue, sizeof(ut.ut_name));
+			}
+			break;
+
+		case PW_LOGIN_IP_HOST:
+		case PW_FRAMED_IP_ADDRESS:
+			framed_address = vp->vp_ipaddr;
 				break;
 #ifdef USER_PROCESS
-			case PW_FRAMED_PROTOCOL:
-				protocol = vp->vp_integer;
-				break;
+		case PW_FRAMED_PROTOCOL:
+			protocol = vp->vp_integer;
+			break;
 #endif
-			case PW_NAS_IP_ADDRESS:
-				nas_address = vp->vp_ipaddr;
-				break;
-			case PW_NAS_PORT:
-				nas_port = vp->vp_integer;
-				port_seen = true;
-				break;
-			case PW_ACCT_DELAY_TIME:
-				delay = vp->vp_ipaddr;
-				break;
+		case PW_NAS_IP_ADDRESS:
+			nas_address = vp->vp_ipaddr;
+			break;
+
+		case PW_NAS_PORT:
+			nas_port = vp->vp_integer;
+			port_seen = true;
+			break;
+
+		case PW_ACCT_DELAY_TIME:
+			delay = vp->vp_ipaddr;
+			break;
 		}
 	}
 

@@ -1,10 +1,18 @@
 #
+#  ABFAB Trust router policies.
+#
+#	$Id$
+#
+
+
+#
 # Verify rp parameters
 #
 psk_authorize {
-	if (tls-psk-identity =* ANY) {
-		# TODO: may need to check moonshot-apc as well
+	if (TLS-PSK-Identity) {
+		# TODO: may need to check trust-router-apc as well
 		if ("%{psksql:select distinct keyid from authorizations_keys where keyid = '%{tls-psk-identity}' and '%{trust-router-coi}' like coi and '%{gss-acceptor-realm-name}' like acceptor_realm and '%{gss-acceptor-host-name}' like hostname;}") {
+			# do things here
 		}
 		else {
 			reject
@@ -13,36 +21,39 @@ psk_authorize {
 }
 
 abfab_pre_proxy {
-	# check acceptor host name is correct
+	# check that the acceptor host name is correct
 	if ("%{client:gss_acceptor_host_name}" && "%{gss-acceptor-host-name}") {
 		if ("%{client:gss_acceptor_host_name}" != "%{gss-acceptor-host-name}") {
 			reject
 		}
 	}
-	# set trust-router-coi attribute from client configuration
+
+	# set trust-router-coi attribute from the client configuration
 	if ("%{client:trust_router_coi}") {
-		update request {
-			trust-router-coi := "%{client:trust_router_coi}"
+		update proxy-request {
+			Trust-Router-COI := "%{client:trust_router_coi}"
 		}
 	}
-	# set gss-acceptor-realm-name attribute from client configuration
+
+	# set gss-acceptor-realm-name attribute from the client configuration
 	if ("%{client:gss_acceptor_realm_name}") {
-		update request {
-			gss-acceptor-realm-name := "%{client:gss_acceptor_realm_name}"
+		update proxy-request {
+			GSS-Acceptor-Realm-Name := "%{client:gss_acceptor_realm_name}"
 		}
 	}
 }
 
-#
-#  A virtual server which is used to validate channel-bindings.
+#  A policy which is used to validate channel-bindings.
 #
 abfab_channel_bindings {
 	if (GSS-Acceptor-Service-Name && (outer.request:GSS-Acceptor-Service-Name != GSS-Acceptor-Service-Name)) {
 		reject
 	}
+
 	if (GSS-Acceptor-Host-Name && outer.request:GSS-Acceptor-Host-Name != GSS-Acceptor-Host-Name ) {
 		reject
 	}
+
 	if (GSS-Acceptor-Realm-Name && outer.request:GSS-Acceptor-Realm-Name != GSS-Acceptor-Realm-Name ) {
 		reject
 	}

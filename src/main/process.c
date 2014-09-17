@@ -1211,31 +1211,6 @@ STATE_MACHINE_DECL(request_response_delay)
 	}
 }
 
-static void retrieve_tls_identity(REQUEST *request)
-{
-	/* 
-	 * copy tls identity from sock vps to new request
-	 */
-	listen_socket_t *sock = NULL;
-#ifdef WITH_ACCOUNTING
-	if (request->listener->type != RAD_LISTEN_DETAIL)
-#endif
-	{
-		sock = request->listener->data;
-	}
-
-	if (sock && sock->ssn && sock->ssn->ssl) {
-		const char *identity = SSL_get_psk_identity(sock->ssn->ssl);
-		if (identity) {
-			RDEBUG("Retrieved psk identity: %s", identity);
-			VALUE_PAIR *vp = pairmake_packet("TLS-PSK-Identity", identity, T_OP_SET);
-			if (vp) {
-				RDEBUG("Set tls-psk-identity: %s", identity);
-			}
-		}
-	}
-}
-
 
 static int CC_HINT(nonnull) request_pre_handler(REQUEST *request, UNUSED int action)
 {
@@ -1259,8 +1234,6 @@ static int CC_HINT(nonnull) request_pre_handler(REQUEST *request, UNUSED int act
 	}
 
 	if (!request->packet->vps) { /* FIXME: check for correct state */
-		retrieve_tls_identity(request);
-
 		rcode = request->listener->decode(request->listener, request);
 
 #ifdef WITH_UNLANG
@@ -1364,7 +1337,7 @@ STATE_MACHINE_DECL(request_finish)
 	/*
 	 *	Copy Proxy-State from the request to the reply.
 	 */
-	vp = paircopy2(request->reply, request->packet->vps,
+	vp = paircopy_by_num(request->reply, request->packet->vps,
 		       PW_PROXY_STATE, 0, TAG_ANY);
 	if (vp) pairadd(&request->reply->vps, vp);
 
@@ -1539,7 +1512,7 @@ STATE_MACHINE_DECL(request_running)
 			 *	up the post proxy fail
 			 *	handler.
 			 */
-			if (request_proxy(request, 0) < 0) goto finished;
+			if (request_proxy(request, 0) < 0) goto req_finished;
 		} else
 #endif
 		{
@@ -1557,7 +1530,7 @@ STATE_MACHINE_DECL(request_running)
 #endif
 
 #ifdef WITH_PROXY
-		finished:
+		req_finished:
 #endif
 			request_finish(request, action);
 		}
@@ -1701,7 +1674,6 @@ skip_dup:
 	}
 
 	request = request_setup(listener, packet, client, fun);
-
 	if (!request) return 1;
 
 	/*
@@ -2214,7 +2186,7 @@ static int process_proxy_reply(REQUEST *request, RADIUS_PACKET *reply)
 	/*
 	 *	There may be a proxy reply, but it may be too late.
 	 */
-	if (!request->proxy_listener) return 0;
+	if (!request->home_server->server && !request->proxy_listener) return 0;
 
 	/*
 	 *	Delete any reply we had accumulated until now.
@@ -2252,21 +2224,26 @@ static int process_proxy_reply(REQUEST *request, RADIUS_PACKET *reply)
 
 	if (reply) {
 		VERIFY_PACKET(reply);
-		/*
-		 *	Decode the packet.
-		 */
-		rcode = request->proxy_listener->decode(request->proxy_listener, request);
-		DEBUG_PACKET(request, reply, 0);
 
 		/*
-		 *	Pro-actively remove it from the proxy hash.
-		 *	This is later than in 2.1.x, but it means that
-		 *	the replies are authenticated before being
-		 *	removed from the hash.
+		 *	Decode the packet if required.
 		 */
-		if ((rcode == 0) &&
-		    (request->num_proxied_requests <= request->num_proxied_responses)) {
-			remove_from_proxy_hash(request);
+		if (request->proxy_listener) {
+			rcode = request->proxy_listener->decode(request->proxy_listener, request);
+			DEBUG_PACKET(request, reply, 0);
+
+			/*
+			 *	Pro-actively remove it from the proxy hash.
+			 *	This is later than in 2.1.x, but it means that
+			 *	the replies are authenticated before being
+			 *	removed from the hash.
+			 */
+			if ((rcode == 0) &&
+			    (request->num_proxied_requests <= request->num_proxied_responses)) {
+				remove_from_proxy_hash(request);
+			}
+		} else {
+			rad_assert(!request->in_proxy_hash);
 		}
 	} else {
 		remove_from_proxy_hash(request);
@@ -2670,7 +2647,7 @@ static int request_will_proxy(REQUEST *request)
 	 *	Doing it here catches the case of proxied tunneled
 	 *	requests.
 	 */
-	if (realm && (realm->striprealm == true) &&
+	if (realm && (realm->strip_realm == true) &&
 	   (strippedname = pairfind(request->proxy->vps, PW_STRIPPED_USER_NAME, 0, TAG_ANY)) != NULL) {
 		/*
 		 *	If there's a Stripped-User-Name attribute in
@@ -2694,7 +2671,7 @@ static int request_will_proxy(REQUEST *request)
 			/* Insert at the START of the list */
 			/* FIXME: Can't make assumptions about ordering */
 			fr_cursor_init(&cursor, &vp);
-			fr_cursor_insert(&cursor, request->proxy->vps);
+			fr_cursor_merge(&cursor, request->proxy->vps);
 			request->proxy->vps = vp;
 		}
 		pairstrcpy(vp, strippedname->vp_strvalue);
@@ -4272,6 +4249,7 @@ static int event_new_fd(rad_listen_t *this)
 	if (this->status == RAD_LISTEN_STATUS_INIT) {
 		listen_socket_t *sock = this->data;
 
+		rad_assert(sock != NULL);
 		if (just_started) {
 			DEBUG("Listening on %s", buffer);
 
@@ -4286,7 +4264,7 @@ static int event_new_fd(rad_listen_t *this)
 				INFO(" ... adding new socket %s (%u of %u)", buffer,
 				     home->limit.num_connections, home->limit.max_connections);
 			}
-		
+
 #endif
 		} else {
 			INFO(" ... adding new socket %s", buffer);
@@ -4320,6 +4298,8 @@ static int event_new_fd(rad_listen_t *this)
 		 */
 		case RAD_LISTEN_PROXY:
 #ifdef WITH_TCP
+			rad_assert(sock->home != NULL);
+
 			/*
 			 *	Add timers to outgoing child sockets, if necessary.
 			 */

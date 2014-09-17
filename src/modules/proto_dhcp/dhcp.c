@@ -597,7 +597,7 @@ static int fr_dhcp_decode_vsa(VALUE_PAIR **tlv, TALLOC_CTX *ctx, uint8_t const *
 			return -1;
 		}
 
-		fr_cursor_insert(&cursor, vp);
+		fr_cursor_merge(&cursor, vp);
 
 		p += 4 + 1 + p[4];	/* vendor id (4) + len (1) + vsa len (n) */
 	}
@@ -620,7 +620,7 @@ static int fr_dhcp_decode_vsa(VALUE_PAIR **tlv, TALLOC_CTX *ctx, uint8_t const *
 		 *	->next directly.
 		 */
 		fr_cursor_init(&tlv_cursor, tlv);
-		fr_cursor_insert(&tlv_cursor, head);
+		fr_cursor_merge(&tlv_cursor, head);
 	}
 
 	return 0;
@@ -750,7 +750,7 @@ static int fr_dhcp_decode_suboption(VALUE_PAIR **tlv, TALLOC_CTX *ctx, uint8_t c
 				pairfree(&head);
 				goto malformed;
 			}
-			fr_cursor_insert(&cursor, vp);
+			fr_cursor_merge(&cursor, vp);
 
 			a_p += a_len;
 		}
@@ -775,7 +775,7 @@ static int fr_dhcp_decode_suboption(VALUE_PAIR **tlv, TALLOC_CTX *ctx, uint8_t c
 		 *	->next directly.
 		 */
 		fr_cursor_init(&tlv_cursor, tlv);
-		fr_cursor_insert(&tlv_cursor, head);
+		fr_cursor_merge(&tlv_cursor, head);
 	}
 
 	return 0;
@@ -951,6 +951,13 @@ ssize_t fr_dhcp_decode_options(VALUE_PAIR **out, TALLOC_CTX *ctx, uint8_t const 
 
 		if ((p + 2) > q) break;
 
+		a_len = p[1];
+		a_p = p + 2;
+
+		/*
+		 *	Unknown attribute, create an octets type
+		 *	attribute with the contents of the sub-option.
+		 */
 		da = dict_attrbyvalue(p[0], DHCP_MAGIC_VENDOR);
 		if (!da) {
 			da = dict_attrunknown(p[0], DHCP_MAGIC_VENDOR, true);
@@ -958,11 +965,21 @@ ssize_t fr_dhcp_decode_options(VALUE_PAIR **out, TALLOC_CTX *ctx, uint8_t const 
 				pairfree(out);
 				return -1;
 			}
+			vp = pairalloc(ctx, da);
+			if (!vp) {
+				pairfree(out);
+				return -1;
+			}
+			pairmemcpy(vp, a_p, a_len);
+			fr_cursor_insert(&cursor, vp);
+
 			goto next;
 		}
 
-		a_len = p[1];
-		a_p = p + 2;
+		/*
+		 *	Array type sub-option create a new VALUE_PAIR
+		 *	for each array element.
+		 */
 		num_entries = fr_dhcp_array_members(&a_len, da);
 		for (i = 0; i < num_entries; i++) {
 			vp = pairalloc(ctx, da);
@@ -1117,9 +1134,7 @@ int fr_dhcp_decode(RADIUS_PACKET *packet)
 			return -1;
 		}
 
-		if (options) {
-			fr_cursor_insert(&cursor, options);
-		}
+		if (options) fr_cursor_merge(&cursor, options);
 	}
 
 	/*
@@ -1322,7 +1337,7 @@ static VALUE_PAIR *fr_dhcp_vp2suboption(TALLOC_CTX *ctx, vp_cursor_t *cursor)
 		tlv->length += vp->length;
 	}
 
-	tlv->vp_tlv = talloc_array(tlv, uint8_t, tlv->length);
+	tlv->vp_tlv = talloc_zero_array(tlv, uint8_t, tlv->length);
 	if (!tlv->vp_tlv) {
 		talloc_free(tlv);
 		return NULL;
@@ -1474,7 +1489,7 @@ int fr_dhcp_encode(RADIUS_PACKET *packet)
 
 	/* XXX Ugly ... should be set by the caller */
 	if (packet->code == 0) packet->code = PW_DHCP_NAK;
-	
+
 	/* store xid */
 	if ((vp = pairfind(packet->vps, 260, DHCP_MAGIC_VENDOR, TAG_ANY))) {
 		packet->id = vp->vp_integer;

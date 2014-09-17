@@ -1,20 +1,21 @@
 AC_PREREQ([2.53])
-AC_INIT(rlm_wimax.c)
+AC_INIT(rlm_realm.c)
 AC_REVISION($Revision$)
-AC_DEFUN(modname,[rlm_wimax])
+AC_DEFUN(modname,[rlm_realm])
 
 if test x$with_[]modname != xno; then
-
 	AC_PROG_CC
 	AC_PROG_CPP
 
-	dnl put configuration checks here.
-	dnl set $fail to what's missing, on fatal errors.
-	dnl use AC_MSG_WARN() on important messages.
-	AC_CHECK_HEADER(openssl/hmac.h,
-		[ mod_cflags="$mod_cflags" ],
-		[ fail=$fail" openssl/hmac.h" ]
-	)
+	FR_SMART_CHECK_LIB(tr_tid, tidc_create)
+	FR_SMART_CHECK_INCLUDE(trust_router/tr_dh.h)
+
+	if test "x$ac_cv_lib_tr_tid_tidc_create" != "x"; then
+		if test "x$ac_cv_header_trust_router_tr_dh_h" != "x"; then
+			SMART_CPPFLAGS="$SMART_CPPFLAGS -DHAVE_TRUSTROUTER_TR_DH_H"
+			trustrouter=yes
+		fi
+	fi
 
 	targetname=modname
 else
@@ -22,7 +23,6 @@ else
 	echo \*\*\* module modname is disabled.
 fi
 
-dnl  Don't change this section.
 if test x"$fail" != x""; then
 	if test x"${enable_strict_dependencies}" = x"yes"; then
 		AC_MSG_ERROR([set --without-]modname[ to disable it explicitly.])
@@ -33,9 +33,12 @@ if test x"$fail" != x""; then
 	fi
 fi
 
+mod_ldflags="${SMART_LIBS}"
+mod_cflags="${SMART_CPPFLAGS}"
 
 AC_SUBST(mod_cflags)
 AC_SUBST(mod_ldflags)
+AC_SUBST(trustrouter)
 
 AC_SUBST(targetname)
 AC_OUTPUT(all.mk)

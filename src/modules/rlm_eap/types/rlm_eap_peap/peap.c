@@ -230,7 +230,6 @@ static int eapmessage_verify(REQUEST *request,
 		RDEBUG2("Identity - %*s",
 		       data_len - 1, data + 1);
 		return 1;
-		break;
 
 		/*
 		 *	If the first byte of the packet is
@@ -683,22 +682,29 @@ static int CC_HINT(nonnull) eappeap_postproxy(eap_handler_t *handler, void *data
 static char const *peap_state(peap_tunnel_t *t)
 {
 	switch (t->status) {
-		case PEAP_STATUS_TUNNEL_ESTABLISHED:
-			return "TUNNEL ESTABLISHED";
-		case PEAP_STATUS_WAIT_FOR_SOH_RESPONSE:
-			return "WAITING FOR SOH RESPONSE";
-		case PEAP_STATUS_INNER_IDENTITY_REQ_SENT:
-			return "WAITING FOR INNER IDENTITY";
-		case PEAP_STATUS_SENT_TLV_SUCCESS:
-			return "send tlv success";
-		case PEAP_STATUS_SENT_TLV_FAILURE:
-			return "send tlv failure";
-		case PEAP_STATUS_PHASE2_INIT:
-			return "phase2_init";
-		case PEAP_STATUS_PHASE2:
-			return "phase2";
-		default:
-			break;
+	case PEAP_STATUS_TUNNEL_ESTABLISHED:
+		return "TUNNEL ESTABLISHED";
+
+	case PEAP_STATUS_WAIT_FOR_SOH_RESPONSE:
+		return "WAITING FOR SOH RESPONSE";
+
+	case PEAP_STATUS_INNER_IDENTITY_REQ_SENT:
+		return "WAITING FOR INNER IDENTITY";
+
+	case PEAP_STATUS_SENT_TLV_SUCCESS:
+		return "send tlv success";
+
+	case PEAP_STATUS_SENT_TLV_FAILURE:
+		return "send tlv failure";
+
+	case PEAP_STATUS_PHASE2_INIT:
+		return "phase2_init";
+
+	case PEAP_STATUS_PHASE2:
+		return "phase2";
+
+	default:
+		break;
 	}
 	return "?";
 }
@@ -1298,7 +1304,7 @@ static int CC_HINT(nonnull) setup_fake_request(REQUEST *request, REQUEST *fake, 
 			 *	Don't copy from the head, we've already
 			 *	checked it.
 			 */
-			copy = paircopy2(fake->packet, vp, vp->da->attr, vp->da->vendor, TAG_ANY);
+			copy = paircopy_by_num(fake->packet, vp, vp->da->attr, vp->da->vendor, TAG_ANY);
 			pairadd(&fake->packet->vps, copy);
 		}
 	}

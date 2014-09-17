@@ -353,7 +353,7 @@ static void rs_packet_print_csv(uint64_t count, rs_status_t status, fr_pcap_t *h
 		len = snprintf(p, s, "%s,%s,%s,%i,%s,%i,%i,", fr_packet_codes[packet->code], handle->name,
 			       src, packet->src_port, dst, packet->dst_port, packet->id);
 	} else {
-		len = snprintf(p, s, "%i,%s,%s,%i,%s,%i,%i,", packet->code, handle->name,
+		len = snprintf(p, s, "%u,%s,%s,%i,%s,%i,%i,", packet->code, handle->name,
 			       src, packet->src_port, dst, packet->dst_port, packet->id);
 	}
 	p += len;
@@ -443,7 +443,7 @@ static void rs_packet_print_fancy(uint64_t count, rs_status_t status, fr_pcap_t 
 			       response ? src : dst ,
 			       response ? packet->src_port : packet->dst_port);
 	} else {
-		len = snprintf(p, s, "%i Id %i %s:%s:%i %s %s:%i ",
+		len = snprintf(p, s, "%u Id %i %s:%s:%i %s %s:%i ",
 			       packet->code,
 			       packet->id,
 			       handle->name,
@@ -931,7 +931,9 @@ static inline int rs_response_to_pcap(rs_event_t *event, rs_request_t *request, 
 			TALLOC_FREE(request->capture_p->data);
 
 			/* Reset the pointer to the start of the circular buffer */
-			if (request->capture_p++ >= (request->capture + sizeof(request->capture))) {
+			if (request->capture_p++ >=
+					(request->capture +
+					 sizeof(request->capture) / sizeof(*request->capture))) {
 				request->capture_p = request->capture;
 			}
 		} while (request->capture_p != start);
@@ -969,7 +971,9 @@ static inline int rs_request_to_pcap(rs_event_t *event, rs_request_t *request, s
 		memcpy(request->capture_p->data, data, header->caplen);
 
 		/* Reset the pointer to the start of the circular buffer */
-		if (++request->capture_p >= (request->capture + sizeof(request->capture))) {
+		if (++request->capture_p >=
+				(request->capture +
+				 sizeof(request->capture) / sizeof(*request->capture))) {
 			request->capture_p = request->capture;
 		}
 		return 0;
@@ -1026,7 +1030,7 @@ static void rs_packet_process(uint64_t count, rs_event_t *event, struct pcap_pkt
 		rs_time_print(timestr, sizeof(timestr), &header->ts);
 	}
 
-	len = fr_pcap_link_layer_offset(data, header->caplen, event->in->link_type);
+	len = fr_link_layer_offset(data, header->caplen, event->in->link_type);
 	if (len < 0) {
 		REDEBUG("Failed determining link layer header offset");
 		return;
