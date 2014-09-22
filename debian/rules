@@ -104,12 +104,12 @@ endif
 build: patch build-arch build-indep
 
 build-arch: build-arch-stamp patch
-build-arch-stamp: config.status
+build-arch-stamp: config.status patch
 	$(MAKE)
 	touch $@
 
 build-indep: build-indep-stamp
-build-indep-stamp: config.status
+build-indep-stamp: config.status patch
 	touch $@
 
 clean: unpatch
