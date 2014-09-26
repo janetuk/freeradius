@@ -58,7 +58,7 @@ endif
 
 include /usr/share/quilt/quilt.make
 
-config.status: configure
+config.status: patch configure
 	dh_testdir
 
 ifeq (config.sub.dist,$(wildcard config.sub.dist))
@@ -104,7 +104,7 @@ endif
 build: patch build-arch build-indep
 
 build-arch: build-arch-stamp patch
-build-arch-stamp: config.status patch
+build-arch-stamp: config.status 
 	$(MAKE)
 	touch $@
 
