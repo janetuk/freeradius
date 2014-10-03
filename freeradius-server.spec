@@ -71,6 +71,7 @@ done when adding or deleting new users.
 Group: System Environment/Daemons
 Summary: FreeRADIUS ABFAb Configuration
 Requires: %{name} = %{version}-%{release}
+Requires: freeradius-sqlite
 
 %description abfab
 This package provides configuration required by an ABFAB (RFC 7055)
