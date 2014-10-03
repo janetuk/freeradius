@@ -4337,7 +4337,8 @@ static int event_new_fd(rad_listen_t *this)
 
 				if (!fr_event_insert(el, tcp_socket_timer, this, &when,
 						     &(sock->ev))) {
-					rad_panic("Failed to insert event");
+					ERROR("Failed adding timer for socket: %s", fr_strerror());
+					fr_exit(1);
 				}
 			}
 #endif
@@ -4349,7 +4350,7 @@ static int event_new_fd(rad_listen_t *this)
 		 */
 		if (!fr_event_fd_insert(el, 0, this->fd,
 					event_socket_handler, this)) {
-			ERROR("Failed adding event handler for socket!");
+			ERROR("Failed adding event handler for socket: %s", fr_strerror());
 			fr_exit(1);
 		}
 
