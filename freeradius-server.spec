@@ -267,6 +267,7 @@ chrpath --delete $RPM_BUILD_ROOT/%{_libdir}/freeradius/rlm_sql_postgresql.so
 rm -rf $RPM_BUILD_ROOT/etc/raddb/mods-available/couchbase
 
 rm -rf $RPM_BUILD_ROOT/etc/raddb/mods-config/sql/main/mssql
+rm -rf $RPM_BUILD_ROOT/etc/raddb/mods-available/eap.orig
 
 rm -rf $RPM_BUILD_ROOT/etc/raddb/mods-config/sql/ippool/oracle
 rm -rf $RPM_BUILD_ROOT/etc/raddb/mods-config/sql/ippool-dhcp/oracle
@@ -540,6 +541,7 @@ exit 0
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/canonicalization
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/control
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/cui
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/debug
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/dhcp
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/eap
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/filter
@@ -718,7 +720,7 @@ exit 0
 
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/ippool-dhcp/mysql
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/ippool-dhcp/mysql/queries.conf
-
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/ippool-dhcp/mysql/schema.sql
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main/mysql
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/main/mysql/setup.sql
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/main/mysql/queries.conf
