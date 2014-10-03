@@ -11,6 +11,8 @@ case "$1" in
 	    for foo in abfab_psk_sql ; do
 		test -e /etc/freeradius/mods-enabled/$foo || ln -s ../mods-available/$foo /etc/freeradius/mods-enabled
 		done
+	    adduser --quiet freerad trustrouter 2>/dev/null ||true
+	    adduser --quiet trustrouter freerad 2>/dev/null ||true
 	    fi
 	;;
     esac

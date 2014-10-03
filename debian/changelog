@@ -1,3 +1,9 @@
+freeradius (3.0.4+moonshot1-4) unstable; urgency=medium
+
+  * Add freerad and trustrouter to each others' groups
+
+ -- Sam Hartman <hartmans@debian.org>  Fri, 03 Oct 2014 10:41:53 -0400
+
 freeradius (3.0.4+moonshot1-3) unstable; urgency=medium
 
   * No, config.status rather than build-arch-stamp needs to depend on patch
