@@ -1,7 +1,7 @@
 Summary: High-performance and highly configurable free RADIUS server
 Name: freeradius
 Version: 3.0.4
-Release: 2%{?dist}
+Release: 4%{?dist}
 License: GPLv2+ and LGPLv2+
 Group: System Environment/Daemons
 URL: http://www.freeradius.org/
@@ -71,6 +71,7 @@ done when adding or deleting new users.
 Group: System Environment/Daemons
 Summary: FreeRADIUS ABFAb Configuration
 Requires: %{name} = %{version}-%{release}
+Requires: freeradius-sqlite
 
 %description abfab
 This package provides configuration required by an ABFAB (RFC 7055)
@@ -267,6 +268,7 @@ chrpath --delete $RPM_BUILD_ROOT/%{_libdir}/freeradius/rlm_sql_postgresql.so
 rm -rf $RPM_BUILD_ROOT/etc/raddb/mods-available/couchbase
 
 rm -rf $RPM_BUILD_ROOT/etc/raddb/mods-config/sql/main/mssql
+rm -rf $RPM_BUILD_ROOT/etc/raddb/mods-available/eap.orig
 
 rm -rf $RPM_BUILD_ROOT/etc/raddb/mods-config/sql/ippool/oracle
 rm -rf $RPM_BUILD_ROOT/etc/raddb/mods-config/sql/ippool-dhcp/oracle
@@ -540,6 +542,7 @@ exit 0
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/canonicalization
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/control
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/cui
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/debug
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/dhcp
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/eap
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/filter
@@ -718,7 +721,7 @@ exit 0
 
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/ippool-dhcp/mysql
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/ippool-dhcp/mysql/queries.conf
-
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/ippool-dhcp/mysql/schema.sql
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main/mysql
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/main/mysql/setup.sql
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/main/mysql/queries.conf
