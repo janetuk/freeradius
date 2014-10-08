@@ -160,6 +160,8 @@ static unsigned int psk_server_callback(SSL *ssl, const char *identity,
 		return fr_hex2bin(psk, max_psk_len, buffer, hex_len);
 	}
 
+	if (!conf->psk_identity)
+		return 0;
 	/*
 	 *	No REQUEST, or no dynamic query.  Just look for a
 	 *	static identity.
