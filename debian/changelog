@@ -1,3 +1,10 @@
+freeradius (3.0.4+moonshot1-5) unstable; urgency=medium
+
+  * Fix segfault when psk_identity is not set in the configuration
+  * Fix typo in psk query in  abfab-tls
+
+ -- Sam Hartman <hartmans@debian.org>  Tue, 07 Oct 2014 21:19:49 -0400
+
 freeradius (3.0.4+moonshot1-4) unstable; urgency=medium
 
   * Add freerad and trustrouter to each others' groups
