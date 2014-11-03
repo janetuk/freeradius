@@ -1,3 +1,10 @@
+freeradius (3.0.4+moonshot1-6) unstable; urgency=medium
+
+  * Depend on make for freeradius-config
+  * Update logrotate script
+
+ -- Sam Hartman <hartmans@debian.org>  Mon, 03 Nov 2014 13:46:00 -0500
+
 freeradius (3.0.4+moonshot1-5) unstable; urgency=medium
 
   * Fix segfault when psk_identity is not set in the configuration

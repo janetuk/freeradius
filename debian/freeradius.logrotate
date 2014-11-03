@@ -2,6 +2,10 @@
         weekly
         rotate 52
         compress
+        delaycompress
         notifempty
+        missingok
+        postrotate
+                service freeradius reload > /dev/null
+        endscript
 }
-
