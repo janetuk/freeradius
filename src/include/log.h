@@ -15,7 +15,7 @@
  */
 #ifndef FR_LOG_H
 #define FR_LOG_H
-/*
+/**
  * $Id$
  *
  * @file log.h
@@ -51,7 +51,7 @@ typedef enum log_debug {
 	L_DBG_LVL_2,		//!< 2nd highest priority debug messages (-xx | -X).
 	L_DBG_LVL_3,		//!< 3rd highest priority debug messages (-xxx | -Xx).
 	L_DBG_LVL_MAX		//!< Lowest priority debug messages (-xxxx | -Xxx).
-} log_debug_t;
+} log_lvl_t;
 
 typedef enum log_dst {
 	L_DST_STDOUT = 0,	//!< Log to stdout.
@@ -63,7 +63,7 @@ typedef enum log_dst {
 } log_dst_t;
 
 typedef struct fr_log_t {
-	int		colourise;	//!< Prefix log messages with VT100 escape codes to change text
+	bool		colourise;	//!< Prefix log messages with VT100 escape codes to change text
 					//!< colour.
 	int		fd;		//!< File descriptor to write messages to.
 	log_dst_t	dst;		//!< Log destination.
@@ -71,7 +71,7 @@ typedef struct fr_log_t {
 	char const	*debug_file;	//!< Path to debug log file.
 } fr_log_t;
 
-typedef		void (*radlog_func_t)(log_type_t lvl, log_debug_t priority, REQUEST *, char const *, va_list ap);
+typedef		void (*radlog_func_t)(log_type_t lvl, log_lvl_t priority, REQUEST *, char const *, va_list ap);
 
 extern FR_NAME_NUMBER const syslog_str2fac[];
 extern FR_NAME_NUMBER const log_str2dst[];
@@ -79,42 +79,32 @@ extern fr_log_t default_log;
 
 int	radlog_init(fr_log_t *log, bool daemonize);
 
-void 	vp_listdebug(VALUE_PAIR *vp);
-
 int	vradlog(log_type_t lvl, char const *fmt, va_list ap)
 	CC_HINT(format (printf, 2, 0)) CC_HINT(nonnull);
 int	radlog(log_type_t lvl, char const *fmt, ...)
 	CC_HINT(format (printf, 2, 3)) CC_HINT(nonnull (2));
 
-bool	debug_enabled(log_type_t type, log_debug_t lvl);
+bool	debug_enabled(log_type_t type, log_lvl_t lvl);
 
 bool	rate_limit_enabled(void);
 
-bool	radlog_debug_enabled(log_type_t type, log_debug_t lvl, REQUEST *request)
+bool	radlog_debug_enabled(log_type_t type, log_lvl_t lvl, REQUEST *request)
 	CC_HINT(nonnull);
 
-void	vradlog_request(log_type_t type, log_debug_t lvl, REQUEST *request, char const *msg, va_list ap)
+void	vradlog_request(log_type_t type, log_lvl_t lvl, REQUEST *request, char const *msg, va_list ap)
 	CC_HINT(format (printf, 4, 0)) CC_HINT(nonnull (3, 4));
 
-void	radlog_request(log_type_t type, log_debug_t lvl, REQUEST *request, char const *msg, ...)
+void	radlog_request(log_type_t type, log_lvl_t lvl, REQUEST *request, char const *msg, ...)
 	CC_HINT(format (printf, 4, 5)) CC_HINT(nonnull (3, 4));
 
-void	radlog_request_error(log_type_t type, log_debug_t lvl, REQUEST *request, char const *msg, ...)
+void	radlog_request_error(log_type_t type, log_lvl_t lvl, REQUEST *request, char const *msg, ...)
 	CC_HINT(format (printf, 4, 5)) CC_HINT(nonnull (3, 4));
 
-void	radlog_request_marker(log_type_t type, log_debug_t lvl, REQUEST *request,
+void	radlog_request_marker(log_type_t type, log_lvl_t lvl, REQUEST *request,
 			      char const *fmt, size_t indent, char const *error)
 	CC_HINT(nonnull);
 
-/*
- *	Multiple threads logging to one or more files.
- */
-typedef struct fr_logfile_t fr_logfile_t;
-
-fr_logfile_t *fr_logfile_init(TALLOC_CTX *ctx);
-int fr_logfile_open(fr_logfile_t *lf, char const *filename, mode_t permissions);
-int fr_logfile_close(fr_logfile_t *lf, int fd);
-int fr_logfile_unlock(fr_logfile_t *lf, int fd);
+void	fr_canonicalize_error(TALLOC_CTX *ctx, char **spaces, char **text, ssize_t slen, char const *msg);
 
 /*
  *	Logging macros.
@@ -160,41 +150,37 @@ int fr_logfile_unlock(fr_logfile_t *lf, int fd);
  *
  *	If a REQUEST * is available, these functions should be used.
  */
-#define _RLOG(_l, _p, _f, ...)		radlog_request(_l, _p, request, _f, ## __VA_ARGS__)
-#define _RMOD(_l, _p, _f, ...)		radlog_request_error(_l, _p, request, _f, ## __VA_ARGS__)
-#define _RMKR(_l, _p, _m, _i, _e)	radlog_request_marker(_l, _p, request, _m, _i, _e)
-
 #define RDEBUG_ENABLED		radlog_debug_enabled(L_DBG, L_DBG_LVL_1, request)
 #define RDEBUG_ENABLED2		radlog_debug_enabled(L_DBG, L_DBG_LVL_2, request)
 #define RDEBUG_ENABLED3		radlog_debug_enabled(L_DBG, L_DBG_LVL_3, request)
 #define RDEBUG_ENABLED4		radlog_debug_enabled(L_DBG, L_DBG_LVL_MAX, request)
 
-#define RAUTH(fmt, ...)		_RLOG(L_AUTH, L_DBG_LVL_OFF, fmt, ## __VA_ARGS__)
-#define RACCT(fmt, ...)		_RLOG(L_ACCT, L_DBG_LVL_OFF, fmt, ## __VA_ARGS__)
-#define RPROXY(fmt, ...)	_RLOG(L_PROXY, L_DBG_LVL_OFF, fmt, ## __VA_ARGS__)
+#define RAUTH(fmt, ...)		radlog_request(L_AUTH, L_DBG_LVL_OFF, request, fmt, ## __VA_ARGS__)
+#define RACCT(fmt, ...)		radlog_request(L_ACCT, L_DBG_LVL_OFF, request, fmt, ## __VA_ARGS__)
+#define RPROXY(fmt, ...)	radlog_request(L_PROXY, L_DBG_LVL_OFF, request, fmt, ## __VA_ARGS__)
 
-#define RDEBUGX(_l, fmt, ...)	_RLOG(L_DBG, _l, fmt, ## __VA_ARGS__)
-#define RDEBUG(fmt, ...)	_RLOG(L_DBG, L_DBG_LVL_1, fmt, ## __VA_ARGS__)
-#define RDEBUG2(fmt, ...)	_RLOG(L_DBG, L_DBG_LVL_2, fmt, ## __VA_ARGS__)
-#define RDEBUG3(fmt, ...)	_RLOG(L_DBG, L_DBG_LVL_3, fmt, ## __VA_ARGS__)
-#define RDEBUG4(fmt, ...)	_RLOG(L_DBG, L_DBG_LVL_MAX, fmt, ## __VA_ARGS__)
+#define RDEBUGX(_l, fmt, ...)	radlog_request(L_DBG, _l, request, fmt, ## __VA_ARGS__)
+#define RDEBUG(fmt, ...)	if (debug_flag || request->log.lvl) radlog_request(L_DBG, L_DBG_LVL_1, request, fmt, ## __VA_ARGS__)
+#define RDEBUG2(fmt, ...)	if (debug_flag || request->log.lvl) radlog_request(L_DBG, L_DBG_LVL_2, request, fmt, ## __VA_ARGS__)
+#define RDEBUG3(fmt, ...)	if (debug_flag || request->log.lvl) radlog_request(L_DBG, L_DBG_LVL_3, request, fmt, ## __VA_ARGS__)
+#define RDEBUG4(fmt, ...)	if (debug_flag || request->log.lvl) radlog_request(L_DBG, L_DBG_LVL_MAX, request, fmt, ## __VA_ARGS__)
 
-#define RINFO(fmt, ...)		_RLOG(L_INFO, L_DBG_LVL_OFF, fmt, ## __VA_ARGS__)
-#define RIDEBUG(fmt, ...)	_RLOG(L_INFO, L_DBG_LVL_1, fmt, ## __VA_ARGS__)
-#define RIDEBUG2(fmt, ...)	_RLOG(L_INFO, L_DBG_LVL_2, fmt, ## __VA_ARGS__)
+#define RINFO(fmt, ...)		radlog_request(L_INFO, L_DBG_LVL_OFF, request, fmt, ## __VA_ARGS__)
+#define RIDEBUG(fmt, ...)	radlog_request(L_INFO, L_DBG_LVL_1, request, fmt, ## __VA_ARGS__)
+#define RIDEBUG2(fmt, ...)	radlog_request(L_INFO, L_DBG_LVL_2, request, fmt, ## __VA_ARGS__)
 
-#define RWARN(fmt, ...)		_RLOG(L_DBG_WARN, L_DBG_LVL_OFF, fmt, ## __VA_ARGS__)
-#define RWDEBUG(fmt, ...)	_RLOG(L_DBG_WARN, L_DBG_LVL_1, fmt, ## __VA_ARGS__)
-#define RWDEBUG2(fmt, ...)	_RLOG(L_DBG_WARN, L_DBG_LVL_2, fmt, ## __VA_ARGS__)
+#define RWARN(fmt, ...)		radlog_request(L_DBG_WARN, L_DBG_LVL_OFF, request, fmt, ## __VA_ARGS__)
+#define RWDEBUG(fmt, ...)	if (debug_flag || request->log.lvl) radlog_request(L_DBG_WARN, L_DBG_LVL_1, request, fmt, ## __VA_ARGS__)
+#define RWDEBUG2(fmt, ...)	if (debug_flag || request->log.lvl) radlog_request(L_DBG_WARN, L_DBG_LVL_2, request, fmt, ## __VA_ARGS__)
 
-#define RERROR(fmt, ...)	_RMOD(L_DBG_ERR, L_DBG_LVL_OFF, fmt, ## __VA_ARGS__)
-#define REDEBUG(fmt, ...)	_RMOD(L_DBG_ERR, L_DBG_LVL_1, fmt, ## __VA_ARGS__)
-#define REDEBUG2(fmt, ...)	_RMOD(L_DBG_ERR, L_DBG_LVL_2, fmt, ## __VA_ARGS__)
-#define REDEBUG3(fmt, ...)	_RMOD(L_DBG_ERR, L_DBG_LVL_3, fmt, ## __VA_ARGS__)
-#define REDEBUG4(fmt, ...)	_RMOD(L_DBG_ERR, L_DBG_LVL_MAX, fmt, ## __VA_ARGS__)
+#define RERROR(fmt, ...)	radlog_request_error(L_DBG_ERR, L_DBG_LVL_OFF, request, fmt, ## __VA_ARGS__)
+#define REDEBUG(fmt, ...)	radlog_request_error(L_DBG_ERR, L_DBG_LVL_1, request, fmt, ## __VA_ARGS__)
+#define REDEBUG2(fmt, ...)	radlog_request_error(L_DBG_ERR, L_DBG_LVL_2, request, fmt, ## __VA_ARGS__)
+#define REDEBUG3(fmt, ...)	radlog_request_error(L_DBG_ERR, L_DBG_LVL_3, request, fmt, ## __VA_ARGS__)
+#define REDEBUG4(fmt, ...)	radlog_request_error(L_DBG_ERR, L_DBG_LVL_MAX, request, fmt, ## __VA_ARGS__)
 
-#define RINDENT()		(request->log.indent++)
-#define REXDENT()		(request->log.indent--)
+#define RINDENT()		(request->log.indent += 2)
+#define REXDENT()		(request->log.indent -= 2)
 
 /*
  * Output string with error marker, showing where format error occurred.
@@ -208,8 +194,22 @@ int fr_logfile_unlock(fr_logfile_t *lf, int fd);
  * @param _i index e.g. 3 (starts from 0).
  * @param _e error e.g. "kitties are not pets, are nature devouring hell beasts".
  */
-#define REMARKER(_m, _i, _e)	_RMKR(L_DBG_ERR, L_DBG_LVL_1, _m, _i, _e)
-#define RDMARKER(_m, _i, _e)	_RMKR(L_DBG, L_DBG_LVL_1, _m, _i, _e)
+#define _RMKR(_l, _p, _m, _i, _e)	radlog_request_marker(_l, _p, request, _m, _i, _e)
+#define REMARKER(_m, _i, _e)		_RMKR(L_DBG_ERR, L_DBG_LVL_1, _m, _i, _e)
+#define RDMARKER(_m, _i, _e)		_RMKR(L_DBG, L_DBG_LVL_1, _m, _i, _e)
+
+/*
+ *	Use different logging functions depending on whether
+ *	request is NULL or not.
+ */
+ #define ROPTIONAL(_l_request, _l_global, fmt, ...) \
+do {\
+	if (request) {\
+		_l_request(fmt, ## __VA_ARGS__);\
+	} else {\
+		_l_global(MOD_PREFIX " (%s): " fmt, inst->name, ## __VA_ARGS__);\
+ 	}\
+} while (0)
 
 /*
  *	Rate limit messages.

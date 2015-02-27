@@ -64,7 +64,7 @@ typedef struct rlm_eap_tnc {
 } rlm_eap_tnc_t;
 
 static CONF_PARSER module_config[] = {
-	{ "connection_string", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_tnc_t, connection_string), "NAS Port: %{NAS-Port} NAS IP: %{NAS-IP-Address} NAS_PORT_TYPE: %{NAS-Port-Type}" },
+	{ "connection_string", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_XLAT, rlm_eap_tnc_t, connection_string), "NAS Port: %{NAS-Port} NAS IP: %{NAS-IP-Address} NAS_PORT_TYPE: %{NAS-Port-Type}" },
 
 	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
 };
@@ -201,7 +201,7 @@ static int tnc_initiate(void *instance, eap_handler_t *handler)
 	 */
 	MEM(eap_tnc_user = (TNC_BufferReference) strdup(username->vp_strvalue));
 
-	result = storeUsername(conn_id, eap_tnc_user, username->length);
+	result = storeUsername(conn_id, eap_tnc_user, username->vp_length);
 	if (result != TNC_RESULT_SUCCESS) {
 		ERROR("rlm_eap_tnc: NAA-EAP storeUsername returned an "
 		      "error code");
@@ -348,6 +348,7 @@ static int mod_authenticate(UNUSED void *instance, eap_handler_t *handler)
  *	The module name should be the only globally exported symbol.
  *	That is, everything else should be 'static'.
  */
+extern rlm_eap_module_t rlm_eap_tnc;
 rlm_eap_module_t rlm_eap_tnc = {
 		"eap_tnc",
 		tnc_attach,		/* attach */

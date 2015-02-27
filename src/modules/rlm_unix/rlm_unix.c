@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -69,41 +70,10 @@ static const CONF_PARSER module_config[] = {
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
 
-
-#ifndef HAVE_GETGRNAM_R
-#define fr_getgrnam(_a, _b) getgrnam(_b)
-#else
-static struct group *fr_getgrnam(TALLOC_CTX *ctx, char const *name)
-{
-	struct group	*grp, my_group;
-	char		*group_buffer;
-	size_t		group_size = 1024;
-
-	grp = NULL;
-	group_buffer = talloc_array(ctx, char, group_size);
-	while (group_buffer) {
-		int err;
-
-		err = getgrnam_r(name, &my_group, group_buffer, group_size, &grp);
-		if (err == ERANGE) {
-			group_size *= 2;
-			talloc_free(group_buffer);
-			group_buffer = talloc_array(ctx, char, group_size);
-			continue;
-		}
-
-		if (err) errno = err; /* so the caller knows what went wrong */
-		break;
-	}
-
-	return grp;
-}
-#endif	/* HAVE_GETGRNAM_R */
-
 /*
  *	The Group = handler.
  */
-static int groupcmp(UNUSED void *instance, REQUEST *req, UNUSED VALUE_PAIR *request,
+static int groupcmp(UNUSED void *instance, REQUEST *request, UNUSED VALUE_PAIR *req_vp,
 		    VALUE_PAIR *check, UNUSED VALUE_PAIR *check_pairs,
 		    UNUSED VALUE_PAIR **reply_pairs)
 {
@@ -111,39 +81,32 @@ static int groupcmp(UNUSED void *instance, REQUEST *req, UNUSED VALUE_PAIR *requ
 	struct group	*grp;
 	char		**member;
 	int		retval;
-#ifdef HAVE_GETPWNAM_R
-	struct passwd	my_pwd;
-	char		pwd_buffer[1024];
-#endif
 
 	/*
-	 *	No user name, doesn't compare.
+	 *	No user name, can't compare.
 	 */
-	if (!req->username) {
+	if (!request->username) return -1;
+
+	if (rad_getpwnam(request, &pwd, request->username->vp_strvalue) < 0) {
+		RERROR("%s", fr_strerror());
 		return -1;
 	}
-
-#ifdef HAVE_GETPWNAM_R
-	if (getpwnam_r(req->username->vp_strvalue, &my_pwd, pwd_buffer, sizeof(pwd_buffer), &pwd) != 0) {
-		pwd = NULL;
+	if (rad_getgrnam(request, &grp, check->vp_strvalue) < 0) {
+		RERROR("%s", fr_strerror());
+		talloc_free(pwd);
+		return -1;
 	}
-#else
-	pwd = getpwnam(req->username->vp_strvalue);
-#endif
-	if (!pwd)
-		return -1;
-
-	grp = fr_getgrnam(req, check->vp_strvalue);
-	if (!grp)
-		return -1;
 
 	retval = (pwd->pw_gid == grp->gr_gid) ? 0 : -1;
 	if (retval < 0) {
 		for (member = grp->gr_mem; *member && retval; member++) {
-			if (strcmp(*member, pwd->pw_name) == 0)
-				retval = 0;
+			if (strcmp(*member, pwd->pw_name) == 0) retval = 0;
 		}
 	}
+
+	/* lifo */
+	talloc_free(grp);
+	talloc_free(pwd);
 
 	return retval;
 }
@@ -152,7 +115,7 @@ static int groupcmp(UNUSED void *instance, REQUEST *req, UNUSED VALUE_PAIR *requ
 /*
  *	Read the config
  */
-static int mod_instantiate(UNUSED CONF_SECTION *conf, void *instance)
+static int mod_instantiate(CONF_SECTION *conf, void *instance)
 {
 	struct unix_instance *inst = instance;
 
@@ -441,7 +404,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 	     vp = fr_cursor_next(&cursor)) {
 		if (!vp->da->vendor) switch (vp->da->attr) {
 		case PW_USER_NAME:
-			if (vp->length >= sizeof(ut.ut_name)) {
+			if (vp->vp_length >= sizeof(ut.ut_name)) {
 				memcpy(ut.ut_name, vp->vp_strvalue, sizeof(ut.ut_name));
 			} else {
 				strlcpy(ut.ut_name, vp->vp_strvalue, sizeof(ut.ut_name));
@@ -552,6 +515,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 }
 
 /* globally exported name */
+extern module_t rlm_unix;
 module_t rlm_unix = {
 	RLM_MODULE_INIT,
 	"System",

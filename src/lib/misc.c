@@ -5,7 +5,8 @@
  *
  *   This library is free software; you can redistribute it and/or
  *   modify it under the terms of the GNU Lesser General Public
- *   License as published by the Free Software Foundation; either
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version. either
  *   version 2.1 of the License, or (at your option) any later version.
  *
  *   This library is distributed in the hope that it will be useful,
@@ -22,25 +23,19 @@
 
 RCSID("$Id$")
 
-#include	<freeradius-devel/libradius.h>
+#include <freeradius-devel/libradius.h>
 
-#include	<ctype.h>
-#include	<sys/file.h>
-#include	<fcntl.h>
+#include <ctype.h>
+#include <sys/file.h>
+#include <fcntl.h>
+#include <grp.h>
+#include <pwd.h>
 
 #define FR_PUT_LE16(a, val)\
 	do {\
 		a[1] = ((uint16_t) (val)) >> 8;\
 		a[0] = ((uint16_t) (val)) & 0xff;\
 	} while (0)
-
-#ifdef HAVE_PTHREAD_H
-#  define PTHREAD_MUTEX_LOCK pthread_mutex_lock
-#  define PTHREAD_MUTEX_UNLOCK pthread_mutex_unlock
-#else
-#  define PTHREAD_MUTEX_LOCK(_x)
-#  define PTHREAD_MUTEX_UNLOCK(_x)
-#endif
 
 bool	fr_dns_lookups = false;	    /* IP -> hostname lookups? */
 bool    fr_hostname_lookups = true; /* hostname -> IP lookups? */
@@ -50,7 +45,7 @@ static char const *months[] = {
 	"jan", "feb", "mar", "apr", "may", "jun",
 	"jul", "aug", "sep", "oct", "nov", "dec" };
 
-fr_thread_local_setup(char *, fr_inet_ntop_buffer);	/* macro */
+fr_thread_local_setup(char *, fr_inet_ntop_buffer)	/* macro */
 
 typedef struct fr_talloc_link {
 	bool armed;
@@ -207,12 +202,12 @@ char const *ip_ntoa(char *buffer, uint32_t ipaddr)
  *
  * @param out Where to write the ip address value.
  * @param value to parse, may be dotted quad [+ prefix], or integer, or octal number, or '*' (INADDR_ANY).
- * @param inlen Length of value, if value is \0 terminated inlen may be 0.
+ * @param inlen Length of value, if value is \0 terminated inlen may be -1.
  * @param resolve If true and value doesn't look like an IP address, try and resolve value as a hostname.
- * @param fallback to IPv4 resolution if no A records can be found.
+ * @param fallback to IPv6 resolution if no A records can be found.
  * @return 0 if ip address was parsed successfully, else -1 on error.
  */
-int fr_pton4(fr_ipaddr_t *out, char const *value, size_t inlen, bool resolve, bool fallback)
+int fr_pton4(fr_ipaddr_t *out, char const *value, ssize_t inlen, bool resolve, bool fallback)
 {
 	char *p;
 	unsigned int prefix;
@@ -224,8 +219,8 @@ int fr_pton4(fr_ipaddr_t *out, char const *value, size_t inlen, bool resolve, bo
 	/*
 	 *	Copy to intermediary buffer if we were given a length
 	 */
-	if (inlen > 0) {
-		if (inlen >= sizeof(buffer)) {
+	if (inlen >= 0) {
+		if (inlen >= (ssize_t)sizeof(buffer)) {
 			fr_strerror_printf("Invalid IPv4 address string \"%s\"", value);
 			return -1;
 		}
@@ -238,6 +233,9 @@ int fr_pton4(fr_ipaddr_t *out, char const *value, size_t inlen, bool resolve, bo
 	 *	192.0.2.2 is parsed as if it was /32
 	 */
 	if (!p) {
+		out->prefix = 32;
+		out->af = AF_INET;
+
 		/*
 		 *	Allow '*' as the wildcard address usually 0.0.0.0
 		 */
@@ -252,14 +250,11 @@ int fr_pton4(fr_ipaddr_t *out, char const *value, size_t inlen, bool resolve, bo
 		} else if (is_integer(value) || ((value[0] == '0') && (value[1] == 'x'))) {
 			out->ipaddr.ip4addr.s_addr = htonl(strtoul(value, NULL, 0));
 		} else if (!resolve) {
-			if (inet_pton(AF_INET, value, &(out->ipaddr.ip4addr.s_addr)) <= 0) {
+			if (inet_pton(AF_INET, value, &out->ipaddr.ip4addr.s_addr) <= 0) {
 				fr_strerror_printf("Failed to parse IPv4 address string \"%s\"", value);
 				return -1;
 			}
 		} else if (ip_hton(out, AF_INET, value, fallback) < 0) return -1;
-
-		out->prefix = 32;
-		out->af = AF_INET;
 
 		return 0;
 	}
@@ -275,11 +270,11 @@ int fr_pton4(fr_ipaddr_t *out, char const *value, size_t inlen, bool resolve, bo
 	/*
 	 *	Copy the IP portion into a temporary buffer if we haven't already.
 	 */
-	if (inlen == 0) memcpy(buffer, value, p - value);
+	if (inlen < 0) memcpy(buffer, value, p - value);
 	buffer[p - value] = '\0';
 
 	if (!resolve) {
-		if (inet_pton(AF_INET, buffer, &(out->ipaddr.ip4addr.s_addr)) <= 0) {
+		if (inet_pton(AF_INET, buffer, &out->ipaddr.ip4addr.s_addr) <= 0) {
 			fr_strerror_printf("Failed to parse IPv4 address string \"%s\"", value);
 			return -1;
 		}
@@ -297,7 +292,7 @@ int fr_pton4(fr_ipaddr_t *out, char const *value, size_t inlen, bool resolve, bo
 	}
 
 	if (prefix < 32) {
-		out->ipaddr.ip4addr = fr_inaddr_mask(&(out->ipaddr.ip4addr), prefix);
+		out->ipaddr.ip4addr = fr_inaddr_mask(&out->ipaddr.ip4addr, prefix);
 	}
 
 	out->prefix = (uint8_t) prefix;
@@ -310,12 +305,12 @@ int fr_pton4(fr_ipaddr_t *out, char const *value, size_t inlen, bool resolve, bo
  *
  * @param out Where to write the ip address value.
  * @param value to parse.
- * @param inlen Length of value, if value is \0 terminated inlen may be 0.
+ * @param inlen Length of value, if value is \0 terminated inlen may be -1.
  * @param resolve If true and value doesn't look like an IP address, try and resolve value as a hostname.
  * @param fallback to IPv4 resolution if no AAAA records can be found.
  * @return 0 if ip address was parsed successfully, else -1 on error.
  */
-int fr_pton6(fr_ipaddr_t *out, char const *value, size_t inlen, bool resolve, bool fallback)
+int fr_pton6(fr_ipaddr_t *out, char const *value, ssize_t inlen, bool resolve, bool fallback)
 {
 	char const *p;
 	unsigned int prefix;
@@ -327,8 +322,8 @@ int fr_pton6(fr_ipaddr_t *out, char const *value, size_t inlen, bool resolve, bo
 	/*
 	 *	Copy to intermediary buffer if we were given a length
 	 */
-	if (inlen > 0) {
-		if (inlen >= sizeof(buffer)) {
+	if (inlen >= 0) {
+		if (inlen >= (ssize_t)sizeof(buffer)) {
 			fr_strerror_printf("Invalid IPv6 address string \"%s\"", value);
 			return -1;
 		}
@@ -338,20 +333,20 @@ int fr_pton6(fr_ipaddr_t *out, char const *value, size_t inlen, bool resolve, bo
 
 	p = strchr(value, '/');
 	if (!p) {
+		out->prefix = 128;
+		out->af = AF_INET6;
+
 		/*
 		 *	Allow '*' as the wildcard address
 		 */
 		if ((value[0] == '*') && (value[1] == '\0')) {
-			memset(&out->ipaddr.ip6addr.s6_addr, 0, sizeof(out->ipaddr.ip6addr.s6_addr));
+			memset(out->ipaddr.ip6addr.s6_addr, 0, sizeof(out->ipaddr.ip6addr.s6_addr));
 		} else if (!resolve) {
-			if (inet_pton(AF_INET6, value, &(out->ipaddr.ip6addr.s6_addr)) <= 0) {
+			if (inet_pton(AF_INET6, value, out->ipaddr.ip6addr.s6_addr) <= 0) {
 				fr_strerror_printf("Failed to parse IPv6 address string \"%s\"", value);
 				return -1;
 			}
 		} else if (ip_hton(out, AF_INET6, value, fallback) < 0) return -1;
-
-		out->prefix = 128;
-		out->af = AF_INET6;
 
 		return 0;
 	}
@@ -364,11 +359,11 @@ int fr_pton6(fr_ipaddr_t *out, char const *value, size_t inlen, bool resolve, bo
 	/*
 	 *	Copy string to temporary buffer if we didn't do it earlier
 	 */
-	if (inlen == 0) memcpy(buffer, value, p - value);
+	if (inlen < 0) memcpy(buffer, value, p - value);
 	buffer[p - value] = '\0';
 
 	if (!resolve) {
-		if (inet_pton(AF_INET6, buffer, &(out->ipaddr.ip6addr.s6_addr)) <= 0) {
+		if (inet_pton(AF_INET6, buffer, out->ipaddr.ip6addr.s6_addr) <= 0) {
 			fr_strerror_printf("Failed to parse IPv6 address string \"%s\"", value);
 			return -1;
 		}
@@ -388,8 +383,8 @@ int fr_pton6(fr_ipaddr_t *out, char const *value, size_t inlen, bool resolve, bo
 	if (prefix < 128) {
 		struct in6_addr addr;
 
-		addr = fr_in6addr_mask(&(out->ipaddr.ip6addr), prefix);
-		memcpy(&(out->ipaddr.ip6addr.s6_addr), &addr, sizeof(addr));
+		addr = fr_in6addr_mask(&out->ipaddr.ip6addr, prefix);
+		memcpy(out->ipaddr.ip6addr.s6_addr, addr.s6_addr, sizeof(out->ipaddr.ip6addr.s6_addr));
 	}
 
 	out->prefix = (uint8_t) prefix;
@@ -402,15 +397,15 @@ int fr_pton6(fr_ipaddr_t *out, char const *value, size_t inlen, bool resolve, bo
  *
  * @param out Where to write the ip address value.
  * @param value to parse.
- * @param inlen Length of value, if value is \0 terminated inlen may be 0.
+ * @param inlen Length of value, if value is \0 terminated inlen may be -1.
  * @param resolve If true and value doesn't look like an IP address, try and resolve value as a hostname.
  * @return 0 if ip address was parsed successfully, else -1 on error.
  */
-int fr_pton(fr_ipaddr_t *out, char const *value, size_t inlen, bool resolve)
+int fr_pton(fr_ipaddr_t *out, char const *value, ssize_t inlen, bool resolve)
 {
 	size_t len, i;
 
-	len = (inlen == 0) ? strlen(value) : inlen;
+	len = (inlen >= 0) ? (size_t)inlen : strlen(value);
 	for (i = 0; i < len; i++) switch (value[i]) {
 	/*
 	 *	Chars illegal in domain names and IPv4 addresses.
@@ -447,28 +442,6 @@ int fr_pton(fr_ipaddr_t *out, char const *value, size_t inlen, bool resolve)
 	return fr_pton4(out, value, inlen, false, false);
 }
 
-/** Check if the IP address is equivalent to INADDR_ANY
- *
- * @param addr to chec.
- * @return true if IP address matches INADDR_ANY or INADDR6_ANY (assumed to be 0), else false.
- */
-bool is_wildcard(fr_ipaddr_t *addr)
-{
-	static struct in6_addr in6_addr;
-
-	switch (addr->af) {
-	case AF_INET:
-		return (addr->ipaddr.ip4addr.s_addr == htons(INADDR_ANY));
-
-	case AF_INET6:
-		return (memcmp(addr->ipaddr.ip6addr.s6_addr, in6_addr.s6_addr, sizeof(in6_addr.s6_addr)) == 0) ? true :false;
-
-	default:
-		fr_assert(0);
-		return false;
-	}
-}
-
 int fr_ntop(char *out, size_t outlen, fr_ipaddr_t *addr)
 {
 	char buffer[INET6_ADDRSTRLEN];
@@ -477,6 +450,13 @@ int fr_ntop(char *out, size_t outlen, fr_ipaddr_t *addr)
 
 	return snprintf(out, outlen, "%s/%i", buffer, addr->prefix);
 }
+
+/*
+ *	cppcheck apparently can't pick this up from the system headers.
+ */
+#ifdef CPPCHECK
+#define F_WRLCK
+#endif
 
 /*
  *	Internal wrapper for locking, to minimize the number of ifdef's
@@ -845,7 +825,15 @@ int ip_hton(fr_ipaddr_t *out, int af, char const *hostname, bool fallback)
 	int rcode;
 	struct addrinfo hints, *ai = NULL, *alt = NULL, *res = NULL;
 
+	/*
+	 *	Avoid malloc for IP addresses.  This helps us debug
+	 *	memory errors when using talloc.
+	 */
+#ifdef TALLOC_DEBUG
+	if (true) {
+#else
 	if (!fr_hostname_lookups) {
+#endif
 #ifdef HAVE_STRUCT_SOCKADDR_IN6
 		if (af == AF_UNSPEC) {
 			char const *p;
@@ -863,35 +851,41 @@ int ip_hton(fr_ipaddr_t *out, int af, char const *hostname, bool fallback)
 
 		if (af == AF_UNSPEC) af = AF_INET;
 
-		if (!inet_pton(af, hostname, &(out->ipaddr))) {
-			return -1;
-		}
+		if (!inet_pton(af, hostname, &(out->ipaddr))) return -1;
 
 		out->af = af;
 		return 0;
 	}
 
 	memset(&hints, 0, sizeof(hints));
-	hints.ai_family = af;
 
-#ifdef TALLOC_DEBUG
 	/*
-	 *	Avoid malloc for IP addresses.  This helps us debug
-	 *	memory errors when using talloc.
+	 *	If we're falling back we need both IPv4 and IPv6 records
 	 */
-	if (af == AF_INET) {
-		/*
-		 *	If it's all numeric, avoid getaddrinfo()
-		 */
-		if (inet_pton(af, hostname, &out->ipaddr.ip4addr) == 1) {
-			return 0;
-		}
+	if (fallback) {
+		hints.ai_family = AF_UNSPEC;
+	} else {
+		hints.ai_family = af;
 	}
-#endif
 
 	if ((rcode = getaddrinfo(hostname, NULL, &hints, &res)) != 0) {
-		fr_strerror_printf("ip_hton: %s", gai_strerror(rcode));
-		return -1;
+		switch (af) {
+		default:
+		case AF_UNSPEC:
+			fr_strerror_printf("Failed resolving \"%s\" to IP address: %s",
+					   hostname, gai_strerror(rcode));
+			return -1;
+
+		case AF_INET:
+			fr_strerror_printf("Failed resolving \"%s\" to IPv4 address: %s",
+					   hostname, gai_strerror(rcode));
+			return -1;
+
+		case AF_INET6:
+			fr_strerror_printf("Failed resolving \"%s\" to IPv6 address: %s",
+					   hostname, gai_strerror(rcode));
+			return -1;
+		}
 	}
 
 	for (ai = res; ai; ai = ai->ai_next) {
@@ -946,24 +940,20 @@ char const *ip_ntoh(fr_ipaddr_t const *src, char *dst, size_t cnt)
  *
  * @param ipaddr to mask.
  * @param prefix Number of contiguous bits to mask.
- * @return an ipv6 address with the host portion zeroed out.
+ * @return an ipv4 address with the host portion zeroed out.
  */
 struct in_addr fr_inaddr_mask(struct in_addr const *ipaddr, uint8_t prefix)
 {
 	uint32_t ret;
 
-	if (prefix > 32) {
-		prefix = 32;
-	}
+	if (prefix > 32) prefix = 32;
 
 	/* Short circuit */
-	if (prefix == 32) {
-		return *ipaddr;
-	}
+	if (prefix == 32) return *ipaddr;
 
-	if (prefix == 0)
-		ret = 0;
+	if (prefix == 0) ret = 0;
 	else ret = htonl(~((0x00000001UL << (32 - prefix)) - 1)) & ipaddr->s_addr;
+
 	return (*(struct in_addr *)&ret);
 }
 
@@ -978,23 +968,24 @@ struct in6_addr fr_in6addr_mask(struct in6_addr const *ipaddr, uint8_t prefix)
 	uint64_t const *p = (uint64_t const *) ipaddr;
 	uint64_t ret[2], *o = ret;
 
-	if (prefix > 128) {
-		prefix = 128;
-	}
+	if (prefix > 128) prefix = 128;
 
 	/* Short circuit */
-	if (prefix == 128) {
-		return *ipaddr;
-	}
+	if (prefix == 128) return *ipaddr;
 
 	if (prefix >= 64) {
 		prefix -= 64;
-		*o++ = 0xffffffffffffffffULL & *p++;
+		*o++ = 0xffffffffffffffffULL & *p++;	/* lhs portion masked */
 	} else {
-		ret[1] = 0;
+		ret[1] = 0;				/* rhs portion zeroed */
 	}
 
-	*o = htonll(~((0x0000000000000001ULL << (64 - prefix)) - 1)) & *p;
+	/* Max left shift is 63 else we get overflow */
+	if (prefix > 0) {
+		*o = htonll(~((uint64_t)(0x0000000000000001ULL << (64 - prefix)) - 1)) & *p;
+	} else {
+		*o = 0;
+	}
 
 	return *(struct in6_addr *) &ret;
 }
@@ -1192,12 +1183,14 @@ int fr_ipaddr_cmp(fr_ipaddr_t const *a, fr_ipaddr_t const *b)
 	if (a->af < b->af) return -1;
 	if (a->af > b->af) return +1;
 
+	if (a->prefix < b->prefix) return -1;
+	if (a->prefix > b->prefix) return +1;
+
 	switch (a->af) {
 	case AF_INET:
 		return memcmp(&a->ipaddr.ip4addr,
 			      &b->ipaddr.ip4addr,
 			      sizeof(a->ipaddr.ip4addr));
-		break;
 
 #ifdef HAVE_STRUCT_SOCKADDR_IN6
 	case AF_INET6:
@@ -1207,7 +1200,6 @@ int fr_ipaddr_cmp(fr_ipaddr_t const *a, fr_ipaddr_t const *b)
 		return memcmp(&a->ipaddr.ip6addr,
 			      &b->ipaddr.ip6addr,
 			      sizeof(a->ipaddr.ip6addr));
-		break;
 #endif
 
 	default:
@@ -1220,6 +1212,8 @@ int fr_ipaddr_cmp(fr_ipaddr_t const *a, fr_ipaddr_t const *b)
 int fr_ipaddr2sockaddr(fr_ipaddr_t const *ipaddr, uint16_t port,
 		       struct sockaddr_storage *sa, socklen_t *salen)
 {
+	memset(sa, 0, sizeof(*sa));
+
 	if (ipaddr->af == AF_INET) {
 		struct sockaddr_in s4;
 
@@ -1257,6 +1251,8 @@ int fr_ipaddr2sockaddr(fr_ipaddr_t const *ipaddr, uint16_t port,
 int fr_sockaddr2ipaddr(struct sockaddr_storage const *sa, socklen_t salen,
 		       fr_ipaddr_t *ipaddr, uint16_t *port)
 {
+	memset(ipaddr, 0, sizeof(*ipaddr));
+
 	if (sa->ss_family == AF_INET) {
 		struct sockaddr_in	s4;
 
@@ -1366,6 +1362,13 @@ size_t fr_prints_uint128(char *out, size_t outlen, uint128_t const num)
 	uint64_t n[2];
 	char *p = buff;
 	int i;
+#ifdef RADIUS_LITTLE_ENDIAN
+	const size_t l = 0;
+	const size_t h = 1;
+#else
+	const size_t l = 1;
+	const size_t h = 0;
+#endif
 
 	memset(buff, '0', sizeof(buff) - 1);
 	buff[sizeof(buff) - 1] = '\0';
@@ -1376,11 +1379,11 @@ size_t fr_prints_uint128(char *out, size_t outlen, uint128_t const num)
 		ssize_t j;
 		int carry;
 
-		carry = (n[1] >= 0x8000000000000000);
+		carry = (n[h] >= 0x8000000000000000);
 
 		// Shift n[] left, doubling it
-		n[1] = ((n[1] << 1) & 0xffffffffffffffff) + (n[0] >= 0x8000000000000000);
-		n[0] = ((n[0] << 1) & 0xffffffffffffffff);
+		n[h] = ((n[h] << 1) & 0xffffffffffffffff) + (n[l] >= 0x8000000000000000);
+		n[l] = ((n[l] << 1) & 0xffffffffffffffff);
 
 		// Add s[] to itself in decimal, doubling it
 		for (j = sizeof(buff) - 2; j >= 0; j--) {
@@ -1397,90 +1400,6 @@ size_t fr_prints_uint128(char *out, size_t outlen, uint128_t const num)
 	}
 
 	return strlcpy(out, p, outlen);
-}
-
-/** Calculate powers
- *
- * @author Orson Peters
- * @note Borrowed from the gist here: https://gist.github.com/nightcracker/3551590.
- *
- * @param base a 32bit signed integer.
- * @param exp amount to raise base by.
- * @return base ^ pow, or 0 on underflow/overflow.
- */
-int64_t fr_pow(int32_t base, uint8_t exp) {
-	static const uint8_t highest_bit_set[] = {
-		0, 1, 2, 2, 3, 3, 3, 3,
-		4, 4, 4, 4, 4, 4, 4, 4,
-		5, 5, 5, 5, 5, 5, 5, 5,
-		5, 5, 5, 5, 5, 5, 5, 5,
-		6, 6, 6, 6, 6, 6, 6, 6,
-		6, 6, 6, 6, 6, 6, 6, 6,
-		6, 6, 6, 6, 6, 6, 6, 6,
-		6, 6, 6, 6, 6, 6, 6, 255, // anything past 63 is a guaranteed overflow with base > 1
-		255, 255, 255, 255, 255, 255, 255, 255,
-		255, 255, 255, 255, 255, 255, 255, 255,
-		255, 255, 255, 255, 255, 255, 255, 255,
-		255, 255, 255, 255, 255, 255, 255, 255,
-		255, 255, 255, 255, 255, 255, 255, 255,
-		255, 255, 255, 255, 255, 255, 255, 255,
-		255, 255, 255, 255, 255, 255, 255, 255,
-		255, 255, 255, 255, 255, 255, 255, 255,
-		255, 255, 255, 255, 255, 255, 255, 255,
-		255, 255, 255, 255, 255, 255, 255, 255,
-		255, 255, 255, 255, 255, 255, 255, 255,
-		255, 255, 255, 255, 255, 255, 255, 255,
-		255, 255, 255, 255, 255, 255, 255, 255,
-		255, 255, 255, 255, 255, 255, 255, 255,
-		255, 255, 255, 255, 255, 255, 255, 255,
-		255, 255, 255, 255, 255, 255, 255, 255,
-		255, 255, 255, 255, 255, 255, 255, 255,
-		255, 255, 255, 255, 255, 255, 255, 255,
-		255, 255, 255, 255, 255, 255, 255, 255,
-		255, 255, 255, 255, 255, 255, 255, 255,
-		255, 255, 255, 255, 255, 255, 255, 255,
-		255, 255, 255, 255, 255, 255, 255, 255,
-		255, 255, 255, 255, 255, 255, 255, 255,
-		255, 255, 255, 255, 255, 255, 255, 255,
-	};
-
-	uint64_t result = 1;
-
-	switch (highest_bit_set[exp]) {
-	case 255: // we use 255 as an overflow marker and return 0 on overflow/underflow
-		if (base == 1) {
-			return 1;
-		}
-
-		if (base == -1) {
-			return 1 - 2 * (exp & 1);
-		}
-		return 0;
-	case 6:
-		if (exp & 1) result *= base;
-		exp >>= 1;
-		base *= base;
-	case 5:
-		if (exp & 1) result *= base;
-		exp >>= 1;
-		base *= base;
-	case 4:
-		if (exp & 1) result *= base;
-		exp >>= 1;
-		base *= base;
-	case 3:
-		if (exp & 1) result *= base;
-		exp >>= 1;
-		base *= base;
-	case 2:
-		if (exp & 1) result *= base;
-		exp >>= 1;
-		base *= base;
-	case 1:
-		if (exp & 1) result *= base;
-	default:
-		return result;
-	}
 }
 
 /*

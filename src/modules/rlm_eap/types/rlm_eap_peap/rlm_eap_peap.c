@@ -317,14 +317,14 @@ static int mod_authenticate(void *arg, eap_handler_t *handler)
 		peap = tls_session->opaque;
 		if (peap->soh_reply_vps) {
 			RDEBUG2("Using saved attributes from the SoH reply");
-			debug_pair_list(peap->soh_reply_vps);
+			rdebug_pair_list(L_DBG_LVL_2, request, peap->soh_reply_vps, NULL);
 			pairfilter(handler->request->reply,
 				  &handler->request->reply->vps,
 				  &peap->soh_reply_vps, 0, 0, TAG_ANY);
 		}
 		if (peap->accept_vps) {
 			RDEBUG2("Using saved attributes from the original Access-Accept");
-			debug_pair_list(peap->accept_vps);
+			rdebug_pair_list(L_DBG_LVL_2, request, peap->accept_vps, NULL);
 			pairfilter(handler->request->reply,
 				  &handler->request->reply->vps,
 				  &peap->accept_vps, 0, 0, TAG_ANY);
@@ -348,7 +348,6 @@ static int mod_authenticate(void *arg, eap_handler_t *handler)
 		rad_assert(handler->request->proxy != NULL);
 #endif
 		return 1;
-		break;
 
 	default:
 		break;
@@ -363,6 +362,7 @@ static int mod_authenticate(void *arg, eap_handler_t *handler)
  *	The module name should be the only globally exported symbol.
  *	That is, everything else should be 'static'.
  */
+extern rlm_eap_module_t rlm_eap_peap;
 rlm_eap_module_t rlm_eap_peap = {
 	"eap_peap",
 	eappeap_attach,			/* attach */

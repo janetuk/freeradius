@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -46,7 +47,7 @@ typedef struct rlm_attr_filter {
 static const CONF_PARSER module_config[] = {
 	{ "attrsfile", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT | PW_TYPE_DEPRECATED, rlm_attr_filter_t, filename), NULL },
 	{ "filename", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT | PW_TYPE_REQUIRED, rlm_attr_filter_t, filename), NULL },
-	{ "key", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_attr_filter_t, key), "%{Realm}" },
+	{ "key", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_XLAT, rlm_attr_filter_t, key), "%{Realm}" },
 	{ "relaxed", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_attr_filter_t, relaxed), "no" },
 	{ NULL, -1, 0, NULL, NULL }
 };
@@ -345,6 +346,7 @@ RLM_AF_FUNC(send_coa, reply)
 #endif
 
 /* globally exported name */
+extern module_t rlm_attr_filter;
 module_t rlm_attr_filter = {
 	RLM_MODULE_INIT,
 	"attr_filter",

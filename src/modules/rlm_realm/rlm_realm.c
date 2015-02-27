@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -118,7 +119,7 @@ static int check_for_realm(void *instance, REQUEST *request, REALM **returnrealm
 	namebuf = talloc_typed_strdup(request,  request->username->vp_strvalue);
 	username = namebuf;
 
-	switch(inst->format) {
+	switch (inst->format) {
 	case REALM_FORMAT_SUFFIX:
 		RDEBUG2("Checking for suffix after \"%c\"", inst->delim[0]);
 		ptr = strrchr(username, inst->delim[0]);
@@ -361,6 +362,10 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	     return -1;
 	}
 
+	if (cf_new_escape && (strcmp(inst->delim, "\\\\") == 0)) {
+		/* it's OK */
+	} else
+
 	if (strlen(inst->delim) != 1) {
 		cf_log_err_cs(conf, "Invalid value \"%s\" for delimiter",
 			      inst->delim);
@@ -465,7 +470,7 @@ static rlm_rcode_t mod_realm_recv_coa(UNUSED void *instance, REQUEST *request)
 	/*
 	 *	The string is too short.
 	 */
-	if (vp->length == 1) return RLM_MODULE_NOOP;
+	if (vp->vp_length == 1) return RLM_MODULE_NOOP;
 
 	/*
 	 *	'1' means "the rest of the string is a realm"
@@ -492,6 +497,7 @@ static rlm_rcode_t mod_realm_recv_coa(UNUSED void *instance, REQUEST *request)
 #endif
 
 /* globally exported name */
+extern module_t rlm_realm;
 module_t rlm_realm = {
 	RLM_MODULE_INIT,
 	"realm",

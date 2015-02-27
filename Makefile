@@ -43,7 +43,7 @@ $(BUILD_DIR)/tests/radiusd-c: raddb/test.conf ${BUILD_DIR}/bin/radiusd | build.r
 	@$(MAKE) -C raddb/certs
 	@printf "radiusd -C... "
 	@if ! ./build/make/jlibtool --mode=execute ./build/bin/radiusd -XCMd ./raddb -D ./share -n test > $(BUILD_DIR)/tests/radiusd.config.log; then \
-		@rm -f raddb/test.conf; \
+		rm -f raddb/test.conf; \
 		cat $(BUILD_DIR)/tests/radiusd.config.log; \
 		echo "fail"; \
 		exit 1; \
@@ -52,7 +52,7 @@ $(BUILD_DIR)/tests/radiusd-c: raddb/test.conf ${BUILD_DIR}/bin/radiusd | build.r
 	@echo "ok"
 	@touch $@
 
-test: ${BUILD_DIR}/bin/radiusd ${BUILD_DIR}/bin/radclient tests.unit tests.keywords $(BUILD_DIR)/tests/radiusd-c | build.raddb
+test: ${BUILD_DIR}/bin/radiusd ${BUILD_DIR}/bin/radclient tests.unit tests.xlat tests.keywords tests.auth tests.modules $(BUILD_DIR)/tests/radiusd-c | build.raddb
 	@$(MAKE) -C src/tests tests
 
 #  Tests specifically for Travis.  We do a LOT more than just
@@ -116,6 +116,11 @@ install.man: $(subst man/,$(R)$(mandir)/,$(MANFILES))
 $(R)$(mandir)/%: man/%
 	@echo INSTALL $(notdir $<)
 	@$(INSTALL) -m 644 $< $@
+
+#
+#  Don't install rlm_test
+#
+ALL_INSTALL := $(patsubst %rlm_test.la,,$(ALL_INSTALL))
 
 install: install.dirs install.share install.man
 

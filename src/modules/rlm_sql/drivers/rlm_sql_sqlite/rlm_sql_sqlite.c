@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -21,10 +22,10 @@
  * @copyright 2013 Network RADIUS SARL <info@networkradius.com>
  * @copyright 2007 Apple Inc.
  */
-
 RCSID("$Id$")
 
 #include <freeradius-devel/radiusd.h>
+#include <freeradius-devel/rad_assert.h>
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -63,26 +64,35 @@ static const CONF_PARSER driver_config[] = {
 	{NULL, -1, 0, NULL, NULL}
 };
 
-static int sql_check_error(sqlite3 *db)
+static sql_rcode_t sql_check_error(sqlite3 *db)
 {
 	int error = sqlite3_errcode(db);
-	switch(error) {
+
+	/*
+	 *	Lowest byte is error category, other byte may contain
+	 *	the extended error, depending on version.
+	 */
+	switch (error & 0xff) {
 	/*
 	 *	Not errors
 	 */
 	case SQLITE_OK:
 	case SQLITE_DONE:
 	case SQLITE_ROW:
-		return 0;
+		return RLM_SQL_OK;
 	/*
 	 *	User/transient errors
 	 */
 	case SQLITE_ERROR:	/* SQL error or missing database */
 	case SQLITE_FULL:
-	case SQLITE_CONSTRAINT:
 	case SQLITE_MISMATCH:
-		return -1;
-		break;
+		return RLM_SQL_ERROR;
+
+	/*
+	 *	Constraints violations
+	 */
+	case SQLITE_CONSTRAINT:
+		return RLM_SQL_ALT_QUERY;
 
 	/*
 	 *	Errors with the handle, that probably require reinitialisation
@@ -90,7 +100,6 @@ static int sql_check_error(sqlite3 *db)
 	default:
 		ERROR("rlm_sql_sqlite: Handle is unusable, error (%d): %s", error, sqlite3_errmsg(db));
 		return RLM_SQL_RECONNECT;
-		break;
 	}
 }
 
@@ -201,7 +210,7 @@ static int sql_loadfile(TALLOC_CTX *ctx, sqlite3 *db, char const *filename)
 #else
 		(void) sqlite3_prepare(db, s, len, &>statement, &z_tail);
 #endif
-		if (sql_check_error(db)) {
+		if (sql_check_error(db) != RLM_SQL_OK) {
 			talloc_free(buffer);
 			return -1;
 		}
@@ -210,7 +219,7 @@ static int sql_loadfile(TALLOC_CTX *ctx, sqlite3 *db, char const *filename)
 		status = sql_check_error(db);
 
 		(void) sqlite3_finalize(statement);
-		if (status || sql_check_error(db)) {
+		if ((status != RLM_SQL_OK) || sql_check_error(db)) {
 			talloc_free(buffer);
 			return -1;
 		}
@@ -279,7 +288,7 @@ static int mod_instantiate(CONF_SECTION *conf, rlm_sql_config_t *config)
 			MEM(buff = talloc_typed_strdup(conf, driver->filename));
 		}
 
-		ret = rad_mkdir(buff, 0700);
+		ret = rad_mkdir(buff, 0700, -1, -1);
 		talloc_free(buff);
 		if (ret < 0) {
 			ERROR("rlm_sql_sqlite: Failed creating directory for SQLite database: %s", fr_syserror(errno));
@@ -300,7 +309,7 @@ static int mod_instantiate(CONF_SECTION *conf, rlm_sql_config_t *config)
 			goto unlink;
 		}
 
-		if (sql_check_error(db)) {
+		if (sql_check_error(db) != RLM_SQL_OK) {
 			(void) sqlite3_close(db);
 
 			goto unlink;
@@ -405,12 +414,10 @@ static sql_rcode_t sql_socket_init(rlm_sql_handle_t *handle, rlm_sql_config_t *c
 		      status);
 #endif
 
-		return -1;
+		return RLM_SQL_ERROR;
 	}
 
-	if (sql_check_error(conn->db)) {
-		return -1;
-	}
+	if (sql_check_error(conn->db) != RLM_SQL_OK) return RLM_SQL_ERROR;
 
 	/*
 	 *	Enable extended return codes for extra debugging info.
@@ -418,9 +425,7 @@ static sql_rcode_t sql_socket_init(rlm_sql_handle_t *handle, rlm_sql_config_t *c
 #ifdef HAVE_SQLITE3_EXTENDED_RESULT_CODES
 	(void) sqlite3_extended_result_codes(conn->db, 1);
 #endif
-	if (sql_check_error(conn->db)) {
-		return -1;
-	}
+	if (sql_check_error(conn->db) != RLM_SQL_OK) return RLM_SQL_ERROR;
 
 #ifdef HAVE_SQLITE3_CREATE_FUNCTION_V2
 	status = sqlite3_create_function_v2(conn->db, "GREATEST", -1, SQLITE_ANY, NULL,
@@ -433,7 +438,7 @@ static sql_rcode_t sql_socket_init(rlm_sql_handle_t *handle, rlm_sql_config_t *c
 		ERROR("rlm_sql_sqlite: Failed registering 'GREATEST' sql function: %s", sqlite3_errmsg(conn->db));
 	}
 
-	return 0;
+	return RLM_SQL_OK;
 }
 
 static sql_rcode_t sql_select_query(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config, char const *query)
@@ -464,9 +469,7 @@ static sql_rcode_t sql_query(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *
 #else
 	status = sqlite3_prepare(conn->db, query, strlen(query), &conn->statement, &z_tail);
 #endif
-	if (status != SQLITE_OK) {
-		return sql_check_error(conn->db);
-	}
+	if (status != SQLITE_OK) return sql_check_error(conn->db);
 
 	(void) sqlite3_step(conn->statement);
 
@@ -517,9 +520,7 @@ static sql_rcode_t sql_fetch_row(rlm_sql_handle_t *handle, rlm_sql_config_t *con
 	/*
 	 *	Error getting next row
 	 */
-	if (sql_check_error(conn->db)) {
-		return -1;
-	}
+	if (sql_check_error(conn->db) != RLM_SQL_OK) return RLM_SQL_ERROR;
 
 	/*
 	 *	No more rows to process (were done)
@@ -534,9 +535,7 @@ static sql_rcode_t sql_fetch_row(rlm_sql_handle_t *handle, rlm_sql_config_t *con
 	 */
 	if (conn->col_count == 0) {
 		conn->col_count = sql_num_fields(handle, config);
-		if (conn->col_count == 0) {
-			return -1;
-		}
+		if (conn->col_count == 0) return RLM_SQL_ERROR;
 	}
 
 	/*
@@ -613,20 +612,35 @@ static sql_rcode_t sql_free_result(rlm_sql_handle_t *handle,
 	return 0;
 }
 
-static char const *sql_error(rlm_sql_handle_t *handle,
-			     UNUSED rlm_sql_config_t *config)
+/** Retrieves any errors associated with the connection handle
+ *
+ * @note Caller will free any memory allocated in ctx.
+ *
+ * @param ctx to allocate temporary error buffers in.
+ * @param out Array of sql_log_entrys to fill.
+ * @param outlen Length of out array.
+ * @param handle rlm_sql connection handle.
+ * @param config rlm_sql config.
+ * @return number of errors written to the sql_log_entry array.
+ */
+static size_t sql_error(UNUSED TALLOC_CTX *ctx, sql_log_entry_t out[], size_t outlen,
+			rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
 {
 	rlm_sql_sqlite_conn_t *conn = handle->conn;
+	char const *error;
 
-	if (conn->db) {
-		return sqlite3_errmsg(conn->db);
-	}
+	rad_assert(outlen > 0);
 
-	return "Invalid handle";
+	error = sqlite3_errmsg(conn->db);
+	if (!error) return 0;
+
+	out[0].type = L_ERR;
+	out[0].msg = error;
+
+	return 1;
 }
 
-static sql_rcode_t sql_finish_query(rlm_sql_handle_t *handle,
-			    UNUSED rlm_sql_config_t *config)
+static sql_rcode_t sql_finish_query(rlm_sql_handle_t *handle, rlm_sql_config_t *config)
 {
 	return sql_free_result(handle, config);
 }
@@ -645,19 +659,21 @@ static int sql_affected_rows(rlm_sql_handle_t *handle,
 
 
 /* Exported to rlm_sql */
+extern rlm_sql_module_t rlm_sql_sqlite;
 rlm_sql_module_t rlm_sql_sqlite = {
-	"rlm_sql_sqlite",
-	mod_instantiate,
-	sql_socket_init,
-	sql_query,
-	sql_select_query,
-	sql_store_result,
-	sql_num_fields,
-	sql_num_rows,
-	sql_fetch_row,
-	sql_free_result,
-	sql_error,
-	sql_finish_query,
-	sql_finish_query,
-	sql_affected_rows
+	.name				= "rlm_sql_sqlite",
+	.flags				= RLM_SQL_RCODE_FLAGS_ALT_QUERY,
+	.mod_instantiate		= mod_instantiate,
+	.sql_socket_init		= sql_socket_init,
+	.sql_query			= sql_query,
+	.sql_select_query		= sql_select_query,
+	.sql_store_result		= sql_store_result,
+	.sql_num_fields			= sql_num_fields,
+	.sql_num_rows			= sql_num_rows,
+	.sql_affected_rows		= sql_affected_rows,
+	.sql_fetch_row			= sql_fetch_row,
+	.sql_free_result		= sql_free_result,
+	.sql_error			= sql_error,
+	.sql_finish_query		= sql_finish_query,
+	.sql_finish_select_query	= sql_finish_query
 };

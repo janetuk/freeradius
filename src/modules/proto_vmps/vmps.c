@@ -72,7 +72,7 @@ static int vqp_socket_recv(rad_listen_t *listener)
 	 */
 	fun = vmps_process;
 
-	if (!request_receive(listener, packet, client, fun)) {
+	if (!request_receive(NULL, listener, packet, client, fun)) {
 		rad_free(&packet);
 		return 0;
 	}
@@ -109,7 +109,7 @@ static int vqp_socket_decode(UNUSED rad_listen_t *listener, REQUEST *request)
 	return vqp_decode(request->packet);
 }
 
-
+extern fr_protocol_t proto_vmps;
 fr_protocol_t proto_vmps = {
 	RLM_MODULE_INIT,
 	"vmps",

@@ -41,7 +41,7 @@ RCSID("$Id$")
 
 extern int sha1_data_problems;
 
-static int retries = 10;
+static unsigned int retries = 10;
 static float timeout = 3;
 static char const *secret = NULL;
 static int do_output = 1;
@@ -50,8 +50,7 @@ static bool filedone = false;
 static int totalapp = 0;
 static int totaldeny = 0;
 static char filesecret[256];
-char const *radius_dir = NULL;
-char const *dict_dir = NULL;
+static char const *radius_dir = NULL;
 char const *progname = "radeapclient";
 /* fr_randctx randctx; */
 
@@ -62,10 +61,10 @@ char const *radiusd_version = "";
 #include <freeradius-devel/tls.h>
 #endif
 
-log_debug_t debug_flag = 0;
-char password[256];
+log_lvl_t debug_flag = 0;
+static char password[256];
 
-struct eapsim_keys eapsim_mk;
+static struct eapsim_keys eapsim_mk;
 
 static void map_eap_methods(RADIUS_PACKET *req);
 static void unmap_eap_methods(RADIUS_PACKET *rep);
@@ -103,10 +102,8 @@ static uint16_t getport(char const *name)
 {
 	struct	servent		*svp;
 
-	svp = getservbyname (name, "udp");
-	if (!svp) {
-		return 0;
-	}
+	svp = getservbyname(name, "udp");
+	if (!svp) return 0;
 
 	return ntohs(svp->s_port);
 }
@@ -165,12 +162,12 @@ static void debug_packet(RADIUS_PACKET *packet, int direction)
 
 static int send_packet(RADIUS_PACKET *req, RADIUS_PACKET **rep)
 {
-	int i;
+	unsigned int i;
 	struct timeval	tv;
 
 	if (!req || !rep) return -1;
 
-	for (i = 0; i < retries; i++) {
+	for (i = 0; i <= retries; i++) {
 		fd_set		rdfdesc;
 
 		debug_packet(req, R_SENT);
@@ -192,7 +189,7 @@ static int send_packet(RADIUS_PACKET *req, RADIUS_PACKET **rep)
 			continue;
 		}
 
-		*rep = rad_recv(req->sockfd, 0);
+		*rep = rad_recv(NULL, req->sockfd, 0);
 		if (*rep != NULL) {
 			/*
 			 *	If we get a response from a machine
@@ -248,7 +245,7 @@ static int send_packet(RADIUS_PACKET *req, RADIUS_PACKET **rep)
 	if (!fr_debug_flag && do_output) {
 		debug_packet(*rep, R_RECV);
 	}
-	if((*rep)->code == PW_CODE_ACCESS_ACCEPT) {
+	if ((*rep)->code == PW_CODE_ACCESS_ACCEPT) {
 		totalapp++;
 	} else if ((*rep)->code == PW_CODE_ACCESS_REJECT) {
 		totaldeny++;
@@ -312,9 +309,9 @@ static int process_eap_start(RADIUS_PACKET *req,
 	versions = (uint16_t const *) vp->vp_strvalue;
 
 	/* verify that the attribute length is big enough for a length field */
-	if(vp->length < 4)
+	if(vp->vp_length < 4)
 	{
-		ERROR("start message has illegal VERSION_LIST. Too short: %u", (unsigned int) vp->length);
+		ERROR("start message has illegal VERSION_LIST. Too short: %u", (unsigned int) vp->vp_length);
 		return 0;
 	}
 
@@ -322,9 +319,9 @@ static int process_eap_start(RADIUS_PACKET *req,
 	/* verify that the attribute length is big enough for the given number
 	 * of versions present.
 	 */
-	if((unsigned)vp->length <= (versioncount*2 + 2))
+	if((unsigned)vp->vp_length <= (versioncount*2 + 2))
 	{
-		ERROR("start message is too short. Claimed %d versions does not fit in %u bytes", versioncount, (unsigned int) vp->length);
+		ERROR("start message is too short. Claimed %d versions does not fit in %u bytes", versioncount, (unsigned int) vp->vp_length);
 		return 0;
 	}
 
@@ -686,9 +683,9 @@ static int respond_eap_sim(RADIUS_PACKET *req, RADIUS_PACKET *resp)
 	/*
 	 * look for the appropriate state, and process incoming message
 	 */
-	switch(state) {
+	switch (state) {
 	case EAPSIM_CLIENT_INIT:
-		switch(subtype) {
+		switch (subtype) {
 		case EAPSIM_START:
 			newstate = process_eap_start(req, resp);
 			break;
@@ -706,7 +703,7 @@ static int respond_eap_sim(RADIUS_PACKET *req, RADIUS_PACKET *resp)
 		break;
 
 	case EAPSIM_CLIENT_START:
-		switch(subtype) {
+		switch (subtype) {
 		case EAPSIM_START:
 			/* NOT SURE ABOUT THIS ONE, retransmit, I guess */
 			newstate = process_eap_start(req, resp);
@@ -781,10 +778,10 @@ static int respond_eap_md5(RADIUS_PACKET *req,
 	value = &vp->vp_octets[1];
 
 	/* sanitize items */
-	if(valuesize > vp->length)
+	if(valuesize > vp->vp_length)
 	{
 		ERROR("md5 valuesize if too big (%u > %u)",
-			(unsigned int) valuesize, (unsigned int) vp->length);
+			(unsigned int) valuesize, (unsigned int) vp->vp_length);
 		return 0;
 	}
 
@@ -803,7 +800,7 @@ static int respond_eap_md5(RADIUS_PACKET *req,
 		uint8_t lg_response;
 
 		vp = paircreate(rep, PW_EAP_TYPE_BASE+PW_EAP_MD5, 0);
-		vp->length = 17;
+		vp->vp_length = 17;
 
 		p = talloc_zero_array(vp, uint8_t, 17);
 		lg_response = 16;
@@ -880,12 +877,12 @@ static int sendrecv_eap(RADIUS_PACKET *rep)
 			DICT_ATTR const *da;
 			uint8_t *p, *q;
 
-			p = talloc_array(vp, uint8_t, vp->length + 2);
+			p = talloc_array(vp, uint8_t, vp->vp_length + 2);
 
-			memcpy(p + 2, vp->vp_octets, vp->length);
+			memcpy(p + 2, vp->vp_octets, vp->vp_length);
 			p[0] = vp->da->attr - PW_DIGEST_REALM + 1;
-			vp->length += 2;
-			p[1] = vp->length;
+			vp->vp_length += 2;
+			p[1] = vp->vp_length;
 
 			da = dict_attrbyvalue(PW_DIGEST_ATTRIBUTES, 0);
 			vp->da = da;
@@ -1027,7 +1024,7 @@ int main(int argc, char **argv)
 
 	while ((c = getopt(argc, argv, "46c:d:D:f:hi:qst:r:S:xXv")) != EOF)
 	{
-		switch(c) {
+		switch (c) {
 		case '4':
 			force_af = AF_INET;
 			break;
@@ -1083,7 +1080,7 @@ int main(int argc, char **argv)
 		case 'v':
 			printf("$Id$ built on "__DATE__ "at "__TIME__ "");
 			exit(0);
-			break;
+
 	       case 'S':
 		       fp = fopen(optarg, "r");
 		       if (!fp) {
@@ -1115,7 +1112,6 @@ int main(int argc, char **argv)
 		case 'h':
 		default:
 			usage();
-			break;
 		}
 	}
 	argc -= (optind - 1);
@@ -1270,7 +1266,7 @@ int main(int argc, char **argv)
 
 	while (!filedone) {
 		if (req->vps) pairfree(&req->vps);
-		if (readvp2(&req->vps, NULL, fp, &filedone) < 0) {
+		if (readvp2(NULL, &req->vps, fp, &filedone) < 0) {
 			ERROR("%s", fr_strerror());
 			break;
 		}
@@ -1338,7 +1334,7 @@ static void map_eap_methods(RADIUS_PACKET *req)
 
 	eap_method = vp->da->attr - PW_EAP_TYPE_BASE;
 
-	switch(eap_method) {
+	switch (eap_method) {
 	case PW_EAP_IDENTITY:
 	case PW_EAP_NOTIFICATION:
 	case PW_EAP_NAK:
@@ -1361,9 +1357,9 @@ static void map_eap_methods(RADIUS_PACKET *req)
 		pt_ep->code = eapcode;
 		pt_ep->id = id;
 		pt_ep->type.num = eap_method;
-		pt_ep->type.length = vp->length;
+		pt_ep->type.length = vp->vp_length;
 
-		pt_ep->type.data = talloc_memdup(vp, vp->vp_octets, vp->length);
+		pt_ep->type.data = talloc_memdup(vp, vp->vp_octets, vp->vp_length);
 		talloc_set_type(pt_ep->type.data, uint8_t);
 
 		eap_basic_compose(req, pt_ep);
@@ -1385,10 +1381,10 @@ static void unmap_eap_methods(RADIUS_PACKET *rep)
 
 	/* find eap message */
 	e = eap_vp2packet(NULL, rep->vps);
-
-	/* nothing to do! */
-	if(!e) return;
-
+	if (!e) {
+		ERROR("%s", fr_strerror());
+		return;
+	}
 	/* create EAP-ID and EAP-CODE attributes to start */
 	eap1 = paircreate(rep, PW_EAP_ID, 0);
 	eap1->vp_integer = e->id;
@@ -1398,7 +1394,7 @@ static void unmap_eap_methods(RADIUS_PACKET *rep)
 	eap1->vp_integer = e->code;
 	pairadd(&(rep->vps), eap1);
 
-	switch(e->code) {
+	switch (e->code) {
 	default:
 	case PW_EAP_SUCCESS:
 	case PW_EAP_FAILURE:
@@ -1472,10 +1468,10 @@ static int unmap_eapsim_types(RADIUS_PACKET *r)
 		return 0;
 	}
 
-	eap_data = talloc_memdup(esvp, esvp->vp_octets, esvp->length);
+	eap_data = talloc_memdup(esvp, esvp->vp_octets, esvp->vp_length);
 	talloc_set_type(eap_data, uint8_t);
 
-	rcode_unmap = unmap_eapsim_basictypes(r, eap_data, esvp->length);
+	rcode_unmap = unmap_eapsim_basictypes(r, eap_data, esvp->vp_length);
 
 	talloc_free(eap_data);
 	return rcode_unmap;
@@ -1523,7 +1519,7 @@ main(int argc, char *argv[])
 		if (req->vps) pairfree(&req->vps);
 		if (req2->vps) pairfree(&req2->vps);
 
-		if (readvp2(&req->vps, NULL, stdin, &filedone) < 0) {
+		if (readvp2(NULL, &req->vps, stdin, &filedone) < 0) {
 			ERROR("%s", fr_strerror());
 			break;
 		}
@@ -1568,9 +1564,9 @@ main(int argc, char *argv[])
 
 			memset(calcmac, 0, sizeof(calcmac));
 			DEBUG("Confirming MAC...");
-			if(eapsim_checkmac(req2->vps, vpkey->vp_strvalue,
-					   vpextra->vp_strvalue, vpextra->length,
-					   calcmac)) {
+			if (eapsim_checkmac(req2->vps, vpkey->vp_strvalue,
+					    vpextra->vp_strvalue, vpextra->length,
+					    calcmac)) {
 				DEBUG("succeed");
 			} else {
 				int i, j;

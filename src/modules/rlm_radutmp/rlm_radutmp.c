@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -58,7 +59,7 @@ typedef struct rlm_radutmp_t {
 
 static const CONF_PARSER module_config[] = {
 	{ "filename", FR_CONF_OFFSET(PW_TYPE_FILE_OUTPUT | PW_TYPE_REQUIRED, rlm_radutmp_t, filename), RADUTMP  },
-	{ "username", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED, rlm_radutmp_t, username), "%{User-Name}" },
+	{ "username", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED | PW_TYPE_XLAT, rlm_radutmp_t, username), "%{User-Name}" },
 	{ "case_sensitive", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_radutmp_t, case_sensitive), "yes" },
 	{ "check_with_nas", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_radutmp_t, check_nas), "yes" },
 	{ "perm", FR_CONF_OFFSET(PW_TYPE_INTEGER | PW_TYPE_DEPRECATED, rlm_radutmp_t, permission), NULL },
@@ -200,7 +201,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 		     == NULL || vp->vp_date == 0)
 			check1 = 1;
 		if ((vp = pairfind(request->packet->vps, PW_ACCT_SESSION_ID, 0, TAG_ANY))
-		     != NULL && vp->length == 8 &&
+		     != NULL && vp->vp_length == 8 &&
 		     memcmp(vp->vp_strvalue, "00000000", 8) == 0)
 			check2 = 1;
 		if (check1 == 0 || check2 == 0) {
@@ -252,14 +253,14 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 			 *	If length > 8, only store the
 			 *	last 8 bytes.
 			 */
-			off = vp->length - sizeof(ut.session_id);
+			off = vp->vp_length - sizeof(ut.session_id);
 			/*
 			 * 	Ascend is br0ken - it adds a \0
 			 * 	to the end of any string.
 			 * 	Compensate.
 			 */
-			if (vp->length > 0 &&
-			    vp->vp_strvalue[vp->length - 1] == 0)
+			if (vp->vp_length > 0 &&
+			    vp->vp_strvalue[vp->vp_length - 1] == 0)
 				off--;
 			if (off < 0) off = 0;
 			memcpy(ut.session_id, vp->vp_strvalue + off,
@@ -738,6 +739,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_checksimul(void *instance, REQUEST *requ
 #endif
 
 /* globally exported name */
+extern module_t rlm_radutmp;
 module_t rlm_radutmp = {
 	RLM_MODULE_INIT,
 	"radutmp",

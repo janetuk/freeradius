@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -263,7 +264,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 
 		(void) talloc_steal(vp, expanded);
 		vp->vp_strvalue = expanded;
-		vp->length = len;
+		vp->vp_length = len;
 		vp->op = T_OP_SET;
 		vp->type = VT_DATA;
 
@@ -338,7 +339,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		 */
 		elen = (inst->challenge_len * 2) + 8 + 8 + 32;
 
-		if (vp->length != elen) {
+		if (vp->vp_length != elen) {
 			REDEBUG("Bad radstate for [%s]: length", username);
 			return RLM_MODULE_INVALID;
 		}
@@ -354,8 +355,8 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		 *	There are notes in otp_radstate as to why the state
 		 *	value is encoded as hexits.
 		 */
-		len = fr_hex2bin(bin_state, sizeof(bin_state), vp->vp_strvalue, vp->length);
-		if (len != (vp->length / 2)) {
+		len = fr_hex2bin(bin_state, sizeof(bin_state), vp->vp_strvalue, vp->vp_length);
+		if (len != (vp->vp_length / 2)) {
 			REDEBUG("bad radstate for [%s]: not hex", username);
 
 			return RLM_MODULE_INVALID;
@@ -382,7 +383,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		 *	against generated state (in hex form)
 		 *	to verify hmac.
 		 */
-		if (memcmp(gen_state, vp->vp_octets, vp->length)) {
+		if (memcmp(gen_state, vp->vp_octets, vp->vp_length)) {
 			REDEBUG("bad radstate for [%s]: hmac", username);
 
 			return RLM_MODULE_REJECT;
@@ -416,6 +417,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
+extern module_t rlm_otp;
 module_t rlm_otp = {
 	RLM_MODULE_INIT,
 	"otp",

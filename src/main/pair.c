@@ -14,12 +14,12 @@
  *   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-/*
+/**
  * $Id$
  *
  * @brief Valuepair functions that are radiusd-specific and as such do not
  * 	  belong in the library.
- * @file main/valuepair.c
+ * @file main/pair.c
  *
  * @ingroup AVP
  *
@@ -34,18 +34,8 @@ RCSID("$Id$")
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/rad_assert.h>
 
-const FR_NAME_NUMBER vpt_types[] = {
-	{"unknown",		TMPL_TYPE_UNKNOWN },
-	{"literal",		TMPL_TYPE_LITERAL },
-	{"expanded",		TMPL_TYPE_XLAT },
-	{"attribute ref",	TMPL_TYPE_ATTR },
-	{"list",		TMPL_TYPE_LIST },
-	{"exec",		TMPL_TYPE_EXEC },
-	{"value-pair-data",	TMPL_TYPE_DATA }
-};
-
 struct cmp {
-	DICT_ATTR const *da;
+	DICT_ATTR const *attribute;
 	DICT_ATTR const *from;
 	bool	first_only;
 	void *instance; /* module instance */
@@ -80,58 +70,65 @@ int radius_compare_vps(UNUSED REQUEST *request, VALUE_PAIR *check, VALUE_PAIR *v
 	if (check->op == T_OP_CMP_FALSE) return 1;
 
 #ifdef HAVE_REGEX
-	if (check->op == T_OP_REG_EQ) {
-		int compare;
-		regex_t reg;
-		char value[1024];
-		regmatch_t rxmatch[REQUEST_MAX_REGEX + 1];
+	if ((check->op == T_OP_REG_EQ) || (check->op == T_OP_REG_NE)) {
+		ssize_t		slen;
+		regex_t		*preg;
+		regmatch_t	rxmatch[REQUEST_MAX_REGEX + 1];	/* +1 for %{0} (whole match) capture group */
+		size_t		nmatch = sizeof(rxmatch) / sizeof(regmatch_t);
 
-		vp_prints_value(value, sizeof(value), vp, -1);
+		char *expr = NULL, *value = NULL;
+		char const *expr_p, *value_p;
+
+		if (check->da->type == PW_TYPE_STRING) {
+			expr_p = check->vp_strvalue;
+		} else {
+			expr_p = expr = vp_aprints_value(check, check, '\0');
+		}
+
+		if (vp->da->type == PW_TYPE_STRING) {
+			value_p = vp->vp_strvalue;
+		} else {
+			value_p = value = vp_aprints_value(vp, vp, '\0');
+		}
+
+		if (!expr_p || !value_p) {
+			REDEBUG("Error stringifying operand for regular expression");
+
+		regex_error:
+			talloc_free(expr);
+			talloc_free(value);
+			return -2;
+		}
 
 		/*
 		 *	Include substring matches.
 		 */
-		compare = regcomp(&reg, check->vp_strvalue, REG_EXTENDED);
-		if (compare != 0) {
-			char buffer[256];
-			regerror(compare, &reg, buffer, sizeof(buffer));
+		slen = regex_compile(request, &preg, expr_p, talloc_array_length(expr_p) - 1, false, false, true, true);
+		if (slen <= 0) {
+			REMARKER(expr_p, -slen, fr_strerror());
 
-			RDEBUG("Invalid regular expression %s: %s", check->vp_strvalue, buffer);
+			goto regex_error;
+		}
+
+		ret = regex_exec(preg, value_p, talloc_array_length(value_p) - 1, rxmatch, &nmatch);
+		if (ret < 0) {
+			RERROR("%s", fr_strerror());
+
 			return -2;
 		}
 
-		memset(&rxmatch, 0, sizeof(rxmatch));	/* regexec does not seem to initialise unused elements */
-		compare = regexec(&reg, value, REQUEST_MAX_REGEX + 1, rxmatch, 0);
-		regfree(&reg);
-		rad_regcapture(request, compare, value, rxmatch);
+		if (check->op == T_OP_REG_EQ) {
+			regex_sub_to_request(request, &preg, value_p, talloc_array_length(value_p) - 1,
+					     rxmatch, nmatch);
+			ret = (slen == 1) ? 0 : -1;
+		} else {
+			ret = (slen != 1) ? 0 : -1;
+		}
 
-		ret = (compare == 0) ? 0 : -1;
+		talloc_free(preg);
+		talloc_free(expr);
+		talloc_free(value);
 		goto finish;
-	}
-
-	if (check->op == T_OP_REG_NE) {
-		int compare;
-		regex_t reg;
-		char value[1024];
-		regmatch_t rxmatch[REQUEST_MAX_REGEX + 1];
-
-		vp_prints_value(value, sizeof(value), vp, -1);
-
-		/*
-		 *	Include substring matches.
-		 */
-		compare = regcomp(&reg, check->vp_strvalue, REG_EXTENDED);
-		if (compare != 0) {
-			char buffer[256];
-			regerror(compare, &reg, buffer, sizeof(buffer));
-
-			RDEBUG("Invalid regular expression %s: %s", check->vp_strvalue, buffer);
-			return -2;
-		}
-		compare = regexec(&reg, value,  REQUEST_MAX_REGEX + 1, rxmatch, 0);
-		regfree(&reg);
-
-		ret = (compare != 0) ? 0 : -1;
 	}
 #endif
 
@@ -157,7 +154,7 @@ int radius_compare_vps(UNUSED REQUEST *request, VALUE_PAIR *check, VALUE_PAIR *v
 	/*
 	 *	Not a regular expression, compare the types.
 	 */
-	switch(check->da->type) {
+	switch (check->da->type) {
 #ifdef WITH_ASCEND_BINARY
 		/*
 		 *	Ascend binary attributes can be treated
@@ -166,12 +163,12 @@ int radius_compare_vps(UNUSED REQUEST *request, VALUE_PAIR *check, VALUE_PAIR *v
 		case PW_TYPE_ABINARY:
 #endif
 		case PW_TYPE_OCTETS:
-			if (vp->length != check->length) {
+			if (vp->vp_length != check->vp_length) {
 				ret = 1; /* NOT equal */
 				break;
 			}
 			ret = memcmp(vp->vp_strvalue, check->vp_strvalue,
-				     vp->length);
+				     vp->vp_length);
 			break;
 
 		case PW_TYPE_STRING:
@@ -180,7 +177,11 @@ int radius_compare_vps(UNUSED REQUEST *request, VALUE_PAIR *check, VALUE_PAIR *v
 			break;
 
 		case PW_TYPE_BYTE:
+			ret = vp->vp_byte - check->vp_byte;
+			break;
 		case PW_TYPE_SHORT:
+			ret = vp->vp_short - check->vp_short;
+			break;
 		case PW_TYPE_INTEGER:
 			ret = vp->vp_integer - check->vp_integer;
 			break;
@@ -217,31 +218,24 @@ int radius_compare_vps(UNUSED REQUEST *request, VALUE_PAIR *check, VALUE_PAIR *v
 			break;
 
 		case PW_TYPE_IPV6_ADDR:
-			ret = memcmp(&vp->vp_ipv6addr, &check->vp_ipv6addr,
-				     sizeof(vp->vp_ipv6addr));
+			ret = memcmp(&vp->vp_ipv6addr, &check->vp_ipv6addr, sizeof(vp->vp_ipv6addr));
 			break;
 
 		case PW_TYPE_IPV6_PREFIX:
-			ret = memcmp(&vp->vp_ipv6prefix, &check->vp_ipv6prefix,
-				     sizeof(vp->vp_ipv6prefix));
+			ret = memcmp(vp->vp_ipv6prefix, check->vp_ipv6prefix, sizeof(vp->vp_ipv6prefix));
 			break;
 
 		case PW_TYPE_IFID:
-			ret = memcmp(&vp->vp_ifid, &check->vp_ifid,
-				     sizeof(vp->vp_ifid));
+			ret = memcmp(vp->vp_ifid, check->vp_ifid, sizeof(vp->vp_ifid));
 			break;
 
 		default:
 			break;
 	}
 
-	finish:
-	if (ret > 0) {
-		return 1;
-	}
-	if (ret < 0) {
-		return -1;
-	}
+finish:
+	if (ret > 0) return 1;
+	if (ret < 0) return -1;
 	return 0;
 }
 
@@ -277,7 +271,7 @@ int radius_callback_compare(REQUEST *request, VALUE_PAIR *req,
 	 *	FIXME: use new RB-Tree code.
 	 */
 	for (c = cmp; c; c = c->next) {
-		if (c->da == check->da) {
+		if (c->attribute == check->da) {
 			return (c->compare)(c->instance, request, req, check,
 				check_pairs, reply_pairs);
 		}
@@ -291,15 +285,16 @@ int radius_callback_compare(REQUEST *request, VALUE_PAIR *req,
 
 /** Find a comparison function for two attributes.
  *
- * @param da to find comparison function for.
+ * @todo this should probably take DA's.
+ * @param attribute to find comparison function for.
  * @return true if a comparison function was found, else false.
  */
-int radius_find_compare(DICT_ATTR const *da)
+int radius_find_compare(DICT_ATTR const *attribute)
 {
 	struct cmp *c;
 
 	for (c = cmp; c; c = c->next) {
-		if (c->da == da) {
+		if (c->attribute == attribute) {
 			return true;
 		}
 	}
@@ -310,28 +305,28 @@ int radius_find_compare(DICT_ATTR const *da)
 
 /** See what attribute we want to compare with.
  *
- * @param da to find comparison function for.
+ * @param attribute to find comparison function for.
  * @param from reference to compare with
  * @return true if the comparison callback require a matching attribue in the request, else false.
  */
-static bool otherattr(DICT_ATTR const *da, DICT_ATTR const **from)
+static bool otherattr(DICT_ATTR const *attribute, DICT_ATTR const **from)
 {
 	struct cmp *c;
 
 	for (c = cmp; c; c = c->next) {
-		if (c->da == da) {
+		if (c->attribute == attribute) {
 			*from = c->from;
 			return c->first_only;
 		}
 	}
 
-	*from = da;
+	*from = attribute;
 	return false;
 }
 
 /** Register a function as compare function.
  *
- * @param da to register comparison function for.
+ * @param attribute to register comparison function for.
  * @param from the attribute we want to compare with. Normally this is the same as attribute.
  *  If null call the comparison function on every attributes in the request if first_only is false
  * @param first_only will decide if we loop over the request attributes or stop on the first one
@@ -339,19 +334,19 @@ static bool otherattr(DICT_ATTR const *da, DICT_ATTR const **from)
  * @param instance argument to comparison function
  * @return 0
  */
-int paircompare_register(DICT_ATTR const *da, DICT_ATTR const *from,
+int paircompare_register(DICT_ATTR const *attribute, DICT_ATTR const *from,
 			 bool first_only, RAD_COMPARE_FUNC func, void *instance)
 {
 	struct cmp *c;
 
-	rad_assert(da != NULL);
+	rad_assert(attribute != NULL);
 
-	paircompare_unregister(da, func);
+	paircompare_unregister(attribute, func);
 
 	c = rad_malloc(sizeof(struct cmp));
 
 	c->compare   = func;
-	c->da = da;
+	c->attribute = attribute;
 	c->from = from;
 	c->first_only = first_only;
 	c->instance  = instance;
@@ -363,16 +358,16 @@ int paircompare_register(DICT_ATTR const *da, DICT_ATTR const *from,
 
 /** Unregister comparison function for an attribute
  *
- * @param da dict reference to unregister for.
+ * @param attribute dict reference to unregister for.
  * @param func comparison function to remove.
  */
-void paircompare_unregister(DICT_ATTR const *da, RAD_COMPARE_FUNC func)
+void paircompare_unregister(DICT_ATTR const *attribute, RAD_COMPARE_FUNC func)
 {
 	struct cmp *c, *last;
 
 	last = NULL;
 	for (c = cmp; c; c = c->next) {
-		if (c->da == da && c->compare == func) {
+		if (c->attribute == attribute && c->compare == func) {
 			break;
 		}
 		last = c;
@@ -460,7 +455,6 @@ int paircompare(REQUEST *request, VALUE_PAIR *req_list, VALUE_PAIR *check,
 		case PW_SESSION_TYPE:
 		case PW_STRIP_USER_NAME:
 			continue;
-			break;
 
 		/*
 		 *	IF the password attribute exists, THEN
@@ -601,28 +595,37 @@ int paircompare(REQUEST *request, VALUE_PAIR *req_list, VALUE_PAIR *check,
  */
 int radius_xlat_do(REQUEST *request, VALUE_PAIR *vp)
 {
-	ssize_t len;
+	ssize_t slen;
 
-	char buffer[1024];
-
+	char *expanded = NULL;
 	if (vp->type != VT_XLAT) return 0;
 
 	vp->type = VT_DATA;
 
-	len = radius_xlat(buffer, sizeof(buffer), request, vp->value.xlat, NULL, NULL);
-
+	slen = radius_axlat(&expanded, request, vp->value.xlat, NULL, NULL);
 	rad_const_free(vp->value.xlat);
 	vp->value.xlat = NULL;
-	if (len < 0) {
+	if (slen < 0) {
 		return -1;
 	}
 
 	/*
 	 *	Parse the string into a new value.
+	 *
+	 *	If the VALUE_PAIR is being used in a regular expression
+	 *	then we just want to copy the new value in unmolested.
 	 */
-	if (pairparsevalue(vp, buffer, 0) < 0){
+	if ((vp->op == T_OP_REG_EQ) || (vp->op == T_OP_REG_NE)) {
+		pairstrsteal(vp, expanded);
+		return 0;
+	}
+
+	if (pairparsevalue(vp, expanded, -1) < 0){
+		talloc_free(expanded);
 		return -2;
 	}
+
+	talloc_free(expanded);
 
 	return 0;
 }
@@ -667,30 +670,32 @@ void debug_pair(VALUE_PAIR *vp)
 	vp_print(fr_log_fp, vp);
 }
 
-/** Print a list of valuepairs to stderr or error log.
- *
- * @param[in] vp to print.
- */
-void debug_pair_list(VALUE_PAIR *vp)
-{
-	vp_cursor_t cursor;
-	if (!vp || !debug_flag || !fr_log_fp) return;
-
-	for (vp = fr_cursor_init(&cursor, &vp);
-	     vp;
-	     vp = fr_cursor_next(&cursor)) {
-		vp_print(fr_log_fp, vp);
-	}
-	fflush(fr_log_fp);
-}
-
-/** Print a list of valuepairs to the request list.
+/** Print a single valuepair to stderr or error log.
  *
  * @param[in] level Debug level (1-4).
  * @param[in] request to read logging params from.
  * @param[in] vp to print.
+ * @param[in] prefix (optional).
  */
-void rdebug_pair_list(int level, REQUEST *request, VALUE_PAIR *vp)
+void rdebug_pair(log_lvl_t level, REQUEST *request, VALUE_PAIR *vp, char const *prefix)
+{
+	char buffer[256];
+	if (!vp || !request || !request->log.func) return;
+
+	if (!radlog_debug_enabled(L_DBG, level, request)) return;
+
+	vp_prints(buffer, sizeof(buffer), vp);
+	RDEBUGX(level, "%s%s", prefix ? prefix : "",  buffer);
+}
+
+/** Print a list of VALUE_PAIRs.
+ *
+ * @param[in] level Debug level (1-4).
+ * @param[in] request to read logging params from.
+ * @param[in] vp to print.
+ * @param[in] prefix (optional).
+ */
+void rdebug_pair_list(log_lvl_t level, REQUEST *request, VALUE_PAIR *vp, char const *prefix)
 {
 	vp_cursor_t cursor;
 	char buffer[256];
@@ -698,22 +703,43 @@ void rdebug_pair_list(int level, REQUEST *request, VALUE_PAIR *vp)
 
 	if (!radlog_debug_enabled(L_DBG, level, request)) return;
 
+	RINDENT();
 	for (vp = fr_cursor_init(&cursor, &vp);
 	     vp;
 	     vp = fr_cursor_next(&cursor)) {
-		/*
-		 *	Take this opportunity to verify all the VALUE_PAIRs are still valid.
-		 */
-		if (!talloc_get_type(vp, VALUE_PAIR)) {
-			REDEBUG("Expected VALUE_PAIR pointer got \"%s\"", talloc_get_name(vp));
-
-			fr_log_talloc_report(vp);
-			rad_assert(0);
-		}
+		VERIFY_VP(vp);
 
 		vp_prints(buffer, sizeof(buffer), vp);
-		RDEBUGX(level, "\t%s", buffer);
+		RDEBUGX(level, "%s%s", prefix ? prefix : "",  buffer);
 	}
+	REXDENT();
+}
+
+/** Print a list of protocol VALUE_PAIRs.
+ *
+ * @param[in] level Debug level (1-4).
+ * @param[in] request to read logging params from.
+ * @param[in] vp to print.
+ */
+void rdebug_proto_pair_list(log_lvl_t level, REQUEST *request, VALUE_PAIR *vp)
+{
+	vp_cursor_t cursor;
+	char buffer[256];
+	if (!vp || !request || !request->log.func) return;
+
+	if (!radlog_debug_enabled(L_DBG, level, request)) return;
+
+	RINDENT();
+	for (vp = fr_cursor_init(&cursor, &vp);
+	     vp;
+	     vp = fr_cursor_next(&cursor)) {
+		VERIFY_VP(vp);
+		if ((vp->da->vendor == 0) &&
+		    ((vp->da->attr & 0xFFFF) > 0xff)) continue;
+		vp_prints(buffer, sizeof(buffer), vp);
+		RDEBUGX(level, "%s", buffer);
+	}
+	REXDENT();
 }
 
 /** Return a VP from the specified request.
@@ -727,15 +753,18 @@ void rdebug_pair_list(int level, REQUEST *request, VALUE_PAIR *vp)
  */
 int radius_get_vp(VALUE_PAIR **out, REQUEST *request, char const *name)
 {
+	int rcode;
 	value_pair_tmpl_t vpt;
 
 	*out = NULL;
 
-	if (tmpl_from_attr_str(&vpt, name, REQUEST_CURRENT, PAIR_LIST_REQUEST) < 0) {
+	if (tmpl_from_attr_str(&vpt, name, REQUEST_CURRENT, PAIR_LIST_REQUEST, false, false) <= 0) {
 		return -4;
 	}
 
-	return tmpl_find_vp(out, request, &vpt);
+	rcode = tmpl_find_vp(out, request, &vpt);
+
+	return rcode;
 }
 
 /** Copy VP(s) from the specified request.
@@ -750,15 +779,18 @@ int radius_get_vp(VALUE_PAIR **out, REQUEST *request, char const *name)
  */
 int radius_copy_vp(TALLOC_CTX *ctx, VALUE_PAIR **out, REQUEST *request, char const *name)
 {
+	int rcode;
 	value_pair_tmpl_t vpt;
 
 	*out = NULL;
 
-	if (tmpl_from_attr_str(&vpt, name, REQUEST_CURRENT, PAIR_LIST_REQUEST) < 0) {
+	if (tmpl_from_attr_str(&vpt, name, REQUEST_CURRENT, PAIR_LIST_REQUEST, false, false) <= 0) {
 		return -4;
 	}
 
-	return tmpl_copy_vps(ctx, out, request, &vpt);
+	rcode = tmpl_copy_vps(ctx, out, request, &vpt);
+
+	return rcode;
 }
 
 void module_failure_msg(REQUEST *request, char const *fmt, ...)

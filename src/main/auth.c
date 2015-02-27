@@ -25,6 +25,7 @@ RCSID("$Id$")
 
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/modules.h>
+#include <freeradius-devel/state.h>
 #include <freeradius-devel/rad_assert.h>
 
 #include <ctype.h>
@@ -100,9 +101,7 @@ static int rad_authlog(char const *msg, REQUEST *request, int goodpass)
 	if (username == NULL) {
 		strcpy(clean_username, "<no User-Name attribute>");
 	} else {
-		fr_print_string(username->vp_strvalue,
-				username->length,
-				clean_username, sizeof(clean_username));
+		fr_prints(clean_username, sizeof(clean_username), username->vp_strvalue, username->vp_length, '\0');
 	}
 
 	/*
@@ -124,9 +123,8 @@ static int rad_authlog(char const *msg, REQUEST *request, int goodpass)
 		} else if (pairfind(request->packet->vps, PW_CHAP_PASSWORD, 0, TAG_ANY)) {
 			strcpy(clean_password, "<CHAP-Password>");
 		} else {
-			fr_print_string(request->password->vp_strvalue,
-					 request->password->length,
-					 clean_password, sizeof(clean_password));
+			fr_prints(clean_password, sizeof(clean_password),
+				  request->password->vp_strvalue, request->password->vp_length, '\0');
 		}
 	}
 
@@ -293,15 +291,29 @@ int rad_postauth(REQUEST *request)
 	int	postauth_type = 0;
 	VALUE_PAIR *vp;
 
+	if (request->reply->code == PW_CODE_ACCESS_CHALLENGE) {
+		pairdelete(&request->config_items, PW_POST_AUTH_TYPE, 0, TAG_ANY);
+		vp = pairmake_config("Post-Auth-Type", "Challenge", T_OP_SET);
+		if (!vp) return RLM_MODULE_OK;
+
+	} else if (request->reply->code == PW_CODE_ACCESS_REJECT) {
+		pairdelete(&request->config_items, PW_POST_AUTH_TYPE, 0, TAG_ANY);
+		vp = pairmake_config("Post-Auth-Type", "Reject", T_OP_SET);
+		if (!vp) return RLM_MODULE_OK;
+
+	} else {
+		vp = pairfind(request->config_items, PW_POST_AUTH_TYPE, 0, TAG_ANY);
+	}
+
 	/*
-	 *	Do post-authentication calls. ignoring the return code.
+	 *	If a method was chosen, use that.
 	 */
-	vp = pairfind(request->config_items, PW_POST_AUTH_TYPE, 0, TAG_ANY);
 	if (vp) {
 		postauth_type = vp->vp_integer;
 		RDEBUG2("Using Post-Auth-Type %s",
 			dict_valnamebyattr(PW_POST_AUTH_TYPE, 0, postauth_type));
 	}
+
 	result = process_post_auth(postauth_type, request);
 	switch (result) {
 	/*
@@ -312,7 +324,19 @@ int rad_postauth(REQUEST *request)
 	case RLM_MODULE_REJECT:
 	case RLM_MODULE_USERLOCK:
 	default:
-		request->reply->code = PW_CODE_ACCESS_REJECT;
+		/*
+		 *	We WERE going to have a nice reply, but
+		 *	something went wrong.  So we've got to run
+		 *	Post-Auth-Type Reject, which is defined in the
+		 *	dictionaries as having value "1".
+		 */
+		if (request->reply->code != PW_CODE_ACCESS_REJECT) {
+			RDEBUG("Using Post-Auth-Type Reject");
+
+			process_post_auth(1, request);
+		}
+
+		fr_state_discard(request, request->packet);
 		result = RLM_MODULE_REJECT;
 		break;
 	/*
@@ -329,8 +353,44 @@ int rad_postauth(REQUEST *request)
 	case RLM_MODULE_OK:
 	case RLM_MODULE_UPDATED:
 		result = RLM_MODULE_OK;
+
+		if (request->reply->code == PW_CODE_ACCESS_CHALLENGE) {
+			fr_state_put_vps(request, request->packet, request->reply);
+
+		} else {
+			fr_state_discard(request, request->packet);
+		}
 		break;
 	}
+
+	/*
+	 *	Rejects during authorize, etc. are handled by the
+	 *	earlier code, which logs a reason for the rejection.
+	 *	If the packet is rejected in post-auth, we need to log
+	 *	that as a separate reason.
+	 */
+	if (result == RLM_MODULE_REJECT) {
+		if (request->reply->code != RLM_MODULE_REJECT) {
+			rad_authlog("Rejected in post-auth", request, 0);
+		}
+		request->reply->code = PW_CODE_ACCESS_REJECT;
+	}
+
+	/*
+	 *	If we're still accepting the user, say so.
+	 */
+	if (request->reply->code == PW_CODE_ACCESS_ACCEPT) {
+		if ((vp = pairfind(request->packet->vps, PW_MODULE_SUCCESS_MESSAGE, 0, TAG_ANY)) != NULL) {
+			char msg[MAX_STRING_LEN+12];
+
+			snprintf(msg, sizeof(msg), "Login OK (%s)",
+				 vp->vp_strvalue);
+			rad_authlog(msg, request, 1);
+		} else {
+			rad_authlog("Login OK", request, 1);
+		}
+	}
+
 	return result;
 }
 
@@ -383,6 +443,7 @@ int rad_authenticate(REQUEST *request)
 		 */
 		case PW_CODE_ACCESS_CHALLENGE:
 			request->reply->code = PW_CODE_ACCESS_CHALLENGE;
+			fr_state_put_vps(request, request->packet, request->reply);
 			return RLM_MODULE_OK;
 
 		/*
@@ -396,11 +457,13 @@ int rad_authenticate(REQUEST *request)
 			rad_authlog("Login incorrect (Home Server says so)",
 				    request, 0);
 			request->reply->code = PW_CODE_ACCESS_REJECT;
+			fr_state_discard(request, request->packet);
 			return RLM_MODULE_REJECT;
 
 		default:
 			rad_authlog("Login incorrect (Home Server failed to respond)",
 				    request, 0);
+			fr_state_discard(request, request->packet);
 			return RLM_MODULE_REJECT;
 		}
 	}
@@ -416,11 +479,16 @@ int rad_authenticate(REQUEST *request)
 	}
 
 	/*
+	 *	Grab the VPS associated with the State attribute.
+	 */
+	fr_state_get_vps(request, request->packet);
+
+	/*
 	 *	Get the user's authorization information from the database
 	 */
 autz_redo:
 	result = process_authorize(autz_type, request);
-switch (result) {
+	switch (result) {
 	case RLM_MODULE_NOOP:
 	case RLM_MODULE_NOTFOUND:
 	case RLM_MODULE_OK:
@@ -493,7 +561,7 @@ switch (result) {
 	}
 
 #ifdef WITH_PROXY
- authenticate:
+authenticate:
 #endif
 
 	/*
@@ -502,9 +570,18 @@ switch (result) {
 	do {
 		result = rad_check_password(request);
 		if (result > 0) {
-			/* don't reply! */
+			/*
+			 *	We presume that the reply has been set by someone.
+			 */
+			if (request->reply->code == PW_CODE_ACCESS_CHALLENGE) {
+				fr_state_put_vps(request, request->packet, request->reply);
+
+			} else {
+				fr_state_discard(request, request->packet);
+			}
 			return RLM_MODULE_HANDLED;
 		}
+
 	} while(0);
 
 	/*
@@ -584,14 +661,10 @@ switch (result) {
 			}
 			if (!mpp_ok){
 				if (check_item->vp_integer > 1) {
-					snprintf(umsg, sizeof(umsg),
-						 "\r\n%s (%d)\r\n\n",
-						 main_config.denied_msg,
-						 (int)check_item->vp_integer);
+					snprintf(umsg, sizeof(umsg), "%s (%u)", main_config.denied_msg,
+						 check_item->vp_integer);
 				} else {
-					snprintf(umsg, sizeof(umsg),
-						 "\r\n%s\r\n\n",
-						 main_config.denied_msg);
+					strlcpy(umsg, main_config.denied_msg, sizeof(umsg));
 				}
 
 				request->reply->code = PW_CODE_ACCESS_REJECT;
@@ -601,8 +674,7 @@ switch (result) {
 				 *	Remove ALL reply attributes.
 				 */
 				pairfree(&request->reply->vps);
-				pairmake_reply("Reply-Message",
-					       umsg, T_OP_SET);
+				pairmake_reply("Reply-Message", umsg, T_OP_SET);
 
 				snprintf(logstr, sizeof(logstr), "Multiple logins (max %d) %s",
 					check_item->vp_integer,
@@ -627,17 +699,8 @@ switch (result) {
 	 *	Set the reply to Access-Accept, if it hasn't already
 	 *	been set to something.  (i.e. Access-Challenge)
 	 */
-	if (request->reply->code == 0)
-	  request->reply->code = PW_CODE_ACCESS_ACCEPT;
-
-	if ((module_msg = pairfind(request->packet->vps, PW_MODULE_SUCCESS_MESSAGE, 0, TAG_ANY)) != NULL){
-		char msg[MAX_STRING_LEN+12];
-
-		snprintf(msg, sizeof(msg), "Login OK (%s)",
-			 module_msg->vp_strvalue);
-		rad_authlog(msg, request, 1);
-	} else {
-		rad_authlog("Login OK", request, 1);
+	if (request->reply->code == 0) {
+		request->reply->code = PW_CODE_ACCESS_ACCEPT;
 	}
 
 	return result;
@@ -652,9 +715,11 @@ int rad_virtual_server(REQUEST *request)
 	VALUE_PAIR *vp;
 	int result;
 
+	RDEBUG("Virtual server received request");
+	rdebug_pair_list(L_DBG_LVL_1, request, request->packet->vps, NULL);
+
 	RDEBUG("server %s {", request->server);
-	RDEBUG("  Request:");
-	debug_pair_list(request->packet->vps);
+	RINDENT();
 
 	/*
 	 *	We currently only handle AUTH packets here.
@@ -674,9 +739,11 @@ int rad_virtual_server(REQUEST *request)
 		rad_postauth(request);
 	}
 
-	RDEBUG("  Reply:");
-	debug_pair_list(request->reply->vps);
+	REXDENT();
 	RDEBUG("} # server %s", request->server);
+
+	RDEBUG("Virtual server sending reply");
+	rdebug_pair_list(L_DBG_LVL_1, request, request->reply->vps, NULL);
 
 	return result;
 }

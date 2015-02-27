@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -252,6 +253,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_recv_coa(void *instance, REQUEST *reques
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
+extern module_t rlm_replicate;
 module_t rlm_replicate = {
 	RLM_MODULE_INIT,
 	"replicate",

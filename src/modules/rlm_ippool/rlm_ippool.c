@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -49,8 +50,6 @@ RCSID("$Id$")
 #else
 #define GDBM_IPPOOL_OPTS (GDBM_SYNCOPT)
 #endif
-
-#define MAX_NAS_NAME_SIZE 64
 
 /*
  *	Define a structure for our module configuration.
@@ -112,7 +111,7 @@ static const CONF_PARSER module_config[] = {
 	{ "ip-index", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_DEPRECATED, rlm_ippool_t, ip_index), NULL },
 	{ "ip_index", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED, rlm_ippool_t, ip_index), NULL },
 
-	{ "key", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED, rlm_ippool_t, key), "%{NAS-IP-Address} %{NAS-Port}" },
+	{ "key", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_REQUIRED | PW_TYPE_XLAT, rlm_ippool_t, key), "%{NAS-IP-Address} %{NAS-Port}" },
 
 	{ "range-start", FR_CONF_OFFSET(PW_TYPE_IPV4_ADDR | PW_TYPE_DEPRECATED, rlm_ippool_t, range_start_addr), NULL },
 	{ "range_start", FR_CONF_OFFSET(PW_TYPE_IPV4_ADDR, rlm_ippool_t, range_start_addr), "0" },
@@ -426,7 +425,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 	return RLM_MODULE_OK;
 }
 
-static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(UNUSED void *instance, UNUSED REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *request)
 {
 	rlm_ippool_t *inst = instance;
 
@@ -817,6 +816,7 @@ static int mod_detach(void *instance)
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
+extern module_t rlm_ippool;
 module_t rlm_ippool = {
 	RLM_MODULE_INIT,
 	"ippool",

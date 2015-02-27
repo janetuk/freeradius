@@ -26,6 +26,7 @@ RCSID("$Id$")
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/modules.h>
 #include <freeradius-devel/rad_assert.h>
+#include <freeradius-devel/exfile.h>
 
 #ifdef HAVE_FCNTL_H
 #include <fcntl.h>
@@ -59,7 +60,7 @@ typedef struct rlm_linelog_t {
 	char const	*group;
 	char const	*line;
 	char const	*reference;
-	fr_logfile_t	*lf;
+	exfile_t	*ef;
 } rlm_linelog_t;
 
 /*
@@ -72,12 +73,12 @@ typedef struct rlm_linelog_t {
  *	buffer over-flows.
  */
 static const CONF_PARSER module_config[] = {
-	{ "filename", FR_CONF_OFFSET(PW_TYPE_FILE_OUTPUT| PW_TYPE_REQUIRED, rlm_linelog_t, filename), NULL },
+	{ "filename", FR_CONF_OFFSET(PW_TYPE_FILE_OUTPUT | PW_TYPE_REQUIRED | PW_TYPE_XLAT, rlm_linelog_t, filename), NULL },
 	{ "syslog_facility", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_linelog_t, syslog_facility), NULL },
 	{ "permissions", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_linelog_t, permissions), "0600" },
 	{ "group", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_linelog_t, group), NULL },
-	{ "format", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_linelog_t, line), NULL },
-	{ "reference", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_linelog_t, reference), NULL },
+	{ "format", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_XLAT, rlm_linelog_t, line), NULL },
+	{ "reference", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_XLAT, rlm_linelog_t, reference), NULL },
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
 
@@ -114,13 +115,13 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	inst->facility |= LOG_INFO;
 #endif
 
-	if (!inst->line) {
-		cf_log_err_cs(conf, "Must specify a log format");
+	if (!inst->line && !inst->reference) {
+		cf_log_err_cs(conf, "Must specify a log format, or reference");
 		return -1;
 	}
 
-	inst->lf = fr_logfile_init(inst);
-	if (!inst->lf) {
+	inst->ef = exfile_init(inst, 64, 30);
+	if (!inst->ef) {
 		cf_log_err_cs(conf, "Failed creating log file context");
 		return -1;
 	}
@@ -196,9 +197,8 @@ static size_t linelog_escape_func(UNUSED REQUEST *request,
 static rlm_rcode_t CC_HINT(nonnull) mod_do_linelog(void *instance, REQUEST *request)
 {
 	int fd = -1;
-	char buffer[4096];
 	char *p;
-	char line[1024];
+	char line[4096];
 	rlm_linelog_t *inst = (rlm_linelog_t*) instance;
 	char const *value = inst->line;
 
@@ -237,7 +237,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_do_linelog(void *instance, REQUEST *requ
 			goto do_log;
 		}
 
-		cp = cf_itemtopair(ci);
+		cp = cf_item_to_pair(ci);
 		value = cf_pair_value(cp);
 		if (!value) {
 			RDEBUG2("Entry \"%s\" has no value", line);
@@ -255,43 +255,42 @@ static rlm_rcode_t CC_HINT(nonnull) mod_do_linelog(void *instance, REQUEST *requ
 	 *	FIXME: Check length.
 	 */
 	if (strcmp(inst->filename, "syslog") != 0) {
-		if (radius_xlat(buffer, sizeof(buffer), request, inst->filename, NULL, NULL) < 0) {
+		char path[2048];
+
+		if (radius_xlat(path, sizeof(path), request, inst->filename, rad_filename_escape, NULL) < 0) {
 			return RLM_MODULE_FAIL;
 		}
 
 		/* check path and eventually create subdirs */
-		p = strrchr(buffer,'/');
+		p = strrchr(path, '/');
 		if (p) {
 			*p = '\0';
-			if (rad_mkdir(buffer, 0700) < 0) {
-				RERROR("rlm_linelog: Failed to create directory %s: %s", buffer, fr_syserror(errno));
+			if (rad_mkdir(path, 0700, -1, -1) < 0) {
+				RERROR("rlm_linelog: Failed to create directory %s: %s", path, fr_syserror(errno));
 				return RLM_MODULE_FAIL;
 			}
 			*p = '/';
 		}
 
-		fd = fr_logfile_open(inst->lf, buffer, inst->permissions);
-		if (fd == -1) {
-			ERROR("rlm_linelog: Failed to open %s: %s",
-			       buffer, fr_syserror(errno));
+		fd = exfile_open(inst->ef, path, inst->permissions, true);
+		if (fd < 0) {
+			ERROR("rlm_linelog: Failed to open %s: %s", path, fr_syserror(errno));
 			return RLM_MODULE_FAIL;
 		}
 
-#ifdef HAVE_GRP_H
 		if (inst->group != NULL) {
 			gid = strtol(inst->group, &endptr, 10);
 			if (*endptr != '\0') {
-				if (!fr_getgid(inst->group, &gid)) {
+				if (rad_getgid(request, &gid, inst->group) < 0) {
 					RDEBUG2("Unable to find system group \"%s\"", inst->group);
 					goto skip_group;
 				}
 			}
 
-			if (chown(buffer, -1, gid) == -1) {
-				RDEBUG2("Unable to change system group of \"%s\"", buffer);
+			if (chown(path, -1, gid) == -1) {
+				RDEBUG2("Unable to change system group of \"%s\"", path);
 			}
 		}
-#endif
 	}
 
  skip_group:
@@ -300,9 +299,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_do_linelog(void *instance, REQUEST *requ
 	 *	FIXME: Check length.
 	 */
 	if (value && (radius_xlat(line, sizeof(line) - 1, request, value, linelog_escape_func, NULL) < 0)) {
-		if (fd > -1) {
-			fr_logfile_close(inst->lf, fd);
-		}
+		if (fd >= 0) exfile_close(inst->ef, fd);
 
 		return RLM_MODULE_FAIL;
 	}
@@ -312,11 +309,11 @@ static rlm_rcode_t CC_HINT(nonnull) mod_do_linelog(void *instance, REQUEST *requ
 
 		if (write(fd, line, strlen(line)) < 0) {
 			ERROR("rlm_linelog: Failed writing: %s", fr_syserror(errno));
-			fr_logfile_close(inst->lf, fd);
+			exfile_close(inst->ef, fd);
 			return RLM_MODULE_FAIL;
 		}
 
-		fr_logfile_close(inst->lf, fd);
+		exfile_close(inst->ef, fd);
 
 #ifdef HAVE_SYSLOG_H
 	} else {
@@ -331,6 +328,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_do_linelog(void *instance, REQUEST *requ
 /*
  *	Externally visible module definition.
  */
+extern module_t rlm_linelog;
 module_t rlm_linelog = {
 	RLM_MODULE_INIT,
 	"linelog",

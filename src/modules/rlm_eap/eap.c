@@ -180,11 +180,11 @@ static int eap_module_call(eap_module_t *module, eap_handler_t *handler)
 
 	char const *caller = request->module;
 
+	rad_assert(module != NULL);
+
 	RDEBUG2("Calling %s to process EAP data", module->type->name);
 
 	request->module = module->type->name;
-
-	rad_assert(module != NULL);
 
 	switch (handler->stage) {
 	case INITIATE:
@@ -379,7 +379,7 @@ eap_rcode_t eap_method_select(rlm_eap_t *inst, eap_handler_t *handler)
 	/*
 	 *	Figure out what to do.
 	 */
-	switch(type->num) {
+	switch (type->num) {
 	case PW_EAP_IDENTITY:
 		/*
 		 *	Allow per-user configuration of EAP types.
@@ -442,7 +442,6 @@ eap_rcode_t eap_method_select(rlm_eap_t *inst, eap_handler_t *handler)
 		}
 
 		goto do_initiate;
-		break;
 
 		/*
 		 *	Key off of the configured sub-modules.
@@ -583,7 +582,7 @@ rlm_rcode_t eap_compose(eap_handler_t *handler)
 	vp = radius_paircreate(request->reply, &request->reply->vps, PW_EAP_MESSAGE, 0);
 	if (!vp) return RLM_MODULE_INVALID;
 
-	vp->length = eap_packet->length[0] * 256 + eap_packet->length[1];
+	vp->vp_length = eap_packet->length[0] * 256 + eap_packet->length[1];
 	vp->vp_octets = talloc_steal(vp, reply->packet);
 	reply->packet = NULL;
 
@@ -597,14 +596,14 @@ rlm_rcode_t eap_compose(eap_handler_t *handler)
 	vp = pairfind(request->reply->vps, PW_MESSAGE_AUTHENTICATOR, 0, TAG_ANY);
 	if (!vp) {
 		vp = paircreate(request->reply, PW_MESSAGE_AUTHENTICATOR, 0);
-		vp->length = AUTH_VECTOR_LEN;
-		vp->vp_octets = talloc_zero_array(vp, uint8_t, vp->length);
+		vp->vp_length = AUTH_VECTOR_LEN;
+		vp->vp_octets = talloc_zero_array(vp, uint8_t, vp->vp_length);
 		pairadd(&(request->reply->vps), vp);
 	}
 
 	/* Set request reply code, but only if it's not already set. */
 	rcode = RLM_MODULE_OK;
-	if (!request->reply->code) switch(reply->code) {
+	if (!request->reply->code) switch (reply->code) {
 	case PW_EAP_RESPONSE:
 		request->reply->code = PW_CODE_ACCESS_ACCEPT;
 		rcode = RLM_MODULE_HANDLED; /* leap weirdness */
@@ -627,7 +626,7 @@ rlm_rcode_t eap_compose(eap_handler_t *handler)
 		 *	we do so WITHOUT setting a reply code, as the
 		 *	request is being proxied.
 		 */
-		if (request->log.lvl & RAD_REQUEST_OPTION_PROXY_EAP) {
+		if (request->options & RAD_REQUEST_OPTION_PROXY_EAP) {
 			return RLM_MODULE_HANDLED;
 		}
 
@@ -700,7 +699,7 @@ int eap_start(rlm_eap_t *inst, REQUEST *request)
 	 *	Lengths of two are what we see in practice as
 	 *	EAP-Starts.
 	 */
-	if ((eap_msg->length == 0) || (eap_msg->length == 2)) {
+	if ((eap_msg->vp_length == 0) || (eap_msg->vp_length == 2)) {
 		uint8_t *p;
 
 		/*
@@ -723,8 +722,8 @@ int eap_start(rlm_eap_t *inst, REQUEST *request)
 		/*
 		 *	Manually create an EAP Identity request
 		 */
-		vp->length = 5;
-		vp->vp_octets = p = talloc_array(vp, uint8_t, vp->length);
+		vp->vp_length = 5;
+		vp->vp_octets = p = talloc_array(vp, uint8_t, vp->vp_length);
 
 		p[0] = PW_EAP_REQUEST;
 		p[1] = 0; /* ID */
@@ -740,7 +739,7 @@ int eap_start(rlm_eap_t *inst, REQUEST *request)
 	 *	EAP sub-type.  Short packets are discarded, unless
 	 *	we're proxying.
 	 */
-	if (eap_msg->length < (EAP_HEADER_LEN + 1)) {
+	if (eap_msg->vp_length < (EAP_HEADER_LEN + 1)) {
 		if (proxy) goto do_proxy;
 
 		RDEBUG2("Ignoring EAP-Message which is too short to be meaningful");
@@ -783,7 +782,7 @@ int eap_start(rlm_eap_t *inst, REQUEST *request)
 		        eap_codes[eap_msg->vp_octets[0]],
 		        eap_msg->vp_octets[0],
 		        eap_msg->vp_octets[1],
-		        eap_msg->length);
+		        eap_msg->vp_length);
 	}
 
 	/*
@@ -831,7 +830,7 @@ int eap_start(rlm_eap_t *inst, REQUEST *request)
 	 *	the request.
 	 */
 	if ((eap_msg->vp_octets[4] == PW_EAP_NAK) &&
-	    (eap_msg->length >= (EAP_HEADER_LEN + 2)) &&
+	    (eap_msg->vp_length >= (EAP_HEADER_LEN + 2)) &&
 	    inst->ignore_unknown_types &&
 	    ((eap_msg->vp_octets[5] == 0) ||
 	     (eap_msg->vp_octets[5] >= PW_EAP_MAX_TYPES) ||
@@ -953,7 +952,12 @@ static char *eap_identity(REQUEST *request, eap_handler_t *handler, eap_packet_r
 	len = ntohs(len);
 
 	if ((len <= 5) || (eap_packet->data[1] == 0x00)) {
-		RDEBUG("UserIdentity Unknown ");
+		RDEBUG("EAP-Identity Unknown");
+		return NULL;
+	}
+
+	if (len > 1024) {
+		RDEBUG("EAP-Identity too long");
 		return NULL;
 	}
 

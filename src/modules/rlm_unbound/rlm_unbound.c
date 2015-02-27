@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -154,7 +155,7 @@ static int ub_common_wait(rlm_unbound_t *inst, REQUEST *request, char const *tag
 	iv = inst->timeout > 64 ? 64000 : inst->timeout * 1000;
 	ub_process(inst->ub);
 
-	for (waited = 0; (void*)*ub == (void *)inst; waited += iv, iv += iv) {
+	for (waited = 0; (void*)*ub == (void *)inst; waited += iv, iv *= 2) {
 
 		if (waited + iv > (useconds_t)inst->timeout * 1000) {
 			usleep(inst->timeout * 1000 - waited);
@@ -478,7 +479,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	res = ub_ctx_debuglevel(inst->ub, log_level);
 	if (res) goto error;
 
-	switch(default_log.dst) {
+	switch (default_log.dst) {
 	case L_DST_STDOUT:
 		if (!debug_flag) {
 			log_dst = L_DST_NULL;
@@ -697,9 +698,6 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	    xlat_register(inst->xlat_aaaa_name, xlat_aaaa, NULL, inst) ||
 	    xlat_register(inst->xlat_ptr_name, xlat_ptr, NULL, inst)) {
 		ERROR("rlm_unbound (%s): Failed registering xlats", inst->name);
-		xlat_unregister(inst->xlat_a_name, xlat_a, inst);
-		xlat_unregister(inst->xlat_aaaa_name, xlat_aaaa, inst);
-		xlat_unregister(inst->xlat_ptr_name, xlat_ptr, inst);
 		goto error_nores;
 	}
 	return 0;
@@ -716,10 +714,6 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 static int mod_detach(UNUSED void *instance)
 {
 	rlm_unbound_t *inst = instance;
-
-	xlat_unregister(inst->xlat_a_name, xlat_a, inst);
-	xlat_unregister(inst->xlat_aaaa_name, xlat_aaaa, inst);
-	xlat_unregister(inst->xlat_ptr_name, xlat_ptr, inst);
 
 	if (inst->log_fd >= 0) {
 		fr_event_fd_delete(inst->el, 0, inst->log_fd);
@@ -753,6 +747,7 @@ static int mod_detach(UNUSED void *instance)
 	return 0;
 }
 
+extern module_t rlm_unbound;
 module_t rlm_unbound = {
 	RLM_MODULE_INIT,
 	"unbound",
