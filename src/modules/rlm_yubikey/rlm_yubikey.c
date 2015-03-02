@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -233,7 +234,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	}
 
 	passcode = request->password->vp_strvalue;
-	len = request->password->length;
+	len = request->password->vp_length;
 
 	/*
 	 *	Now see if the passcode is the correct length (in its raw
@@ -280,9 +281,15 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 			strlcpy(password, passcode, password_len + 1);
 			pairstrsteal(request->password, password);
 
-			RDEBUG3("request:Yubikey-OTP := '%s'", vp->vp_strvalue);
-			RDEBUG3("request:User-Password := '%s'", request->password->vp_strvalue);
-
+			RINDENT();
+			if (RDEBUG_ENABLED3) {
+				RDEBUG3("&request:Yubikey-OTP := '%s'", vp->vp_strvalue);
+				RDEBUG3("&request:User-Password := '%s'", request->password->vp_strvalue);
+			} else {
+				RDEBUG2("&request:Yubikey-OTP := <<< secret >>>");
+				RDEBUG2("&request:User-Password := <<< secret >>>");
+			}
+			REXDENT();
 			/*
 			 *	So the ID split code works on the non password portion.
 			 */
@@ -352,10 +359,10 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		goto user_password;
 	}
 
-	vp = pairfind_da(request->packet->vps, da, TAG_ANY);
+	vp = pair_find_by_da(request->packet->vps, da, TAG_ANY);
 	if (vp) {
 		passcode = vp->vp_strvalue;
-		len = vp->length;
+		len = vp->vp_length;
 	} else {
 		RDEBUG2("No Yubikey-OTP attribute found, falling back to User-Password");
 	user_password:
@@ -369,7 +376,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 
 		vp = request->password;
 		passcode = request->password->vp_strvalue;
-		len = request->password->length;
+		len = request->password->vp_length;
 	}
 
 	/*
@@ -421,6 +428,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
+extern module_t rlm_yubikey;
 module_t rlm_yubikey = {
 	RLM_MODULE_INIT,
 	"yubikey",

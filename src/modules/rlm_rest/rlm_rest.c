@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -56,20 +57,20 @@ static CONF_PARSER tls_config[] = {
  *	buffer over-flows.
  */
 static const CONF_PARSER section_config[] = {
-	{ "uri", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, uri), ""   },
+	{ "uri", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_XLAT, rlm_rest_section_t, uri), ""   },
 	{ "method", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, method_str), "GET" },
 	{ "body", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, body_str), "none" },
-	{ "data", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, data), NULL },
+	{ "data", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_XLAT, rlm_rest_section_t, data), NULL },
 	{ "force_to", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, force_to_str), NULL },
 
 	/* User authentication */
 	{ "auth", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, auth_str), "none" },
-	{ "username", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, username), NULL },
-	{ "password", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, password), NULL },
+	{ "username", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_XLAT, rlm_rest_section_t, username), NULL },
+	{ "password", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_XLAT, rlm_rest_section_t, password), NULL },
 	{ "require_auth", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_rest_section_t, require_auth), "no" },
 
 	/* Transfer configuration */
-	{ "timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_rest_section_t, timeout), "4" },
+	{ "timeout", FR_CONF_OFFSET(PW_TYPE_TIMEVAL, rlm_rest_section_t, timeout_tv), "4.0" },
 	{ "chunk", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_rest_section_t, chunk), "0" },
 
 	/* TLS Parameters */
@@ -80,6 +81,7 @@ static const CONF_PARSER section_config[] = {
 
 static const CONF_PARSER module_config[] = {
 	{ "connect_uri", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_t, connect_uri), NULL },
+	{ "connect_timeout", FR_CONF_OFFSET(PW_TYPE_TIMEVAL, rlm_rest_t, connect_timeout_tv), "4.0" },
 
 	{ NULL, -1, 0, NULL, NULL }
 };
@@ -125,8 +127,83 @@ static int rlm_rest_perform(rlm_rest_t *instance, rlm_rest_section_t *section, v
 static void rlm_rest_cleanup(rlm_rest_t *instance, rlm_rest_section_t *section, void *handle)
 {
 	rest_request_cleanup(instance, section, handle);
-};
+}
 
+static ssize_t jsonquote_xlat(UNUSED void *instance, UNUSED REQUEST *request,
+			      char const *fmt, char *out, size_t outlen)
+{
+	char const *p;
+	size_t freespace = outlen;
+	size_t len;
+
+	for (p = fmt; *p != '\0'; p++) {
+		/* Indicate truncation */
+		if (freespace < 3) {
+			*out = '\0';
+			return outlen + 1;
+		}
+
+		if (*p == '"') {
+			*out++ = '\\';
+			*out++ = '"';
+			freespace -= 2;
+		} else if (*p == '\\') {
+			*out++ = '\\';
+			*out++ = '\\';
+			freespace -= 2;
+		} else if (*p == '/') {
+			*out++ = '\\';
+			*out++ = '/';
+			freespace -= 2;
+		} else if (*p >= ' ') {
+			*out++ = *p;
+			freespace--;
+		/*
+		 *	Unprintable chars
+		 */
+		} else {
+			*out++ = '\\';
+			freespace--;
+
+			switch (*p) {
+			case '\b':
+				*out++ = 'b';
+				freespace--;
+				break;
+
+			case '\f':
+				*out++ = 'f';
+				freespace--;
+				break;
+
+			case '\n':
+				*out++ = 'b';
+				freespace--;
+				break;
+
+			case '\r':
+				*out++ = 'r';
+				freespace--;
+				break;
+
+			case '\t':
+				*out++ = 't';
+				freespace--;
+				break;
+
+			default:
+				len = snprintf(out, freespace, "u%04X", *p);
+				if (is_truncated(len, freespace)) return (outlen - freespace) + len;
+				out += len;
+				freespace -= len;
+			}
+		}
+	}
+
+	*out = '\0';
+
+	return outlen - freespace;
+}
 /*
  *	Simple xlat to read text data from a URL
  */
@@ -150,7 +227,6 @@ static ssize_t rest_xlat(void *instance, REQUEST *request,
 		.body = HTTP_BODY_NONE,
 		.body_str = "application/x-www-form-urlencoded",
 		.require_auth = false,
-		.timeout = 4,
 		.force_to = HTTP_BODY_PLAIN
 	};
 	*out = '\0';
@@ -359,7 +435,7 @@ finish:
 /*
  *	Authenticate the user with the given password.
  */
-static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, UNUSED REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *request)
 {
 	rlm_rest_t *inst = instance;
 	rlm_rest_section_t *section = &inst->authenticate;
@@ -464,7 +540,7 @@ finish:
 /*
  *	Send accounting info to a REST API endpoint
  */
-static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, UNUSED REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *request)
 {
 	rlm_rest_t *inst = instance;
 	rlm_rest_section_t *section = &inst->accounting;
@@ -520,7 +596,7 @@ finish:
 /*
  *	Send post-auth info to a REST API endpoint
  */
-static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, UNUSED REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *request)
 {
 	rlm_rest_t *inst = instance;
 	rlm_rest_section_t *section = &inst->post_auth;
@@ -620,6 +696,7 @@ static int parse_sub_section(CONF_SECTION *parent, rlm_rest_section_t *config, r
 	}
 
 	config->method = fr_str2int(http_method_table, config->method_str, HTTP_METHOD_CUSTOM);
+	config->timeout = ((config->timeout_tv.tv_usec * 1000) + (config->timeout_tv.tv_sec / 1000));
 
 	/*
 	 *  We don't have any custom user data, so we need to select the right encoder based
@@ -648,6 +725,11 @@ static int parse_sub_section(CONF_SECTION *parent, rlm_rest_section_t *config, r
 		case HTTP_BODY_INVALID:
 			cf_log_err_cs(cs, "Invalid HTTP body type.  \"%s\" is not a valid web API data "
 				      "markup format", config->body_str);
+			return -1;
+
+		case HTTP_BODY_UNAVAILABLE:
+			cf_log_err_cs(cs, "Unavailable HTTP body type.  \"%s\" is not available in this "
+				      "build", config->body_str);
 			return -1;
 
 		default:
@@ -725,6 +807,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	 *	Register the rest xlat function
 	 */
 	xlat_register(inst->xlat_name, rest_xlat, rest_uri_escape, inst);
+	xlat_register("jsonquote", jsonquote_xlat, NULL, inst);
 
 	/*
 	 *	Parse sub-section configs.
@@ -748,10 +831,10 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		return -1;
 	}
 
+	inst->connect_timeout = ((inst->connect_timeout_tv.tv_usec * 1000) +
+				 (inst->connect_timeout_tv.tv_sec / 1000));
 	inst->conn_pool = fr_connection_pool_module_init(conf, inst, mod_conn_create, mod_conn_alive, NULL);
-	if (!inst->conn_pool) {
-		return -1;
-	}
+	if (!inst->conn_pool) return -1;
 
 	return 0;
 }
@@ -765,8 +848,6 @@ static int mod_detach(void *instance)
 	rlm_rest_t *inst = instance;
 
 	fr_connection_pool_delete(inst->conn_pool);
-
-	xlat_unregister(inst->xlat_name, rest_xlat, instance);
 
 	/* Free any memory used by libcurl */
 	rest_cleanup();
@@ -783,6 +864,7 @@ static int mod_detach(void *instance)
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
+extern module_t rlm_rest;
 module_t rlm_rest = {
 	RLM_MODULE_INIT,
 	"rlm_rest",

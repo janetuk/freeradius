@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -145,37 +146,37 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(UNUSED void * instance, REQ
 		AUTH("rlm_cram: Required attribute Sandy-Mail-Response missed");
 		return RLM_MODULE_INVALID;
 	}
-	switch(authtype->vp_integer){
+	switch (authtype->vp_integer){
 		case 2:				/*	CRAM-MD5	*/
-			if(challenge->length < 5 || response->length != 16) {
+			if(challenge->vp_length < 5 || response->vp_length != 16) {
 				AUTH("rlm_cram: invalid MD5 challenge/response length");
 				return RLM_MODULE_INVALID;
 			}
-			calc_md5_digest(buffer, challenge->vp_octets, challenge->length, password->vp_strvalue);
+			calc_md5_digest(buffer, challenge->vp_octets, challenge->vp_length, password->vp_strvalue);
 			if(!memcmp(buffer, response->vp_octets, 16)) return RLM_MODULE_OK;
 			break;
 		case 3:				/*	APOP	*/
-			if(challenge->length < 5 || response->length != 16) {
+			if(challenge->vp_length < 5 || response->vp_length != 16) {
 				AUTH("rlm_cram: invalid APOP challenge/response length");
 				return RLM_MODULE_INVALID;
 			}
-			calc_apop_digest(buffer, challenge->vp_octets, challenge->length, password->vp_strvalue);
+			calc_apop_digest(buffer, challenge->vp_octets, challenge->vp_length, password->vp_strvalue);
 			if(!memcmp(buffer, response->vp_octets, 16)) return RLM_MODULE_OK;
 			break;
 		case 8:				/*	CRAM-MD4	*/
-			if(challenge->length < 5 || response->length != 16) {
+			if(challenge->vp_length < 5 || response->vp_length != 16) {
 				AUTH("rlm_cram: invalid MD4 challenge/response length");
 				return RLM_MODULE_INVALID;
 			}
-			calc_md4_digest(buffer, challenge->vp_octets, challenge->length, password->vp_strvalue);
+			calc_md4_digest(buffer, challenge->vp_octets, challenge->vp_length, password->vp_strvalue);
 			if(!memcmp(buffer, response->vp_octets, 16)) return RLM_MODULE_OK;
 			break;
 		case 9:				/*	CRAM-SHA1	*/
-			if(challenge->length < 5 || response->length != 20) {
+			if(challenge->vp_length < 5 || response->vp_length != 20) {
 				AUTH("rlm_cram: invalid MD4 challenge/response length");
 				return RLM_MODULE_INVALID;
 			}
-			calc_sha1_digest(buffer, challenge->vp_octets, challenge->length, password->vp_strvalue);
+			calc_sha1_digest(buffer, challenge->vp_octets, challenge->vp_length, password->vp_strvalue);
 			if(!memcmp(buffer, response->vp_octets, 20)) return RLM_MODULE_OK;
 			break;
 		default:
@@ -186,6 +187,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(UNUSED void * instance, REQ
 
 }
 
+extern module_t rlm_cram;
 module_t rlm_cram = {
 	RLM_MODULE_INIT,
 	"CRAM",

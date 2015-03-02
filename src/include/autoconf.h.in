@@ -3,15 +3,14 @@
 /* Define if building universal (internal helper macro) */
 #undef AC_APPLE_UNIVERSAL_BUILD
 
-/* Define if your processor stores words with the most significant byte first
-   */
-#undef BIG_ENDIAN
-
 /* BSD-Style get*byaddr_r */
 #undef BSDSTYLE
 
 /* style of ctime_r function */
 #undef CTIMERSTYLE
+
+/* Define to 1 to have OpenSSL version check enabled */
+#undef ENABLE_OPENSSL_VERSION_CHECK
 
 /* style of gethostbyaddr_r functions */
 #undef GETHOSTBYADDRRSTYLE
@@ -25,6 +24,12 @@
 /* Define to 1 if you have the <arpa/inet.h> header file. */
 #undef HAVE_ARPA_INET_H
 
+/* Define to 1 if you have the `bindat' function. */
+#undef HAVE_BINDAT
+
+/* Define if we have a binary safe regular expression library */
+#undef HAVE_BINSAFE_REGEX
+
 /* Define if the compiler supports __builtin_types_compatible_p */
 #undef HAVE_BUILTIN_BSWAP_64
 
@@ -33,6 +38,9 @@
 
 /* Define if the compiler supports __builtin_types_compatible_p */
 #undef HAVE_BUILTIN_TYPES_COMPATIBLE_P
+
+/* Define to 1 if you have the <sys/capability.h> header file. */
+#undef HAVE_CAPABILITY_H
 
 /* Define to 1 if you have the `closefrom' function. */
 #undef HAVE_CLOSEFROM
@@ -147,6 +155,12 @@
 /* define if you have IP_PKTINFO (Linux) */
 #undef HAVE_IP_PKTINFO
 
+/* Define to 1 if you have the `kqueue' function. */
+#undef HAVE_KQUEUE
+
+/* Define to 1 if you have the `cap' library (-lcap). */
+#undef HAVE_LIBCAP
+
 /* Define to 1 if you have the `crypto' library (-lcrypto). */
 #undef HAVE_LIBCRYPTO
 
@@ -189,6 +203,9 @@
 /* Define to 1 if you have the <memory.h> header file. */
 #undef HAVE_MEMORY_H
 
+/* Define to 1 if you have the `mkdirat' function. */
+#undef HAVE_MKDIRAT
+
 /* Define to 1 if you have the <ndir.h> header file, and it defines `DIR'. */
 #undef HAVE_NDIR_H
 
@@ -200,6 +217,9 @@
 
 /* Define to 1 if you have the <net/if.h> header file. */
 #undef HAVE_NET_IF_H
+
+/* Define to 1 if you have the `openat' function. */
+#undef HAVE_OPENAT
 
 /* Define to 1 if you have the <openssl/crypto.h> header file. */
 #undef HAVE_OPENSSL_CRYPTO_H
@@ -272,6 +292,12 @@
 
 /* Define if we have any regular expression library */
 #undef HAVE_REGEX
+
+/* Define to 1 if you have the `regncomp' function. */
+#undef HAVE_REGNCOMP
+
+/* Define to 1 if you have the `regnexec' function. */
+#undef HAVE_REGNEXEC
 
 /* define this if we have REG_EXTENDED (from <regex.h>) */
 #undef HAVE_REG_EXTENDED
@@ -376,6 +402,9 @@
    */
 #undef HAVE_SYS_DIR_H
 
+/* Define to 1 if you have the <sys/event.h> header file. */
+#undef HAVE_SYS_EVENT_H
+
 /* Define to 1 if you have the <sys/fcntl.h> header file. */
 #undef HAVE_SYS_FCNTL_H
 
@@ -425,6 +454,9 @@
 /* Define to 1 if you have the <unistd.h> header file. */
 #undef HAVE_UNISTD_H
 
+/* Define to 1 if you have the `unlinkat' function. */
+#undef HAVE_UNLINKAT
+
 /* Define to 1 if you have the <utime.h> header file. */
 #undef HAVE_UTIME_H
 
@@ -442,10 +474,6 @@
 
 /* compiler specific 128 bit unsigned integer */
 #undef HAVE___UINT128_T
-
-/* Define if your processor stores words with the least significant byte first
-   */
-#undef LITTLE_ENDIAN
 
 /* define if you have OSFC2 authentication */
 #undef OSFC2
@@ -482,6 +510,14 @@
 
 /* Raw version string from VERSION file */
 #undef RADIUSD_VERSION_STRING
+
+/* Define if your processor stores words with the most significant byte first
+   */
+#undef RADIUS_BIG_ENDIAN
+
+/* Define if your processor stores words with the least significant byte first
+   */
+#undef RADIUS_LITTLE_ENDIAN
 
 /* Define as the return type of signal handlers (`int' or `void'). */
 #undef RETSIGTYPE

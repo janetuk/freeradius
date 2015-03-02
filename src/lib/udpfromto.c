@@ -1,7 +1,8 @@
 /*
  *   This library is free software; you can redistribute it and/or
  *   modify it under the terms of the GNU Lesser General Public
- *   License as published by the Free Software Foundation; either
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version. either
  *   version 2.1 of the License, or (at your option) any later version.
  *
  *   This library is distributed in the hope that it will be useful,
@@ -131,9 +132,8 @@ int udpfromto_init(int s)
 #  endif
 #endif
 
-#ifdef AF_INET6
+#if defined(AF_INET6) && defined(IPV6_PKTINFO)
 	} else if (si.ss_family == AF_INET6) {
-#  ifdef IPV6_PKTINFO
 		/*
 		 *	This should actually be standard IPv6
 		 */
@@ -143,17 +143,15 @@ int udpfromto_init(int s)
 		 *	Work around Linux-specific hackery.
 		 */
 		flag = IPV6_RECVPKTINFO;
-#else
+	} else {
+#endif
+
+		/*
+		 *	Unknown AF.  Return an error if possible.
+		 */
 #  ifdef EPROTONOSUPPORT
 		errno = EPROTONOSUPPORT;
 #  endif
-		return -1;
-#  endif
-#endif
-	} else {
-		/*
-		 *	Unknown AF.
-		 */
 		return -1;
 	}
 
@@ -312,9 +310,16 @@ int sendfromto(int s, void *buf, size_t len, int flags,
 	       struct sockaddr *to, socklen_t tolen)
 {
 	struct msghdr msgh;
-	struct cmsghdr *cmsg;
 	struct iovec iov;
 	char cbuf[256];
+
+	/*
+	 *	Unknown address family, die.
+	 */
+	if (from && (from->sa_family != AF_INET) && (from->sa_family != AF_INET6)) {
+		errno = EINVAL;
+		return -1;
+	}
 
 #ifdef __FreeBSD__
 	/*
@@ -343,20 +348,30 @@ int sendfromto(int s, void *buf, size_t len, int flags,
 		}
 		break;
 	}
-#else
-#  if !defined(IP_PKTINFO) && !defined(IP_SENDSRCADDR) && !defined(IPV6_PKTINFO)
-	/*
-	 *	If the sendmsg() flags aren't defined, fall back to
-	 *	using sendto().
-	 */
-	from = NULL;
-#  endif
-#endif
+#endif	/* !__FreeBSD__ */
 
 	/*
-	 *	Catch the case where the caller passes invalid arguments.
+	 *	If the sendmsg() flags aren't defined, fall back to
+	 *	using sendto().  These flags are defined on FreeBSD,
+	 *	but laying it out this way simplifies the look of the
+	 *	code.
 	 */
-	if (!from || (fromlen == 0) || (from->sa_family == AF_UNSPEC)) {
+#  if !defined(IP_PKTINFO) && !defined(IP_SENDSRCADDR)
+	if (from && from->sa_family == AF_INET) {
+		from = NULL;
+	}
+#  endif
+	
+#  if !defined(IPV6_PKTINFO)
+	if (from && from->sa_family == AF_INET6) {
+		from = NULL;
+	}
+#  endif
+
+	/*
+	 *	No "from", just use regular sendto.
+	 */
+	if (!from || (fromlen == 0)) {
 		return sendto(s, buf, len, flags, to, tolen);
 	}
 
@@ -366,18 +381,18 @@ int sendfromto(int s, void *buf, size_t len, int flags,
 	memset(&iov, 0, sizeof(iov));
 	iov.iov_base = buf;
 	iov.iov_len = len;
+
 	msgh.msg_iov = &iov;
 	msgh.msg_iovlen = 1;
 	msgh.msg_name = to;
 	msgh.msg_namelen = tolen;
 
+# if defined(IP_PKTINFO) || defined(IP_SENDSRCADDR)
 	if (from->sa_family == AF_INET) {
-#if !defined(IP_PKTINFO) && !defined(IP_SENDSRCADDR)
-		return sendto(s, buf, len, flags, to, tolen);
-#else
 		struct sockaddr_in *s4 = (struct sockaddr_in *) from;
 
 #  ifdef IP_PKTINFO
+		struct cmsghdr *cmsg;
 		struct in_pktinfo *pkt;
 
 		msgh.msg_control = cbuf;
@@ -394,6 +409,7 @@ int sendfromto(int s, void *buf, size_t len, int flags,
 #  endif
 
 #  ifdef IP_SENDSRCADDR
+		struct cmsghdr *cmsg;
 		struct in_addr *in;
 
 		msgh.msg_control = cbuf;
@@ -407,16 +423,14 @@ int sendfromto(int s, void *buf, size_t len, int flags,
 		in = (struct in_addr *) CMSG_DATA(cmsg);
 		*in = s4->sin_addr;
 #  endif
-#endif	/* IP_PKTINFO or IP_SENDSRCADDR */
 	}
+#endif
 
-#ifdef AF_INET6
-	else if (from->sa_family == AF_INET6) {
-#  if !defined(IPV6_PKTINFO)
-		return sendto(s, buf, len, flags, to, tolen);
-#  else
+#  if defined(IPV6_PKTINFO)
+	if (from->sa_family == AF_INET6) {
 		struct sockaddr_in6 *s6 = (struct sockaddr_in6 *) from;
 
+		struct cmsghdr *cmsg;
 		struct in6_pktinfo *pkt;
 
 		msgh.msg_control = cbuf;
@@ -430,17 +444,8 @@ int sendfromto(int s, void *buf, size_t len, int flags,
 		pkt = (struct in6_pktinfo *) CMSG_DATA(cmsg);
 		memset(pkt, 0, sizeof(*pkt));
 		pkt->ipi6_addr = s6->sin6_addr;
+	}
 #  endif	/* IPV6_PKTINFO */
-	}
-#endif
-
-	/*
-	 *	Unknown address family.
-	 */
-	else {
-		errno = EINVAL;
-		return -1;
-	}
 
 	return sendmsg(s, &msgh, flags);
 }
@@ -480,7 +485,7 @@ int main(int argc, char **argv)
 	memset(&from, 0, sizeof(from));
 	memset(&to,   0, sizeof(to));
 
-	switch(pid = fork()) {
+	switch (pid = fork()) {
 		case -1:
 			perror("fork");
 			return 0;

@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -26,8 +27,7 @@ RCSID("$Id$")
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/modules.h>
 
-static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance,
-				  UNUSED REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, REQUEST *request)
 {
 	if (!pairfind(request->packet->vps, PW_CHAP_PASSWORD, 0, TAG_ANY)) {
 		return RLM_MODULE_NOOP;
@@ -51,8 +51,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance,
  *	from the database. The authentication code only needs to check
  *	the password, the rest is done here.
  */
-static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(UNUSED void *instance,
-				     UNUSED REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(UNUSED void *instance, REQUEST *request)
 {
 	VALUE_PAIR *passwd_item, *chap;
 	uint8_t pass_str[MAX_STRING_LEN];
@@ -68,12 +67,12 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(UNUSED void *instance,
 		return RLM_MODULE_INVALID;
 	}
 
-	if (chap->length == 0) {
+	if (chap->vp_length == 0) {
 		REDEBUG("CHAP-Password is empty");
 		return RLM_MODULE_INVALID;
 	}
 
-	if (chap->length != CHAP_VALUE_LENGTH + 1) {
+	if (chap->vp_length != CHAP_VALUE_LENGTH + 1) {
 		REDEBUG("CHAP-Password has invalid length");
 		return RLM_MODULE_INVALID;
 	}
@@ -113,7 +112,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(UNUSED void *instance,
 		vp = pairfind(request->packet->vps, PW_CHAP_CHALLENGE, 0, TAG_ANY);
 		if (vp) {
 			p = vp->vp_octets;
-			length = vp->length;
+			length = vp->vp_length;
 		} else {
 			p = request->packet->vector;
 			length = sizeof(request->packet->vector);
@@ -121,7 +120,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(UNUSED void *instance,
 
 		fr_bin2hex(buffer, p, length);
 		RINDENT();
-		RDEBUG3("CHAP challenge :  %s", buffer);
+		RDEBUG3("CHAP challenge : %s", buffer);
 
 		fr_bin2hex(buffer, chap->vp_octets + 1, CHAP_VALUE_LENGTH);
 		RDEBUG3("Client sent    : %s", buffer);
@@ -135,7 +134,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(UNUSED void *instance,
 
 	if (rad_digest_cmp(pass_str + 1, chap->vp_octets + 1,
 			   CHAP_VALUE_LENGTH) != 0) {
-		REDEBUG("Password is comparison failed: password is incorrect");
+		REDEBUG("Password comparison failed: password is incorrect");
 		return RLM_MODULE_REJECT;
 	}
 
@@ -154,6 +153,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(UNUSED void *instance,
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
+extern module_t rlm_chap;
 module_t rlm_chap = {
 	 RLM_MODULE_INIT,
 	"CHAP",

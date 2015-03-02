@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -269,7 +270,7 @@ static void rad_mangle(rlm_preprocess_t *inst, REQUEST *request)
 	 */
 	request_pairs = request->packet->vps;
 	namepair = pairfind(request_pairs, PW_USER_NAME, 0, TAG_ANY);
-	if (!namepair || (namepair->length == 0)) {
+	if (!namepair || (namepair->vp_length == 0)) {
 		return;
 	}
 
@@ -703,7 +704,11 @@ static rlm_rcode_t CC_HINT(nonnull) mod_preaccounting(void *instance, REQUEST *r
 
 		delay = pairfind(request->packet->vps, PW_ACCT_DELAY_TIME, 0, TAG_ANY);
 		if (delay) {
-			vp->vp_date -= delay->vp_integer;
+			if ((delay->vp_integer >= vp->vp_date) || (delay->vp_integer == UINT32_MAX)) {
+				RWARN("Ignoring invalid Acct-Delay-time of %u seconds", delay->vp_integer);
+			} else {
+				vp->vp_date -= delay->vp_integer;
+			}
 		}
 	}
 
@@ -719,6 +724,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_preaccounting(void *instance, REQUEST *r
 }
 
 /* globally exported name */
+extern module_t rlm_preprocess;
 module_t rlm_preprocess = {
 	RLM_MODULE_INIT,
 	"preprocess",

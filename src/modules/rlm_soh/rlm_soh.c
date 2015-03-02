@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -121,7 +122,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	return 0;
 }
 
-static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(UNUSED void * instance, UNUSED REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *request)
 {
 #ifdef WITH_DHCP
 	int rcode;
@@ -144,7 +145,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(UNUSED void * instance, UNUSED
 		uint8_t const *data;
 
 		data = vp->vp_octets;
-		while (data < vp->vp_octets + vp->length) {
+		while (data < vp->vp_octets + vp->vp_length) {
 			vopt = *data++;
 			vlen = *data++;
 			switch (vopt) {
@@ -155,8 +156,8 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(UNUSED void * instance, UNUSED
 					RDEBUG("SoH adding NAP marker to DHCP reply");
 					/* client probe; send "NAP" in the reply */
 					vp = paircreate(request->reply, 43, DHCP_MAGIC_VENDOR);
-					vp->length = 5;
-					vp->vp_octets = p = talloc_array(vp, uint8_t, vp->length);
+					vp->vp_length = 5;
+					vp->vp_octets = p = talloc_array(vp, uint8_t, vp->vp_length);
 
 					p[0] = 220;
 					p[1] = 3;
@@ -202,7 +203,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void * instance, REQUES
 
 	RDEBUG("SoH radius VP found");
 	/* decode it */
-	rv = soh_verify(request, vp->vp_octets, vp->length);
+	rv = soh_verify(request, vp->vp_octets, vp->vp_length);
 	if (rv < 0) {
 		return RLM_MODULE_FAIL;
 	}
@@ -210,6 +211,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void * instance, REQUES
 	return RLM_MODULE_OK;
 }
 
+extern module_t rlm_soh;
 module_t rlm_soh = {
 	RLM_MODULE_INIT,
 	"SoH",

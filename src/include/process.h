@@ -42,6 +42,8 @@ typedef enum fr_saction_t {	/* server action */
 #endif
 } fr_saction_t;
 
+extern time_t fr_start_time;
+
 #ifdef HAVE_PTHREAD_H
 /*
  *	In threads.c
@@ -49,7 +51,7 @@ typedef enum fr_saction_t {	/* server action */
 int request_enqueue(REQUEST *request);
 #endif
 
-int request_receive(rad_listen_t *listener, RADIUS_PACKET *packet,
+int request_receive(TALLOC_CTX *ctx, rad_listen_t *listener, RADIUS_PACKET *packet,
 		    RADCLIENT *client, RAD_REQUEST_FUNP fun);
 
 #ifdef WITH_PROXY

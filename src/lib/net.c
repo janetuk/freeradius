@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -166,5 +167,27 @@ uint16_t fr_udp_checksum(uint8_t const *data, uint16_t len, uint16_t checksum,
 		sum = (sum & 0xffff) + (sum >> 16);
 	}
 
+	return ((uint16_t) ~sum);
+}
+
+/** Calculate IP header checksum.
+ *
+ * Zero out IP header checksum in IP header before calling fr_iph_checksum to get 'expected' checksum.
+ *
+ * @param data Pointer to the start of the IP header
+ * @param ihl value of ip header length field (number of 32 bit words)
+ */
+uint16_t fr_iph_checksum(uint8_t const *data, uint8_t ihl)
+{
+	uint64_t sum = 0;
+	uint16_t const *p = (uint16_t const *)data;
+	
+	uint8_t nwords = (ihl << 1); /* number of 16-bit words */
+	
+	for (sum = 0; nwords > 0; nwords--) {
+		sum += *p++;
+	}
+	sum = (sum >> 16) + (sum & 0xffff);
+	sum += (sum >> 16);
 	return ((uint16_t) ~sum);
 }

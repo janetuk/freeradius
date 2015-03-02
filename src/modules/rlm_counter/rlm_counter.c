@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -160,13 +161,13 @@ static int counter_cmp(void *instance, UNUSED REQUEST *req, VALUE_PAIR *request,
 	/*
 	 *	Find the key attribute.
 	 */
-	key_vp = pairfind_da(request, inst->key_attr, TAG_ANY);
+	key_vp = pair_find_by_da(request, inst->key_attr, TAG_ANY);
 	if (!key_vp) {
 		return RLM_MODULE_NOOP;
 	}
 
 	ASSIGN(key_datum.dptr,key_vp->vp_strvalue);
-	key_datum.dsize = key_vp->length;
+	key_datum.dsize = key_vp->vp_length;
 
 	count_datum = gdbm_fetch(inst->gdbm, key_datum);
 
@@ -591,7 +592,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 	 *	The REAL username, after stripping.
 	 */
 	key_vp = (inst->key_attr->attr == PW_USER_NAME) ? request->username :
-					pairfind_da(request->packet->vps, inst->key_attr, TAG_ANY);
+					pair_find_by_da(request->packet->vps, inst->key_attr, TAG_ANY);
 	if (!key_vp) {
 		DEBUG("rlm_counter: Could not find the key-attribute in the request. Returning NOOP");
 		return RLM_MODULE_NOOP;
@@ -600,14 +601,14 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 	/*
 	 *	Look for the attribute to use as a counter.
 	 */
-	count_vp = pairfind_da(request->packet->vps, inst->count_attr, TAG_ANY);
+	count_vp = pair_find_by_da(request->packet->vps, inst->count_attr, TAG_ANY);
 	if (!count_vp) {
 		DEBUG("rlm_counter: Could not find the count_attribute in the request");
 		return RLM_MODULE_NOOP;
 	}
 
 	ASSIGN(key_datum.dptr, key_vp->vp_strvalue);
-	key_datum.dsize = key_vp->length;
+	key_datum.dsize = key_vp->vp_length;
 
 	DEBUG("rlm_counter: Searching the database for key '%s'",key_vp->vp_strvalue);
 	pthread_mutex_lock(&inst->mutex);
@@ -686,7 +687,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
  *	from the database. The authentication code only needs to check
  *	the password, the rest is done here.
  */
-static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, UNUSED REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *request)
 {
 	rlm_counter_t *inst = instance;
 	rlm_rcode_t rcode = RLM_MODULE_NOOP;
@@ -721,7 +722,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, UNUSED 
 	 */
 	DEBUG2("rlm_counter: Entering module authorize code");
 	key_vp = (inst->key_attr->attr == PW_USER_NAME) ? request->username :
-		 pairfind_da(request->packet->vps, inst->key_attr, TAG_ANY);
+		 pair_find_by_da(request->packet->vps, inst->key_attr, TAG_ANY);
 	if (!key_vp) {
 		DEBUG2("rlm_counter: Could not find Key value pair");
 		return rcode;
@@ -730,13 +731,13 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, UNUSED 
 	/*
 	 *      Look for the check item
 	 */
-	if ((check_vp = pairfind_da(request->config_items, inst->check_attr, TAG_ANY)) == NULL) {
+	if ((check_vp = pair_find_by_da(request->config_items, inst->check_attr, TAG_ANY)) == NULL) {
 		DEBUG2("rlm_counter: Could not find Check item value pair");
 		return rcode;
 	}
 
 	ASSIGN(key_datum.dptr, key_vp->vp_strvalue);
-	key_datum.dsize = key_vp->length;
+	key_datum.dsize = key_vp->vp_length;
 
 
 	/*
@@ -807,7 +808,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, UNUSED 
 				reply_item->vp_integer = res;
 			}
 		} else if (inst->reply_attr) {
-			reply_item = pairfind_da(request->reply->vps, inst->reply_attr, TAG_ANY);
+			reply_item = pair_find_by_da(request->reply->vps, inst->reply_attr, TAG_ANY);
 			if (reply_item) {
 				if (reply_item->vp_integer > res) {
 					reply_item->vp_integer = res;
@@ -864,6 +865,7 @@ static int mod_detach(void *instance)
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
+extern module_t rlm_counter;
 module_t rlm_counter = {
 	RLM_MODULE_INIT,
 	"counter",

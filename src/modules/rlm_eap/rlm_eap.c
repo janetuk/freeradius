@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -284,7 +285,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 	 */
 	eap_packet = eap_vp2packet(request, request->packet->vps);
 	if (!eap_packet) {
-		RERROR("Malformed EAP Message");
+		RERROR("Malformed EAP Message: %s", fr_strerror());
 		return RLM_MODULE_FAIL;
 	}
 
@@ -319,7 +320,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 	/*
 	 *	If we're doing horrible tunneling work, remember it.
 	 */
-	if ((request->log.lvl & RAD_REQUEST_OPTION_PROXY_EAP) != 0) {
+	if ((request->options & RAD_REQUEST_OPTION_PROXY_EAP) != 0) {
 		RDEBUG2("No EAP proxy set.  Not composing EAP");
 		/*
 		 *	Add the handle to the proxied list, so that we
@@ -455,11 +456,11 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		 */
 		if (inst->mod_accounting_username_bug) {
 			char const *old = vp->vp_strvalue;
-			char *new = talloc_zero_array(vp, char, vp->length + 1);
+			char *new = talloc_zero_array(vp, char, vp->vp_length + 1);
 
-			memcpy(new, old, vp->length);
+			memcpy(new, old, vp->vp_length);
 			vp->vp_strvalue = new;
-			vp->length++;
+			vp->vp_length++;
 
 			rad_const_free(old);
 		}
@@ -501,7 +502,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	 *	We therefore send an EAP Identity request.
 	 */
 	status = eap_start(inst, request);
-	switch(status) {
+	switch (status) {
 	case EAP_NOOP:
 		return RLM_MODULE_NOOP;
 	case EAP_FAIL:
@@ -671,9 +672,9 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_proxy(void *inst, REQUEST *request)
 	/*
 	 *	The format is very specific.
 	 */
-	if (vp->length != (17 + 34)) {
+	if (vp->vp_length != (17 + 34)) {
 		RDEBUG2("Cisco-AVPair with leap:session-key has incorrect length %zu: Expected %d",
-		       vp->length, 17 + 34);
+		       vp->vp_length, 17 + 34);
 		return RLM_MODULE_NOOP;
 	}
 
@@ -689,7 +690,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_proxy(void *inst, REQUEST *request)
 	 *	zero byte.
 	 */
 	i = 34;
-	p = talloc_memdup(vp, vp->vp_strvalue, vp->length + 1);	
+	p = talloc_memdup(vp, vp->vp_strvalue, vp->vp_length + 1);
 	talloc_set_type(p, uint8_t);
 	len = rad_tunnel_pwdecode((uint8_t *)p + 17, &i, request->home_server->secret, request->proxy->vector);
 
@@ -735,7 +736,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 
 	eap_packet = eap_vp2packet(request, request->packet->vps);
 	if (!eap_packet) {
-		RERROR("Malformed EAP Message");
+		RERROR("Malformed EAP Message: %s", fr_strerror());
 		return RLM_MODULE_FAIL;
 	}
 
@@ -765,6 +766,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
  *	The module name should be the only globally exported symbol.
  *	That is, everything else should be 'static'.
  */
+extern module_t rlm_eap;
 module_t rlm_eap = {
 	RLM_MODULE_INIT,
 	"eap",

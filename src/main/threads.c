@@ -43,6 +43,7 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 #include <mach/mach_init.h>
 #include <mach/semaphore.h>
 
+#ifndef WITH_GCD
 #undef sem_t
 #define sem_t semaphore_t
 #undef sem_init
@@ -51,7 +52,8 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 #define sem_wait(s) semaphore_wait(*s)
 #undef sem_post
 #define sem_post(s) semaphore_signal(*s)
-#endif
+#endif	/* WITH_GCD */
+#endif	/* __APPLE__ */
 
 #ifdef HAVE_SYS_WAIT_H
 #include <sys/wait.h>
@@ -71,7 +73,6 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 
 #ifndef WITH_GCD
 #define SEMAPHORE_LOCKED	(0)
-#define SEMAPHORE_UNLOCKED	(1)
 
 #define THREAD_RUNNING		(1)
 #define THREAD_CANCELLED	(2)
@@ -96,11 +97,13 @@ typedef struct THREAD_HANDLE {
 
 #endif	/* WITH_GCD */
 
+#ifdef WNOHANG
 typedef struct thread_fork_t {
 	pid_t		pid;
 	int		status;
 	int		exited;
 } thread_fork_t;
+#endif
 
 
 #ifdef WITH_STATS
@@ -221,7 +224,16 @@ static pthread_mutex_t *ssl_mutexes = NULL;
 
 static unsigned long ssl_id_function(void)
 {
-	return (unsigned long) pthread_self();
+	unsigned long ret;
+	pthread_t thread = pthread_self();
+
+	if (sizeof(ret) >= sizeof(thread)) {
+		memcpy(&ret, &thread, sizeof(thread));
+	} else {
+		memcpy(&ret, &thread, sizeof(ret));
+	}
+
+	return ret;
 }
 
 static void ssl_locking_function(int mode, int n, UNUSED char const *file, UNUSED int line)
@@ -454,9 +466,9 @@ static int request_dequeue(REQUEST **prequest)
 	time_t blocked;
 	static time_t last_complained = 0;
 	static time_t total_blocked = 0;
-	int num_blocked;
+	int num_blocked = 0;
 	RAD_LISTEN_TYPE i, start;
-	REQUEST *request;
+	REQUEST *request = NULL;
 	reap_children();
 
 	rad_assert(pool_initialized == true);
@@ -876,13 +888,13 @@ static int pid_cmp(void const *one, void const *two)
  *
  *	FIXME: What to do on a SIGHUP???
  */
-int thread_pool_init(UNUSED CONF_SECTION *cs, bool *spawn_flag)
+int thread_pool_init(CONF_SECTION *cs, bool *spawn_flag)
 {
 #ifndef WITH_GCD
 	uint32_t	i;
 	int		rcode;
-	CONF_SECTION	*pool_cf;
 #endif
+	CONF_SECTION	*pool_cf;
 	time_t		now;
 
 	now = time(NULL);
@@ -891,8 +903,10 @@ int thread_pool_init(UNUSED CONF_SECTION *cs, bool *spawn_flag)
 	rad_assert(*spawn_flag == true);
 	rad_assert(pool_initialized == false); /* not called on HUP */
 
-#ifndef WITH_GCD
 	pool_cf = cf_subsection_find_next(cs, NULL, "thread");
+#ifdef WITH_GCD
+	if (pool_cf) WARN("Built with Grand Central Dispatch.  Ignoring 'thread' subsection");
+#else
 	if (!pool_cf) *spawn_flag = false;
 #endif
 
@@ -1383,6 +1397,7 @@ void exec_trigger(REQUEST *request, CONF_SECTION *cs, char const *name, int quen
 	char const *attr;
 	char const *value;
 	VALUE_PAIR *vp;
+	bool alloc = false;
 
 	/*
 	 *	Use global "trigger" section if no local config is given.
@@ -1426,7 +1441,7 @@ void exec_trigger(REQUEST *request, CONF_SECTION *cs, char const *name, int quen
 		return;
 	}
 
-	cp = cf_itemtopair(ci);
+	cp = cf_item_to_pair(ci);
 	if (!cp) return;
 
 	value = cf_pair_value(cp);
@@ -1469,6 +1484,17 @@ void exec_trigger(REQUEST *request, CONF_SECTION *cs, char const *name, int quen
 		}
 	}
 
+	/*
+	 *	radius_exec_program always needs a request.
+	 */
+	if (!request) {
+		request = request_alloc(NULL);
+		alloc = true;
+	}
+
 	DEBUG("Trigger %s -> %s", name, value);
-	radius_exec_program(request, value, false, true, NULL, 0, EXEC_TIMEOUT, vp, NULL);
+
+	radius_exec_program(NULL, 0, NULL, request, value, vp, false, true, EXEC_TIMEOUT);
+
+	if (alloc) talloc_free(request);
 }

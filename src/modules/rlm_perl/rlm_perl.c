@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -73,6 +74,7 @@ typedef struct rlm_perl_t {
 	char const	*xlat_name;
 	char const	*perl_flags;
 	PerlInterpreter	*perl;
+	bool             perl_parsed;
 	pthread_key_t	*thread_key;
 
 #ifdef USE_ITHREADS
@@ -232,7 +234,7 @@ static void rlm_destroy_perl(PerlInterpreter *perl)
 /* Create Key */
 static void rlm_perl_make_key(pthread_key_t *key)
 {
-	pthread_key_create(key, (void*)rlm_destroy_perl);
+	pthread_key_create(key, (void (*)(void *))rlm_destroy_perl);
 }
 
 static PerlInterpreter *rlm_perl_clone(PerlInterpreter *perl, pthread_key_t *key)
@@ -413,7 +415,7 @@ static void perl_parse_config(CONF_SECTION *cs, int lvl, HV *rad_hv)
 		 *  Then recursively call perl_parse_config with this section and the new HV.
 		 */
 		if (cf_item_is_section(ci)) {
-			CONF_SECTION	*sub_cs = cf_itemtosection(ci);
+			CONF_SECTION	*sub_cs = cf_item_to_section(ci);
 			char const	*key = cf_section_name1(sub_cs); /* hash key */
 			HV		*sub_hv;
 			SV		*ref;
@@ -432,7 +434,7 @@ static void perl_parse_config(CONF_SECTION *cs, int lvl, HV *rad_hv)
 
 			perl_parse_config(sub_cs, lvl + 1, sub_hv);
 		} else if (cf_item_is_pair(ci)){
-			CONF_PAIR	*cp = cf_itemtopair(ci);
+			CONF_PAIR	*cp = cf_item_to_pair(ci);
 			char const	*key = cf_pair_attr(cp);	/* hash key */
 			char const	*value = cf_pair_value(cp);	/* hash value */
 
@@ -480,6 +482,8 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	char **envp = NULL;
 	char const *xlat_name;
 	int exitstatus = 0, argc=0;
+
+	CONF_SECTION *cs;
 
 	MEM(embed_c = talloc_zero_array(inst, char const *, 4));
 	memcpy(&embed, &embed_c, sizeof(embed));
@@ -532,20 +536,6 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	PL_exit_flags |= PERL_EXIT_DESTRUCT_END;
 #endif
 
-	exitstatus = perl_parse(inst->perl, xs_init, argc, embed, NULL);
-
-	end_AV = PL_endav;
-	PL_endav = (AV *)NULL;
-
-	if(!exitstatus) {
-		perl_run(inst->perl);
-	} else {
-		ERROR("rlm_perl: perl_parse failed: %s not found or has syntax errors. \n", inst->module);
-		return (-1);
-	}
-
-	PL_endav = end_AV;
-
 	xlat_name = cf_section_name2(conf);
 	if (!xlat_name)
 		xlat_name = cf_section_name1(conf);
@@ -553,8 +543,17 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		xlat_register(xlat_name, perl_xlat, NULL, inst);
 	}
 
+	exitstatus = perl_parse(inst->perl, xs_init, argc, embed, NULL);
+
+	end_AV = PL_endav;
+	PL_endav = (AV *)NULL;
+
+	if (exitstatus) {
+		ERROR("rlm_perl: perl_parse failed: %s not found or has syntax errors. \n", inst->module);
+		return -1;
+	}
+
 	/* parse perl configuration sub-section */
-	CONF_SECTION *cs;
 	cs = cf_section_sub_find(conf, "config");
 	if (cs) {
 		DEBUG("rlm_perl (%s): parsing 'config' section...", xlat_name);
@@ -564,6 +563,11 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 
 		DEBUG("rlm_perl (%s): done parsing 'config'.", xlat_name);
 	}
+
+	inst->perl_parsed = true;
+	perl_run(inst->perl);
+
+	PL_endav = end_AV;
 
 	return 0;
 }
@@ -579,7 +583,7 @@ static void perl_vp_to_svpvn_element(REQUEST *request, AV *av, VALUE_PAIR const 
 	case PW_TYPE_STRING:
 		RDEBUG("$%s{'%s'}[%i] = &%s:%s -> '%s'", hash_name, vp->da->name, *i,
 		       list_name, vp->da->name, vp->vp_strvalue);
-		av_push(av, newSVpvn(vp->vp_strvalue, vp->length));
+		av_push(av, newSVpvn(vp->vp_strvalue, vp->vp_length));
 		break;
 
 	default:
@@ -598,7 +602,7 @@ static void perl_vp_to_svpvn_element(REQUEST *request, AV *av, VALUE_PAIR const 
  *  	Example for this is Cisco-AVPair that holds multiple values.
  *  	Which will be available as array_ref in $RAD_REQUEST{'Cisco-AVPair'}
  */
-static void perl_store_vps(UNUSED TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR *vps, HV *rad_hv,
+static void perl_store_vps(UNUSED TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR **vps, HV *rad_hv,
 			   const char *hash_name, const char *list_name)
 {
 	VALUE_PAIR *vp;
@@ -608,8 +612,8 @@ static void perl_store_vps(UNUSED TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR 
 	vp_cursor_t cursor;
 
 	RINDENT();
-	pairsort(&vps, attrtagcmp);
-	for (vp = fr_cursor_init(&cursor, &vps);
+	pairsort(vps, attrtagcmp);
+	for (vp = fr_cursor_init(&cursor, vps);
 	     vp;
 	     vp = fr_cursor_next(&cursor)) {
 	     	VALUE_PAIR *next;
@@ -659,7 +663,7 @@ static void perl_store_vps(UNUSED TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR 
 		case PW_TYPE_STRING:
 			RDEBUG("$%s{'%s'} = &%s:%s -> '%s'", hash_name, vp->da->name, list_name,
 			       vp->da->name, vp->vp_strvalue);
-			(void)hv_store(rad_hv, name, strlen(name), newSVpvn(vp->vp_strvalue, vp->length), 0);
+			(void)hv_store(rad_hv, name, strlen(name), newSVpvn(vp->vp_strvalue, vp->vp_length), 0);
 			break;
 
 		default:
@@ -796,24 +800,24 @@ static int do_perl(void *instance, REQUEST *request, char const *function_name)
 		rad_config_hv = get_hv("RAD_CONFIG", 1);
 		rad_request_hv = get_hv("RAD_REQUEST", 1);
 
-		perl_store_vps(request->packet, request, request->packet->vps, rad_request_hv, "RAD_REQUEST", "request");
-		perl_store_vps(request->reply, request, request->reply->vps, rad_reply_hv, "RAD_REPLY", "reply");
-		perl_store_vps(request, request, request->config_items, rad_check_hv, "RAD_CHECK", "control");
-		perl_store_vps(request, request, request->config_items, rad_config_hv, "RAD_CONFIG", "control");
+		perl_store_vps(request->packet, request, &request->packet->vps, rad_request_hv, "RAD_REQUEST", "request");
+		perl_store_vps(request->reply, request, &request->reply->vps, rad_reply_hv, "RAD_REPLY", "reply");
+		perl_store_vps(request, request, &request->config_items, rad_check_hv, "RAD_CHECK", "control");
+		perl_store_vps(request, request, &request->config_items, rad_config_hv, "RAD_CONFIG", "control");
 
 #ifdef WITH_PROXY
 		rad_request_proxy_hv = get_hv("RAD_REQUEST_PROXY",1);
 		rad_request_proxy_reply_hv = get_hv("RAD_REQUEST_PROXY_REPLY",1);
 
 		if (request->proxy != NULL) {
-			perl_store_vps(request->proxy, request, request->proxy->vps, rad_request_proxy_hv,
+			perl_store_vps(request->proxy, request, &request->proxy->vps, rad_request_proxy_hv,
 				       "RAD_REQUEST_PROXY", "proxy-request");
 		} else {
 			hv_undef(rad_request_proxy_hv);
 		}
 
 		if (request->proxy_reply != NULL) {
-			perl_store_vps(request->proxy_reply, request, request->proxy_reply->vps,
+			perl_store_vps(request->proxy_reply, request, &request->proxy_reply->vps,
 				       rad_request_proxy_reply_hv, "RAD_REQUEST_PROXY_REPLY", "proxy-reply");
 		} else {
 			hv_undef(rad_request_proxy_reply_hv);
@@ -942,7 +946,6 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 
 	switch (acctstatustype) {
 	case PW_STATUS_START:
-
 		if (((rlm_perl_t *)instance)->func_start_accounting) {
 			return do_perl(instance, request,
 				       ((rlm_perl_t *)instance)->func_start_accounting);
@@ -950,10 +953,8 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 			return do_perl(instance, request,
 				       ((rlm_perl_t *)instance)->func_accounting);
 		}
-		break;
 
 	case PW_STATUS_STOP:
-
 		if (((rlm_perl_t *)instance)->func_stop_accounting) {
 			return do_perl(instance, request,
 				       ((rlm_perl_t *)instance)->func_stop_accounting);
@@ -961,7 +962,6 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 			return do_perl(instance, request,
 				       ((rlm_perl_t *)instance)->func_accounting);
 		}
-		break;
 
 	default:
 		return do_perl(instance, request,
@@ -1012,7 +1012,7 @@ static int mod_detach(void *instance)
 	}
 #endif
 
-	if (inst->func_detach) {
+	if (inst->perl_parsed && inst->func_detach) {
 		dTHXa(inst->perl);
 		PERL_SET_CONTEXT(inst->perl);
 		{
@@ -1056,6 +1056,7 @@ DIAG_ON(nested-externs)
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
+extern module_t rlm_perl;
 module_t rlm_perl = {
 	RLM_MODULE_INIT,
 	"perl",				/* Name */

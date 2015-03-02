@@ -1,5 +1,5 @@
 # -*- text -*-
-# Copyright (C) 2011 The FreeRADIUS Server project and contributors
+# Copyright (C) 2015 The FreeRADIUS Server project and contributors
 #
 # Version $Id$
 #
@@ -111,6 +111,7 @@ $INCLUDE dictionary.rfc6911
 $INCLUDE dictionary.rfc6929
 $INCLUDE dictionary.rfc6930
 $INCLUDE dictionary.rfc7055
+$INCLUDE dictionary.rfc7155
 $INCLUDE dictionary.rfc7268
 
 #
@@ -135,6 +136,7 @@ $INCLUDE dictionary.alcatel-lucent.aaa
 $INCLUDE dictionary.alteon
 $INCLUDE dictionary.alvarion
 $INCLUDE dictionary.apc
+$INCLUDE dictionary.arbor
 $INCLUDE dictionary.aruba
 $INCLUDE dictionary.azaire
 $INCLUDE dictionary.ascend
@@ -175,6 +177,7 @@ $INCLUDE dictionary.epygi
 $INCLUDE dictionary.erx
 $INCLUDE dictionary.equallogic
 $INCLUDE dictionary.ericsson
+$INCLUDE dictionary.ericsson.ab
 $INCLUDE dictionary.ericsson.packet.core.networks
 $INCLUDE dictionary.extreme
 $INCLUDE dictionary.f5
@@ -201,6 +204,7 @@ $INCLUDE dictionary.livingston
 $INCLUDE dictionary.localweb
 $INCLUDE dictionary.lucent
 $INCLUDE dictionary.manzara
+$INCLUDE dictionary.meinberg
 $INCLUDE dictionary.merit
 $INCLUDE dictionary.meru
 $INCLUDE dictionary.microsoft
@@ -226,17 +230,18 @@ $INCLUDE dictionary.nortel
 $INCLUDE dictionary.packeteer
 $INCLUDE dictionary.paloalto
 $INCLUDE dictionary.patton
+$INCLUDE dictionary.perle
 $INCLUDE dictionary.propel
 $INCLUDE dictionary.prosoft
 $INCLUDE dictionary.proxim
 $INCLUDE dictionary.purewave
 $INCLUDE dictionary.quiconnect
 $INCLUDE dictionary.quintum
-$INCLUDE dictionary.redback
 $INCLUDE dictionary.redcreek
 $INCLUDE dictionary.riverbed
 $INCLUDE dictionary.riverstone
 $INCLUDE dictionary.roaringpenguin
+$INCLUDE dictionary.ruggedcom
 $INCLUDE dictionary.ruckus
 $INCLUDE dictionary.shasta
 $INCLUDE dictionary.sg
@@ -251,6 +256,7 @@ $INCLUDE dictionary.symbol
 $INCLUDE dictionary.telebit
 $INCLUDE dictionary.terena
 $INCLUDE dictionary.trapeze
+$INCLUDE dictionary.travelping
 $INCLUDE dictionary.tropos
 $INCLUDE dictionary.t_systems_nova
 $INCLUDE dictionary.ukerna

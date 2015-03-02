@@ -116,8 +116,14 @@ eap_handler_t *eap_handler_alloc(rlm_eap_t *inst)
 
 	PTHREAD_MUTEX_LOCK(&(inst->handler_mutex));
 	handler = talloc_zero(NULL, eap_handler_t);
+	if (handler == NULL) {
+		PTHREAD_MUTEX_UNLOCK(&(inst->handler_mutex));
+		ERROR("Failed allocating handler");
+		return NULL;
+	}
 	if (inst->handler_tree) {
 		if (!rbtree_insert(inst->handler_tree, handler)) {
+			PTHREAD_MUTEX_UNLOCK(&(inst->handler_mutex));
 			ERROR("Failed inserting EAP handler into handler tree");
 			talloc_free(handler);
 			return NULL;
@@ -436,7 +442,7 @@ int eaplist_add(rlm_eap_t *inst, eap_handler_t *handler)
 	PTHREAD_MUTEX_UNLOCK(&(inst->session_mutex));
 
 	if (status <= 0) {
-		pairfree(&state);
+		pairdelete(&request->reply->vps, PW_STATE, 0, TAG_ANY);
 
 		if (status < 0) {
 			static time_t last_logged = 0;
@@ -452,7 +458,7 @@ int eaplist_add(rlm_eap_t *inst, eap_handler_t *handler)
 		return 0;
 	}
 
-	RDEBUG("New EAP session, adding 'State' attribute to reply 0x%02x%02x%02x%02x%02x%02x%02x%02x",
+	RDEBUG("EAP session adding &reply:State = 0x%02x%02x%02x%02x%02x%02x%02x%02x",
 	       state->vp_octets[0], state->vp_octets[1], state->vp_octets[2], state->vp_octets[3],
 	       state->vp_octets[4], state->vp_octets[5], state->vp_octets[6], state->vp_octets[7]);
 
@@ -481,7 +487,7 @@ eap_handler_t *eaplist_find(rlm_eap_t *inst, REQUEST *request,
 	 */
 	state = pairfind(request->packet->vps, PW_STATE, 0, TAG_ANY);
 	if (!state ||
-	    (state->length != EAP_STATE_LEN)) {
+	    (state->vp_length != EAP_STATE_LEN)) {
 		return NULL;
 	}
 

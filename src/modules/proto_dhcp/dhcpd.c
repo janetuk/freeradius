@@ -56,8 +56,6 @@
 #include <sys/ioctl.h>
 #endif
 
-extern bool check_config;	/* @todo globals are bad, m'kay? */
-
 /*
  *	Same contents as listen_socket_t.
  */
@@ -305,7 +303,7 @@ static int dhcp_process(REQUEST *request)
 	if (vp) {
 		DICT_VALUE *dv = dict_valbyattr(53, DHCP_MAGIC_VENDOR, vp->vp_integer);
 		DEBUG("Trying sub-section dhcp %s {...}",
-		      dv->name ? dv->name : "<unknown>");
+		      dv ? dv->name : "<unknown>");
 		rcode = process_post_auth(vp->vp_integer, request);
 	} else {
 		DEBUG("DHCP: Failed to find DHCP-Message-Type in packet!");
@@ -425,9 +423,23 @@ static int dhcp_process(REQUEST *request)
 		vp = pairfind(request->reply->vps, PW_FREERADIUS_RESPONSE_DELAY, 0, TAG_ANY);
 		if (vp) {
 			if (vp->vp_integer <= 10) {
-				request->response_delay = vp->vp_integer;
+				request->response_delay.tv_sec = vp->vp_integer;
+				request->response_delay.tv_usec = 0;
 			} else {
-				request->response_delay = 10;
+				request->response_delay.tv_sec = 10;
+				request->response_delay.tv_usec = 0;
+			}
+		} else {
+#define USEC 1000000
+			vp = pairfind(request->reply->vps, PW_FREERADIUS_RESPONSE_DELAY_USEC, 0, TAG_ANY);
+			if (vp) {
+				if (vp->vp_integer <= 10 * USEC) {
+					request->response_delay.tv_sec = vp->vp_integer / USEC;
+					request->response_delay.tv_usec = vp->vp_integer % USEC;
+				} else {
+					request->response_delay.tv_sec = 10;
+					request->response_delay.tv_usec = 0;
+				}
 			}
 		}
 	}
@@ -438,6 +450,7 @@ static int dhcp_process(REQUEST *request)
 	request->reply->dst_ipaddr.af = AF_INET;
 	request->reply->src_ipaddr.af = AF_INET;
 	request->reply->src_ipaddr.ipaddr.ip4addr.s_addr = sock->src_ipaddr.ipaddr.ip4addr.s_addr;
+	request->reply->src_ipaddr.prefix = 32;
 
 	/*
 	 *	They didn't set a proper src_ipaddr, but we want to
@@ -445,7 +458,7 @@ static int dhcp_process(REQUEST *request)
 	 *	identifier, use it.
 	 */
 	if (request->reply->src_ipaddr.ipaddr.ip4addr.s_addr == INADDR_ANY) {
-		vp = pairfind(request->reply->vps, 265, DHCP_MAGIC_VENDOR, TAG_ANY); /* DHCP-Server-IP-Address */
+		vp = pairfind(request->reply->vps, PW_PACKET_SRC_IP_ADDRESS, 0, TAG_ANY);
 		if (!vp) vp = pairfind(request->reply->vps, 54, DHCP_MAGIC_VENDOR, TAG_ANY); /* DHCP-DHCP-Server-Identifier */
 		if (vp) {
 			request->reply->src_ipaddr.ipaddr.ip4addr.s_addr = vp->vp_ipaddr;
@@ -697,7 +710,7 @@ static int dhcp_socket_recv(rad_listen_t *listener)
 	}
 
 	sock = listener->data;
-	if (!request_receive(listener, packet, &sock->dhcp_client, dhcp_process)) {
+	if (!request_receive(NULL, listener, packet, &sock->dhcp_client, dhcp_process)) {
 		rad_free(&packet);
 		return 0;
 	}
@@ -742,6 +755,7 @@ static int dhcp_socket_decode(UNUSED rad_listen_t *listener, REQUEST *request)
 	return fr_dhcp_decode(request->packet);
 }
 
+extern fr_protocol_t proto_dhcp;
 fr_protocol_t proto_dhcp = {
 	RLM_MODULE_INIT,
 	"dhcp",

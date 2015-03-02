@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -26,6 +27,7 @@ RCSID("$Id$")
 #include <freeradius-devel/modules.h>
 #include <freeradius-devel/rad_assert.h>
 #include <freeradius-devel/detail.h>
+#include <freeradius-devel/exfile.h>
 
 #include <ctype.h>
 #include <fcntl.h>
@@ -60,19 +62,24 @@ typedef struct detail_instance {
 
 	bool		log_srcdst;	//!< Add IP src/dst attributes to entries.
 
-	fr_logfile_t    *lf;		//!< Log file handler
+	bool		escape;		//!< do filename escaping, yes / no
+
+	RADIUS_ESCAPE_STRING escape_func; //!< escape function
+
+	exfile_t    	*ef;		//!< Log file handler
 
 	fr_hash_table_t *ht;		//!< Holds suppressed attributes.
 } detail_instance_t;
 
 static const CONF_PARSER module_config[] = {
 	{ "detailfile", FR_CONF_OFFSET(PW_TYPE_FILE_OUTPUT | PW_TYPE_DEPRECATED, detail_instance_t, filename), NULL },
-	{ "filename", FR_CONF_OFFSET(PW_TYPE_FILE_OUTPUT | PW_TYPE_REQUIRED, detail_instance_t, filename), "%A/%{Client-IP-Address}/detail" },
-	{ "header", FR_CONF_OFFSET(PW_TYPE_STRING, detail_instance_t, header), "%t" },
+	{ "filename", FR_CONF_OFFSET(PW_TYPE_FILE_OUTPUT | PW_TYPE_REQUIRED | PW_TYPE_XLAT, detail_instance_t, filename), "%A/%{Client-IP-Address}/detail" },
+	{ "header", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_XLAT, detail_instance_t, header), "%t" },
 	{ "detailperm", FR_CONF_OFFSET(PW_TYPE_INTEGER | PW_TYPE_DEPRECATED, detail_instance_t, perm), NULL },
 	{ "permissions", FR_CONF_OFFSET(PW_TYPE_INTEGER, detail_instance_t, perm), "0600" },
 	{ "group", FR_CONF_OFFSET(PW_TYPE_STRING, detail_instance_t, group), NULL },
 	{ "locking", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, detail_instance_t, locking), "no" },
+	{ "escape_filenames", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, detail_instance_t, escape), "no" },
 	{ "log_packet_header", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, detail_instance_t, log_srcdst), "no" },
 	{ NULL, -1, 0, NULL, NULL }
 };
@@ -103,6 +110,80 @@ static int detail_cmp(void const *a, void const *b)
 	return one - two;
 }
 
+/*
+ *	Ensure that the filename doesn't walk back up the tree.
+ */
+static size_t fix_directories(UNUSED REQUEST *request, char *out, size_t outlen,
+			      char const *in, UNUSED void *arg)
+{
+	char const *q = in;
+	char *p = out;
+	size_t left = outlen;
+
+	while (*q) {
+		if (*q != '/') {
+			if (left < 2) break;
+
+			/*
+			 *	Smash control characters and spaces to
+			 *	something simpler.
+			 */
+			if (*q < ' ') {
+				*(p++) = '_';
+				continue;
+			}
+
+			*(p++) = *(q++);
+			left--;
+			continue;
+		}
+
+		/*
+		 *	For now, allow slashes in the expanded
+		 *	filename.  This allows the admin to set
+		 *	attributes which create sub-directories.
+		 *	Unfortunately, it also allows users to send
+		 *	attributes which *may* end up creating
+		 *	sub-directories.
+		 */
+		if (left < 2) break;
+		*(p++) = *(q++);
+
+		/*
+		 *	Get rid of ////../.././///.///..//
+		 */
+	redo:
+		/*
+		 *	Get rid of ////
+		 */
+		if (*q == '/') {
+			q++;
+			goto redo;
+		}
+
+		/*
+		 *	Get rid of /./././
+		 */
+		if ((q[0] == '.') &&
+		    (q[1] == '/')) {
+			q += 2;
+			goto redo;
+		}
+
+		/*
+		 *	Get rid of /../../../
+		 */
+		if ((q[0] == '.') && (q[1] == '.') &&
+		    (q[2] == '/')) {
+			q += 3;
+			goto redo;
+		}
+	}
+	*p = '\0';
+
+	return (p - out);
+}
+
 
 /*
  *	(Re-)read radiusd.conf into memory.
@@ -117,8 +198,17 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		inst->name = cf_section_name1(conf);
 	}
 
-	inst->lf= fr_logfile_init(inst);
-	if (!inst->lf) {
+	/*
+	 *	Escape filenames only if asked.
+	 */
+	if (inst->escape) {
+		inst->escape_func = rad_filename_escape;
+	} else {
+		inst->escape_func = fix_directories;
+	}
+
+	inst->ef = exfile_init(inst, 64, 30);
+	if (!inst->ef) {
 		cf_log_err_cs(conf, "Failed creating log file context");
 		return -1;
 	}
@@ -140,7 +230,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 
 			if (!cf_item_is_pair(ci)) continue;
 
-			attr = cf_pair_attr(cf_itemtopair(ci));
+			attr = cf_pair_attr(cf_item_to_pair(ci));
 			if (!attr) continue; /* pair-anoia */
 
 			da = dict_attrbyname(attr);
@@ -233,7 +323,7 @@ static int detail_write(FILE *out, detail_instance_t *inst, REQUEST *request, RA
 		if (is_radius_code(packet->code)) {
 			WRITE("\tPacket-Type = %s\n", fr_packet_codes[packet->code]);
 		} else {
-			WRITE("\tPacket-Type = %d\n", packet->code);
+			WRITE("\tPacket-Type = %u\n", packet->code);
 		}
 	}
 
@@ -315,9 +405,8 @@ static int detail_write(FILE *out, detail_instance_t *inst, REQUEST *request, RA
 			WRITE("\tFreeradius-Proxied-To = %s\n", proxy_buffer);
 		}
 #endif
-
-		WRITE("\tTimestamp = %ld\n", (unsigned long) request->timestamp);
 	}
+	WRITE("\tTimestamp = %ld\n", (unsigned long) request->timestamp);
 
 	WRITE("\n");
 
@@ -346,9 +435,10 @@ static rlm_rcode_t CC_HINT(nonnull) detail_do(void *instance, REQUEST *request, 
 	 *	format, but truncate at the last /.  Then feed it
 	 *	through radius_xlat() to expand the variables.
 	 */
-	if (radius_xlat(buffer, sizeof(buffer), request, inst->filename, NULL, NULL) < 0) {
+	if (radius_xlat(buffer, sizeof(buffer), request, inst->filename, inst->escape_func, NULL) < 0) {
 		return RLM_MODULE_FAIL;
 	}
+
 	RDEBUG2("%s expands to %s", inst->filename, buffer);
 
 #ifdef WITH_ACCOUNTING
@@ -368,17 +458,16 @@ static rlm_rcode_t CC_HINT(nonnull) detail_do(void *instance, REQUEST *request, 
 #endif
 #endif
 
-	outfd = fr_logfile_open(inst->lf, buffer, inst->perm);
+	outfd = exfile_open(inst->ef, buffer, inst->perm, true);
 	if (outfd < 0) {
 		RERROR("Couldn't open file %s: %s", buffer, fr_strerror());
 		return RLM_MODULE_FAIL;
 	}
 
-#ifdef HAVE_GRP_H
 	if (inst->group != NULL) {
 		gid = strtol(inst->group, &endptr, 10);
 		if (*endptr != '\0') {
-			if (!fr_getgid(inst->group, &gid)) {
+			if (rad_getgid(request, &gid, inst->group) < 0) {
 				RDEBUG2("Unable to find system group '%s'", inst->group);
 				goto skip_group;
 			}
@@ -390,8 +479,6 @@ static rlm_rcode_t CC_HINT(nonnull) detail_do(void *instance, REQUEST *request, 
 	}
 
 skip_group:
-#endif
-
 	/*
 	 *	Open the output fp for buffering.
 	 */
@@ -399,7 +486,7 @@ skip_group:
 		RERROR("Couldn't open file %s: %s", buffer, fr_syserror(errno));
 	fail:
 		if (outfp) fclose(outfp);
-		fr_logfile_unlock(inst->lf, outfd);
+		exfile_unlock(inst->ef, outfd);
 		return RLM_MODULE_FAIL;
 	}
 
@@ -409,7 +496,7 @@ skip_group:
 	 *	Flush everything
 	 */
 	fclose(outfp);
-	fr_logfile_unlock(inst->lf, outfd); /* do NOT close outfp */
+	exfile_unlock(inst->ef, outfd); /* do NOT close outfp */
 
 	/*
 	 *	And everything is fine.
@@ -513,6 +600,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_proxy(void *instance, REQUEST *requ
 #endif
 
 /* globally exported name */
+extern module_t rlm_detail;
 module_t rlm_detail = {
 	RLM_MODULE_INIT,
 	"detail",

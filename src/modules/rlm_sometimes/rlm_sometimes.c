@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -57,9 +58,6 @@ static const CONF_PARSER module_config[] = {
 	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
 
-
-extern const FR_NAME_NUMBER mod_rcode_table[];
-
 static int mod_instantiate(CONF_SECTION *conf, void *instance)
 {
 	rlm_sometimes_t *inst = instance;
@@ -97,10 +95,10 @@ static rlm_rcode_t sometimes_return(void *instance, RADIUS_PACKET *packet, RADIU
 	/*
 	 *	Hash based on the given key.  Usually User-Name.
 	 */
-	vp = pairfind(packet->vps, inst->da->attr, inst->da->vendor, TAG_ANY);
+	vp = pair_find_by_da(packet->vps, inst->da, TAG_ANY);
 	if (!vp) return RLM_MODULE_NOOP;
 
-	hash = fr_hash(&vp->data, vp->length);
+	hash = fr_hash(&vp->data, vp->vp_length);
 	hash &= 0xff;		/* ensure it's 0..255 */
 	value = hash;
 
@@ -168,10 +166,11 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_proxy(void *instance, REQUEST *requ
 }
 #endif
 
+extern module_t rlm_sometimes;
 module_t rlm_sometimes = {
 	RLM_MODULE_INIT,
 	"sometimes",
-	RLM_TYPE_HUP_SAFE,   	/* type */
+	RLM_TYPE_HUP_SAFE,   	/* needed for radmin */
 	sizeof(rlm_sometimes_t),
 	module_config,
 	mod_instantiate,		/* instantiation */

@@ -6,7 +6,8 @@
  *
  *   This library is free software; you can redistribute it and/or
  *   modify it under the terms of the GNU Lesser General Public
- *   License as published by the Free Software Foundation; either
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version. either
  *   version 2.1 of the License, or (at your option) any later version.
  *
  *   This library is distributed in the hope that it will be useful,
@@ -273,7 +274,7 @@ ntp2timeval(struct timeval *tv, char const *ntp)
 	tv->tv_usec = usec / 4295; /* close enough */
 }
 
-#if !defined(HAVE_128BIT_INTEGERS) && defined(LITTLE_ENDIAN)
+#if !defined(HAVE_128BIT_INTEGERS) && defined(RADIUS_LITTLE_ENDIAN)
 /** Swap byte order of 128 bit integer
  *
  * @param num 128bit integer to swap.

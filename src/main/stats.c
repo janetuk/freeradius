@@ -30,8 +30,6 @@ RCSID("$Id$")
 
 #define USEC (1000000)
 #define EMA_SCALE (100)
-#define PREC (USEC * EMA_SCALE)
-
 #define F_EMA_SCALE (1000000)
 
 static struct timeval	start_time;
@@ -553,7 +551,7 @@ void request_stats_reply(REQUEST *request)
 			if (server_port) {
 				ipaddr.af = AF_INET;
 				ipaddr.ipaddr.ip4addr.s_addr = server_ip->vp_ipaddr;
-				cl = listener_find_client_list(&ipaddr, server_port->vp_integer);
+				cl = listener_find_client_list(&ipaddr, server_port->vp_integer, IPPROTO_UDP);
 
 				/*
 				 *	Not found: don't do anything

@@ -14,7 +14,7 @@
  *   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-/*
+/**
  * $Id$
  *
  * @brief Function prototypes and datatypes for the REST (HTTP) transport.
@@ -49,6 +49,7 @@ typedef enum {
 	HTTP_METHOD_GET,
 	HTTP_METHOD_POST,
 	HTTP_METHOD_PUT,
+	HTTP_METHOD_PATCH,
 	HTTP_METHOD_DELETE,
 	HTTP_METHOD_CUSTOM		//!< Must always come last, should not be in method table
 } http_method_t;
@@ -135,7 +136,8 @@ typedef struct rlm_rest_section_t {
 	bool			tls_check_cert;
 	bool			tls_check_cert_cn;
 
-	uint32_t		timeout;	//!< Timeout passed to CURL.
+	struct timeval		timeout_tv;	//!< Timeout timeval.
+	long			timeout;	//!< Timeout in ms.
 	uint32_t		chunk;		//!< Max chunk-size (mainly for testing the encoders)
 } rlm_rest_section_t;
 
@@ -147,6 +149,9 @@ typedef struct rlm_rest_t {
 
 	char const		*connect_uri;	//!< URI we attempt to connect to, to pre-establish
 						//!< TCP connections.
+
+	struct timeval		connect_timeout_tv;	//!< Connection timeout timeval.
+	long			connect_timeout;	//!< Connection timeout ms.
 
 	fr_connection_pool_t	*conn_pool;	//!< Pointer to the connection pool.
 

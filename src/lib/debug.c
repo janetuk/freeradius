@@ -93,12 +93,14 @@ static char panic_action[512];				//!< The command to execute when panicking.
 static fr_fault_cb_t panic_cb = NULL;			//!< Callback to execute whilst panicking, before the
 							//!< panic_action.
 
+static bool dump_core;					//!< Whether we should drop a core on fatal signals.
+
 static void CC_HINT(format (printf, 1, 2)) _fr_fault_log(char const *msg, ...);
 
-static fr_fault_log_t fr_fault_log = _fr_fault_log;	//!< Function to use to process logging output.
+fr_fault_log_t fr_fault_log = _fr_fault_log;		//!< Function to use to process logging output.
 static int fr_fault_log_fd = STDERR_FILENO;		//!< Where to write debug output.
 
-static int debugger_attached = -1;			//!< Whether were attached to by a debugger.
+fr_debug_state_t fr_debug_state = DEBUG_STATE_UNKNOWN;	//!< Whether were attached to by a debugger.
 
 #ifdef HAVE_SYS_RESOURCE_H
 static struct rlimit core_limits;
@@ -107,8 +109,6 @@ static struct rlimit core_limits;
 static TALLOC_CTX *talloc_null_ctx;
 static TALLOC_CTX *talloc_autofree_ctx;
 
-#define FR_FAULT_LOG(fmt, ...) fr_fault_log(fmt "\n", ## __VA_ARGS__)
-
 #ifdef HAVE_SYS_PTRACE_H
 #  ifdef __linux__
 #    define _PTRACE(_x, _y) ptrace(_x, _y, NULL, NULL)
@@ -116,30 +116,76 @@ static TALLOC_CTX *talloc_autofree_ctx;
 #    define _PTRACE(_x, _y) ptrace(_x, _y, NULL, 0)
 #  endif
 
+#  ifdef HAVE_CAPABILITY_H
+#    include <sys/capability.h>
+#  endif
+
 /** Determine if we're running under a debugger by attempting to attach using pattach
  *
- * @return 0 if we're not, 1 if we are, -1 if we can't tell.
+ * @return 0 if we're not, 1 if we are, -1 if we can't tell because of an error,
+ *	-2 if we can't tell because we don't have the CAP_SYS_PTRACE capability.
  */
-static int fr_debugger_attached(void)
+static int fr_get_debug_state(void)
 {
 	int pid;
 
 	int from_child[2] = {-1, -1};
 
+#ifdef HAVE_CAPABILITY_H
+	cap_flag_value_t value;
+	cap_t current;
+
+	/*
+	 *  If we're running under linux, we first need to check if we have
+	 *  permission to to ptrace. We do that using the capabilities
+	 *  functions.
+	 */
+	current = cap_get_proc();
+	if (!current) {
+		fr_strerror_printf("Failed getting process capabilities: %s", fr_syserror(errno));
+		return DEBUG_STATE_UNKNOWN;
+	}
+
+	if (cap_get_flag(current, CAP_SYS_PTRACE, CAP_PERMITTED, &value) < 0) {
+		fr_strerror_printf("Failed getting permitted ptrace capability state: %s",
+				   fr_syserror(errno));
+		cap_free(current);
+		return DEBUG_STATE_UNKNOWN;
+	}
+
+	if ((value == CAP_SET) && (cap_get_flag(current, CAP_SYS_PTRACE, CAP_EFFECTIVE, &value) < 0)) {
+		fr_strerror_printf("Failed getting effective ptrace capability state: %s",
+				   fr_syserror(errno));
+		cap_free(current);
+		return DEBUG_STATE_UNKNOWN;
+	}
+
+	/*
+	 *  We don't have permission to ptrace, so this test will always fail.
+	 */
+	if (value == CAP_CLEAR) {
+		fr_strerror_printf("ptrace capability not set.  If debugger detection is required run as root or: "
+				   "setcap cap_sys_ptrace+ep <path_to_radiusd>");
+		cap_free(current);
+		return DEBUG_STATE_UNKNOWN_NO_PTRACE_CAP;
+	}
+	cap_free(current);
+#endif
+
 	if (pipe(from_child) < 0) {
-		fr_strerror_printf("Debugger check failed: Error opening internal pipe: %s", fr_syserror(errno));
-		return -1;
+		fr_strerror_printf("Error opening internal pipe: %s", fr_syserror(errno));
+		return DEBUG_STATE_UNKNOWN;
 	}
 
 	pid = fork();
 	if (pid == -1) {
-		fr_strerror_printf("Debugger check failed: Error forking: %s", fr_syserror(errno));
-		return -1;
+		fr_strerror_printf("Error forking: %s", fr_syserror(errno));
+		return DEBUG_STATE_UNKNOWN;
 	}
 
 	/* Child */
 	if (pid == 0) {
-		int8_t ret = 0;
+		int8_t ret = DEBUG_STATE_NOT_ATTACHED;
 		int ppid = getppid();
 
 		/* Close parent's side */
@@ -167,7 +213,7 @@ static int fr_debugger_attached(void)
 			exit(0);
 		}
 
-		ret = 1;
+		ret = DEBUG_STATE_ATTACHED;
 		/* Tell the parent what happened */
 		if (write(from_child[1], &ret, sizeof(ret)) < 0) {
 			fprintf(stderr, "Writing ptrace status to parent failed: %s", fr_syserror(errno));
@@ -176,21 +222,15 @@ static int fr_debugger_attached(void)
 		exit(0);
 	/* Parent */
 	} else {
-		int8_t ret = -1;
+		int8_t ret = DEBUG_STATE_UNKNOWN;
 
 		/*
-		 *	The child writes a 1 if pattach failed else 0.
+		 *	The child writes errno (reason) if pattach failed else 0.
 		 *
 		 *	This read may be interrupted by pattach,
 		 *	which is why we need the loop.
 		 */
 		while ((read(from_child[0], &ret, sizeof(ret)) < 0) && (errno == EINTR));
-
-		/* Ret not updated */
-		if (ret < 0) {
-			fr_strerror_printf("Debugger check failed: Error getting status from child: %s",
-			fr_syserror(errno));
-		}
 
 		/* Close the pipes here (if we did it above, it might race with pattach) */
 		close(from_child[1]);
@@ -203,13 +243,59 @@ static int fr_debugger_attached(void)
 	}
 }
 #else
-static int fr_debugger_attached(void)
+static int fr_get_debug_state(void)
 {
-	fr_strerror_printf("Debugger check failed: PTRACE not available");
+	fr_strerror_printf("PTRACE not available");
 
-	return -1;
+	return DEBUG_STATE_UNKNOWN_NO_PTRACE;
 }
 #endif
+
+/** Should be run before using setuid or setgid to get useful results
+ *
+ * @note sets the fr_debug_state global.
+ */
+void fr_store_debug_state(void)
+{
+	fr_debug_state = fr_get_debug_state();
+
+#ifndef NDEBUG
+	/*
+	 *  There are many reasons why this might happen with
+	 *  a vanilla install, so we don't want to spam users
+	 *  with messages they won't understand and may not
+	 *  want to resolve.
+	 */
+	if (fr_debug_state < 0) fprintf(stderr, "Getting debug state failed: %s\n", fr_strerror());
+#endif
+}
+
+/** Return current value of debug_state
+ *
+ * @param state to translate into a humanly readable value.
+ * @return humanly readable version of debug state.
+ */
+char const *fr_debug_state_to_msg(fr_debug_state_t state)
+{
+	switch (state) {
+	case DEBUG_STATE_UNKNOWN_NO_PTRACE:
+		return "Debug state unknown (ptrace functionality not available)";
+
+	case DEBUG_STATE_UNKNOWN_NO_PTRACE_CAP:
+		return "Debug state unknown (cap_sys_ptrace capability not set)";
+
+	case DEBUG_STATE_UNKNOWN:
+		return "Debug state unknown";
+
+	case DEBUG_STATE_ATTACHED:
+		return "Found debugger attached";
+
+	case DEBUG_STATE_NOT_ATTACHED:
+		return "Debugger not attached";
+	}
+
+	return "<INVALID>";
+}
 
 /** Break in debugger (if were running under a debugger)
  *
@@ -218,13 +304,12 @@ static int fr_debugger_attached(void)
  *
  * If the server is not running under debugger then this will do nothing.
  */
-void fr_debug_break(void)
+void fr_debug_break(bool always)
 {
-	if (debugger_attached == -1) {
-		debugger_attached = fr_debugger_attached();
-	}
+	if (always) raise(SIGTRAP);
 
-	if (debugger_attached == 1) {
+	if (fr_debug_state < 0) fr_debug_state = fr_get_debug_state();
+	if (fr_debug_state == DEBUG_STATE_ATTACHED) {
 		fprintf(stderr, "Debugger detected, raising SIGTRAP\n");
 		fflush(stderr);
 
@@ -442,6 +527,7 @@ int fr_set_dumpable_init(void)
  */
 int fr_set_dumpable(bool allow_core_dumps)
 {
+	dump_core = allow_core_dumps;
 	/*
 	 *	If configured, turn core dumps off.
 	 */
@@ -474,6 +560,17 @@ int fr_set_dumpable(bool allow_core_dumps)
 	}
 #endif
 	return 0;
+}
+
+/** Reset dumpable state to previously configured value
+ *
+ * Needed after suid up/down
+ *
+ * @return 0 on success, else -1 on failure.
+ */
+int fr_reset_dumpable(void)
+{
+	return fr_set_dumpable(dump_core);
 }
 
 /** Check to see if panic_action file is world writeable
@@ -541,8 +638,11 @@ void fr_fault(int sig)
 	 *	as it may interfere with the operation of the debugger.
 	 *	If something calls us directly we just raise the signal and let
 	 *	the debugger handle it how it wants.
+	 *
+	 *	The only exception are SIGUSR1 and SIGUSR2 which print out various
+	 *	debugging info, and should be allowed to continue.
 	 */
-	if (debugger_attached) {
+	if ((fr_debug_state == DEBUG_STATE_ATTACHED) && (sig != SIGUSR1) && (sig != SIGUSR2)) {
 		FR_FAULT_LOG("RAISING SIGNAL: %s", strsignal(sig));
 		raise(sig);
 		goto finish;
@@ -767,12 +867,14 @@ int fr_fault_setup(char const *cmd, char const *program)
 	static bool setup = false;
 
 	char *out = panic_action;
-	size_t left = sizeof(panic_action), ret;
+	size_t left = sizeof(panic_action);
 
 	char const *p = cmd;
 	char const *q;
 
 	if (cmd) {
+		size_t ret;
+
 		/* Substitute %e for the current program */
 		while ((q = strstr(p, "%e"))) {
 			out += ret = snprintf(out, left, "%.*s%s", (int) (q - p), p, program ? program : "");
@@ -797,23 +899,46 @@ int fr_fault_setup(char const *cmd, char const *program)
 
 	/* Unsure what the side effects of changing the signal handler mid execution might be */
 	if (!setup) {
-		debugger_attached = fr_debugger_attached();
+		char *env;
+		fr_debug_state_t debug_state;
+
+		/*
+		 *  Setup the default logger
+		 */
+		if (!fr_fault_log) fr_fault_set_log_fn(NULL);
+		talloc_set_log_fn(_fr_talloc_log);
+
+		/*
+		 *  Installing signal handlers interferes with some debugging
+		 *  operations.  Give the developer control over whether the
+		 *  signal handlers are installed or not.
+		 */
+		env = getenv("DEBUG");
+		if (!env || (strcmp(env, "no") == 0)) {
+			debug_state = DEBUG_STATE_NOT_ATTACHED;
+		} else if (strcmp(env, "auto") == 0) {
+			/*
+			 *  Figure out if we were started under a debugger
+			 */
+			if (fr_debug_state < 0) fr_debug_state = fr_get_debug_state();
+			debug_state = fr_debug_state;
+		} else {
+			debug_state = DEBUG_STATE_ATTACHED;
+		}
 
 		/*
 		 *  These signals can't be properly dealt with in the debugger
-		 *  if we set our own signal handlers
+		 *  if we set our own signal handlers.
 		 */
-		if (debugger_attached == 0) {
-#ifdef SIGSEGV
-			if (fr_set_signal(SIGSEGV, fr_fault) < 0) return -1;
+		switch (debug_state) {
+		default:
+#ifndef NDEBUG
+			FR_FAULT_LOG("Debugger check failed: %s", fr_strerror());
+			FR_FAULT_LOG("Signal processing in debuggers may not work as expected");
 #endif
-#ifdef SIGBUS
-			if (fr_set_signal(SIGBUS, fr_fault) < 0) return -1;
-#endif
-#ifdef SIGFPE
-			if (fr_set_signal(SIGFPE, fr_fault) < 0) return -1;
-#endif
+			/* FALL-THROUGH */
 
+		case DEBUG_STATE_NOT_ATTACHED:
 #ifdef SIGABRT
 			if (fr_set_signal(SIGABRT, fr_fault) < 0) return -1;
 
@@ -823,6 +948,19 @@ int fr_fault_setup(char const *cmd, char const *program)
 			 */
 			talloc_set_abort_fn(_fr_talloc_fault);
 #endif
+#ifdef SIGILL
+			if (fr_set_signal(SIGILL, fr_fault) < 0) return -1;
+#endif
+#ifdef SIGFPE
+			if (fr_set_signal(SIGFPE, fr_fault) < 0) return -1;
+#endif
+#ifdef SIGSEGV
+			if (fr_set_signal(SIGSEGV, fr_fault) < 0) return -1;
+#endif
+			break;
+
+		case DEBUG_STATE_ATTACHED:
+			break;
 		}
 #ifdef SIGUSR1
 		if (fr_set_signal(SIGUSR1, fr_fault) < 0) return -1;
@@ -831,12 +969,6 @@ int fr_fault_setup(char const *cmd, char const *program)
 #ifdef SIGUSR2
 		if (fr_set_signal(SIGUSR2, _fr_fault_mem_report) < 0) return -1;
 #endif
-
-		/*
-		 *  Setup the default logger
-		 */
-		if (!fr_fault_log) fr_fault_set_log_fn(NULL);
-		talloc_set_log_fn(_fr_talloc_log);
 
 		/*
 		 *  Needed for memory reports
@@ -897,7 +1029,7 @@ int fr_fault_setup(char const *cmd, char const *program)
 void fr_fault_set_cb(fr_fault_cb_t func)
 {
 	panic_cb = func;
-};
+}
 
 /** Default logger, logs output to stderr
  *
@@ -939,10 +1071,16 @@ inline void fr_verify_vp(char const *file, int line, VALUE_PAIR const *vp)
 	if (!vp) {
 		FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR pointer was NULL", file, line);
 		fr_assert(0);
-		fr_exit_now(0);
+		fr_exit_now(1);
 	}
 
 	(void) talloc_get_type_abort(vp, VALUE_PAIR);
+
+	if (!vp->da) {
+		FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR da pointer was NULL", file, line);
+		fr_assert(0);
+		fr_exit_now(1);
+	}
 
 	if (vp->data.ptr) switch (vp->da->type) {
 	case PW_TYPE_OCTETS:
@@ -958,9 +1096,9 @@ inline void fr_verify_vp(char const *file, int line, VALUE_PAIR const *vp)
 		}
 
 		len = talloc_array_length(vp->vp_octets);
-		if (vp->length > len) {
+		if (vp->vp_length > len) {
 			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR \"%s\" length %zu is greater than "
-				     "uint8_t data buffer length %zu\n", file, line, vp->da->name, vp->length, len);
+				     "uint8_t data buffer length %zu\n", file, line, vp->da->name, vp->vp_length, len);
 			fr_assert(0);
 			fr_exit_now(1);
 		}
@@ -989,14 +1127,14 @@ inline void fr_verify_vp(char const *file, int line, VALUE_PAIR const *vp)
 		}
 
 		len = (talloc_array_length(vp->vp_strvalue) - 1);
-		if (vp->length > len) {
+		if (vp->vp_length > len) {
 			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR \"%s\" length %zu is greater than "
-				     "char buffer length %zu\n", file, line, vp->da->name, vp->length, len);
+				     "char buffer length %zu\n", file, line, vp->da->name, vp->vp_length, len);
 			fr_assert(0);
 			fr_exit_now(1);
 		}
 
-		if (vp->vp_strvalue[vp->length] != '\0') {
+		if (vp->vp_strvalue[vp->vp_length] != '\0') {
 			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR \"%s\" char buffer not \\0 "
 				     "terminated\n", file, line, vp->da->name);
 			fr_assert(0);
@@ -1005,7 +1143,7 @@ inline void fr_verify_vp(char const *file, int line, VALUE_PAIR const *vp)
 
 		parent = talloc_parent(vp->data.ptr);
 		if (parent != vp) {
-			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR \"%s\" uint8_t buffer is not "
+			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR \"%s\" char buffer is not "
 				     "parented by VALUE_PAIR %p, instead parented by %p (%s)\n",
 				     file, line, vp->da->name,
 				     vp, parent, parent ? talloc_get_name(parent) : "NULL");
@@ -1017,6 +1155,49 @@ inline void fr_verify_vp(char const *file, int line, VALUE_PAIR const *vp)
 
 	default:
 		break;
+	}
+
+	if (vp->da->flags.is_unknown) {
+		(void) talloc_get_type_abort(vp->da, DICT_ATTR);
+	} else {
+		DICT_ATTR const *da;
+
+		/*
+		 *	Attribute may be present with multiple names
+		 */
+		da = dict_attrbyname(vp->da->name);
+		if (!da) {
+			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR attribute %p \"%s\" (%s) "
+				     "not found in global dictionary",
+				     file, line, vp->da, vp->da->name,
+				     fr_int2str(dict_attr_types, vp->da->type, "<INVALID>"));
+			fr_assert(0);
+			fr_exit_now(1);
+		}
+
+		if (da->type == PW_TYPE_COMBO_IP_ADDR) {
+			da = dict_attrbytype(vp->da->attr, vp->da->vendor, vp->da->type);
+			if (!da) {
+				FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR attribute %p \"%s\" "
+					     "variant (%s) not found in global dictionary",
+					     file, line, vp->da, vp->da->name,
+					     fr_int2str(dict_attr_types, vp->da->type, "<INVALID>"));
+				fr_assert(0);
+				fr_exit_now(1);
+			}
+		}
+
+
+		if (da != vp->da) {
+			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR "
+				     "dictionary pointer %p \"%s\" (%s) "
+				     "and global dictionary pointer %p \"%s\" (%s) differ",
+				     file, line, vp->da, vp->da->name,
+				     fr_int2str(dict_attr_types, vp->da->type, "<INVALID>"),
+				     da, da->name, fr_int2str(dict_attr_types, da->type, "<INVALID>"));
+			fr_assert(0);
+			fr_exit_now(1);
+		}
 	}
 }
 
@@ -1046,7 +1227,7 @@ void fr_verify_list(char const *file, int line, TALLOC_CTX *expected, VALUE_PAIR
 			if (parent) fr_log_talloc_report(parent);
 
 			fr_assert(0);
-			fr_exit_now(0);
+			fr_exit_now(1);
 		}
 
 	}
@@ -1086,7 +1267,7 @@ void NEVER_RETURNS _fr_exit(char const *file, int line, int status)
 		FR_FAULT_LOG("EXIT(%i) CALLED %s[%u]", status, file, line);
 	}
 #endif
-	fr_debug_break();	/* If running under GDB we'll break here */
+	fr_debug_break(false);	/* If running under GDB we'll break here */
 
 	exit(status);
 }
@@ -1111,7 +1292,7 @@ void NEVER_RETURNS _fr_exit_now(char const *file, int line, int status)
 		FR_FAULT_LOG("_EXIT(%i) CALLED %s[%u]", status, file, line);
 	}
 #endif
-	fr_debug_break();	/* If running under GDB we'll break here */
+	fr_debug_break(false);	/* If running under GDB we'll break here */
 
 	_exit(status);
 }

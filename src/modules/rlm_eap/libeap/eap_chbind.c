@@ -26,8 +26,6 @@ RCSID("$Id$")
 
 #include "eap_chbind.h"
 
-#define MAX_PACKET_LEN		4096
-
 static bool chbind_build_response(REQUEST *request, CHBIND_REQ *chbind)
 {
 	int length;
@@ -46,7 +44,7 @@ static bool chbind_build_response(REQUEST *request, CHBIND_REQ *chbind)
 		if (vp->da->flags.encrypt != FLAG_ENCRYPT_NONE) continue;
 		if (!vp->da->vendor && (vp->da->attr == PW_MESSAGE_AUTHENTICATOR)) continue;
 
-		total += 2 + vp->length;
+		total += 2 + vp->vp_length;
 	}
 
 	/*
@@ -78,10 +76,8 @@ static bool chbind_build_response(REQUEST *request, CHBIND_REQ *chbind)
 	ptr[2] = total & 0xff;
 	ptr[3] = CHBIND_NSID_RADIUS;
 
-	if ((debug_flag > 0) && fr_log_fp) {
-		RDEBUG("Sending chbind response: code %i", (int )(ptr[0]));
-		debug_pair_list(request->reply->vps);
-	}
+	RDEBUG("Sending chbind response: code %i", (int )(ptr[0]));
+	rdebug_pair_list(L_DBG_LVL_1, request, request->reply->vps, NULL);
 
 	/* Encode the chbind attributes into the response */
 	ptr += 4;
@@ -186,6 +182,8 @@ PW_CODE chbind_process(REQUEST *request, CHBIND_REQ *chbind)
 	/* Add the channel binding attributes to the fake packet */
 	data_len = chbind_get_data(chbind->request, CHBIND_NSID_RADIUS, &attr_data);
 	if (data_len) {
+		rad_assert(data_len <= talloc_array_length(chbind->request));
+
 		while (data_len > 0) {
 			int attr_len = rad_attr2vp(fake->packet, NULL, NULL, NULL, attr_data, data_len, &vp);
 			if (attr_len <= 0) {
@@ -254,7 +252,7 @@ chbind_packet_t *eap_chbind_vp2packet(TALLOC_CTX *ctx, VALUE_PAIR *vps)
 	for (vp =fr_cursor_init(&cursor, &first);
 	     vp != NULL;
 	     vp = fr_cursor_next_by_num(&cursor, PW_UKERNA_CHBIND, VENDORPEC_UKERNA, TAG_ANY)) {
-		length += vp->length;
+		length += vp->vp_length;
 	}
 
 	if (length < 4) {
@@ -275,8 +273,8 @@ chbind_packet_t *eap_chbind_vp2packet(TALLOC_CTX *ctx, VALUE_PAIR *vps)
 	for (vp = fr_cursor_init(&cursor, &first);
 	     vp != NULL;
 	     vp = fr_cursor_next_by_num(&cursor, PW_UKERNA_CHBIND, VENDORPEC_UKERNA, TAG_ANY)) {
-		memcpy(ptr, vp->vp_octets, vp->length);
-		ptr += vp->length;
+		memcpy(ptr, vp->vp_octets, vp->vp_length);
+		ptr += vp->vp_length;
 	}
 
 	return packet;

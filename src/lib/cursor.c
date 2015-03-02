@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -31,11 +32,11 @@
  */
 VALUE_PAIR *_fr_cursor_init(vp_cursor_t *cursor, VALUE_PAIR const * const *node)
 {
-	memset(cursor, 0, sizeof(*cursor));
-
 	if (!node || !cursor) {
 		return NULL;
 	}
+
+	memset(cursor, 0, sizeof(*cursor));
 
 	/*
 	 *  Useful check to see if uninitialised memory is pointed
@@ -62,6 +63,8 @@ void fr_cursor_copy(vp_cursor_t *out, vp_cursor_t *in)
 
 VALUE_PAIR *fr_cursor_first(vp_cursor_t *cursor)
 {
+	if (!cursor->first) return NULL;
+
 	cursor->current = *cursor->first;
 
 	if (cursor->current) {
@@ -79,19 +82,31 @@ VALUE_PAIR *fr_cursor_first(vp_cursor_t *cursor)
  */
 VALUE_PAIR *fr_cursor_last(vp_cursor_t *cursor)
 {
-	if (!*cursor->first) return NULL;
+	if (!cursor->first || !*cursor->first) return NULL;
 
 	/* Need to start at the start */
-	if (!cursor->current) {
-		fr_cursor_first(cursor);
-	}
+	if (!cursor->current) fr_cursor_first(cursor);
 
 	/* Wind to the end */
-	while (cursor->next) {
-		fr_cursor_next(cursor);
+	while (cursor->next) fr_cursor_next(cursor);
+
+	return cursor->current;
+}
+
+static VALUE_PAIR *fr_cursor_update(vp_cursor_t *cursor, VALUE_PAIR *i)
+{
+	if (!i) {
+		cursor->next = NULL;
+		cursor->current = NULL;
+
+		return NULL;
 	}
 
-	return fr_cursor_current(cursor);
+	cursor->next = i->next;
+	cursor->current = i;
+	cursor->found = i;
+
+	return i;
 }
 
 /** Iterate over attributes of a given type in the pairlist
@@ -102,19 +117,19 @@ VALUE_PAIR *fr_cursor_next_by_num(vp_cursor_t *cursor, unsigned int attr, unsign
 {
 	VALUE_PAIR *i;
 
-	i = pairfind(!cursor->found ? cursor->current : cursor->found->next, attr, vendor, tag);
-	if (!i) {
-		cursor->next = NULL;
-		cursor->current = NULL;
+	if (!cursor->first) return NULL;
 
-		return NULL;
+	for (i = !cursor->found ? cursor->current : cursor->found->next;
+	     i != NULL;
+	     i = i->next) {
+		VERIFY_VP(i);
+		if ((i->da->attr == attr) && (i->da->vendor == vendor) &&
+		    (!i->da->flags.has_tag || TAG_EQ(tag, i->tag))) {
+			break;
+		}
 	}
 
-	cursor->next = i->next;
-	cursor->current = i;
-	cursor->found = i;
-
-	return i;
+	return fr_cursor_update(cursor, i);
 }
 
 /** Iterate over attributes of a given DA in the pairlist
@@ -125,19 +140,19 @@ VALUE_PAIR *fr_cursor_next_by_da(vp_cursor_t *cursor, DICT_ATTR const *da, int8_
 {
 	VALUE_PAIR *i;
 
-	i = pairfind_da(!cursor->found ? cursor->current : cursor->found->next, da, tag);
-	if (!i) {
-		cursor->next = NULL;
-		cursor->current = NULL;
+	if (!cursor->first) return NULL;
 
-		return NULL;
+	for (i = !cursor->found ? cursor->current : cursor->found->next;
+	     i != NULL;
+	     i = i->next) {
+		VERIFY_VP(i);
+		if ((i->da == da) &&
+		    (!i->da->flags.has_tag || TAG_EQ(tag, i->tag))) {
+			break;
+		}
 	}
 
-	cursor->next = i->next;
-	cursor->current = i;
-	cursor->found = i;
-
-	return i;
+	return fr_cursor_update(cursor, i);
 }
 
 /** Retrieve the next VALUE_PAIR
@@ -146,6 +161,8 @@ VALUE_PAIR *fr_cursor_next_by_da(vp_cursor_t *cursor, DICT_ATTR const *da, int8_
  */
 VALUE_PAIR *fr_cursor_next(vp_cursor_t *cursor)
 {
+	if (!cursor->first) return NULL;
+
 	cursor->current = cursor->next;
 	if (cursor->current) {
 		VERIFY_VP(cursor->current);
@@ -176,14 +193,12 @@ VALUE_PAIR *fr_cursor_next_peek(vp_cursor_t *cursor)
 
 VALUE_PAIR *fr_cursor_current(vp_cursor_t *cursor)
 {
-	if (cursor->current) {
-		VERIFY_VP(cursor->current);
-	}
+	if (cursor->current) VERIFY_VP(cursor->current);
 
 	return cursor->current;
 }
 
-/** Insert a single VP
+/** Insert a single VP at the end of the list
  *
  * @todo don't use with pairdelete
  */
@@ -191,9 +206,9 @@ void fr_cursor_insert(vp_cursor_t *cursor, VALUE_PAIR *add)
 {
 	VALUE_PAIR *i;
 
-	if (!add) {
-		return;
-	}
+	if (!fr_assert(cursor->first)) return;	/* cursor must have been initialised */
+
+	if (!add) return;
 
 	VERIFY_VP(add);
 
@@ -205,6 +220,7 @@ void fr_cursor_insert(vp_cursor_t *cursor, VALUE_PAIR *add)
 	/*
 	 *	Cursor was initialised with a pointer to a NULL value_pair
 	 */
+
 	if (!*cursor->first) {
 		*cursor->first = add;
 		cursor->current = add;
@@ -217,9 +233,7 @@ void fr_cursor_insert(vp_cursor_t *cursor, VALUE_PAIR *add)
 	 *
 	 *	Assume current is closer to the end of the list and use that if available.
 	 */
-	if (!cursor->last) {
-		cursor->last = cursor->current ? cursor->current : *cursor->first;
-	}
+	if (!cursor->last) cursor->last = cursor->current ? cursor->current : *cursor->first;
 
 	VERIFY_VP(cursor->last);
 
@@ -258,12 +272,16 @@ void fr_cursor_insert(vp_cursor_t *cursor, VALUE_PAIR *add)
  * add lists.
  *
  * @param cursor to insert VALUE_PAIRs with
- * @param add one or more VALUE_PAIRs.
+ * @param add one or more VALUE_PAIRs (may be NULL, which results in noop).
  */
 void fr_cursor_merge(vp_cursor_t *cursor, VALUE_PAIR *add)
 {
 	vp_cursor_t from;
 	VALUE_PAIR *vp;
+
+	if (!add) return;
+
+	if (!fr_assert(cursor->first)) return;	/* cursor must have been initialised */
 
 	for (vp = fr_cursor_init(&from, &add);
 	     vp;
@@ -283,7 +301,9 @@ VALUE_PAIR *fr_cursor_remove(vp_cursor_t *cursor)
 {
 	VALUE_PAIR *vp, **last;
 
-	vp = fr_cursor_current(cursor);
+	if (!fr_assert(cursor->first)) return NULL;	/* cursor must have been initialised */
+
+	vp = cursor->current;
 	if (!vp) {
 		return NULL;
 	}
@@ -316,7 +336,9 @@ VALUE_PAIR *fr_cursor_replace(vp_cursor_t *cursor, VALUE_PAIR *new)
 {
 	VALUE_PAIR *vp, **last;
 
-	vp = fr_cursor_current(cursor);
+	if (!fr_assert(cursor->first)) return NULL;	/* cursor must have been initialised */
+
+	vp = cursor->current;
 	if (!vp) {
 		*cursor->first = new;
 		return NULL;

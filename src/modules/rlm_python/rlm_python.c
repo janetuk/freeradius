@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -136,7 +137,7 @@ static struct {
 /*
  *	This allows us to initialise PyThreadState on a per thread basis
  */
-fr_thread_local_setup(PyThreadState *, local_thread_state);	/* macro */
+fr_thread_local_setup(PyThreadState *, local_thread_state)	/* macro */
 
 
 /*
@@ -744,6 +745,7 @@ A(send_coa)
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
+extern module_t rlm_python;
 module_t rlm_python = {
 	RLM_MODULE_INIT,
 	"python",

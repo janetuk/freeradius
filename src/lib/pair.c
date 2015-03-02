@@ -5,7 +5,8 @@
  *
  *   This library is free software; you can redistribute it and/or
  *   modify it under the terms of the GNU Lesser General Public
- *   License as published by the Free Software Foundation; either
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version. either
  *   version 2.1 of the License, or (at your option) any later version.
  *
  *   This library is distributed in the hope that it will be useful,
@@ -23,31 +24,9 @@
 RCSID("$Id$")
 
 #include <freeradius-devel/libradius.h>
+#include <freeradius-devel/regex.h>
 
 #include <ctype.h>
-
-#ifdef HAVE_PCRE
-#  define WITH_REGEX
-#  include <pcreposix.h>
-#elif defined(HAVE_REGEX)
-#  include <regex.h>
-#  define WITH_REGEX
-
-/*
- *  For POSIX Regular expressions.
- *  (0) Means no extended regular expressions.
- *  REG_EXTENDED means use extended regular expressions.
- */
-#  ifndef REG_EXTENDED
-#    define REG_EXTENDED (0)
-#  endif
-
-#  ifndef REG_NOSUB
-#    define REG_NOSUB (0)
-#  endif
-#endif
-
-
 
 /** Free a VALUE_PAIR
  *
@@ -57,21 +36,6 @@ RCSID("$Id$")
  * @return 0
  */
 static int _pairfree(VALUE_PAIR *vp) {
-	/*
-	 *	The lack of DA means something has gone wrong
-	 */
-	if (!vp->da) {
-		fr_strerror_printf("VALUE_PAIR has NULL DICT_ATTR pointer (probably already freed)");
-	/*
-	 *	Only free the DICT_ATTR if it was dynamically allocated
-	 *	and was marked for free when the VALUE_PAIR is freed.
-	 *
-	 *	@fixme This is an awful hack and needs to be removed once DICT_ATTRs are allocated by talloc.
-	 */
-	} else if (vp->da->flags.vp_free) {
-		dict_attr_free(&(vp->da));
-	}
-
 #ifndef NDEBUG
 	vp->vp_integer = 0xf4eef4ee;
 #endif
@@ -113,7 +77,7 @@ VALUE_PAIR *pairalloc(TALLOC_CTX *ctx, DICT_ATTR const *da)
 	vp->tag = TAG_ANY;
 	vp->type = VT_NONE;
 
-	vp->length = da->flags.length;
+	vp->vp_length = da->flags.length;
 
 	talloc_set_destructor(vp, _pairfree);
 
@@ -142,7 +106,7 @@ VALUE_PAIR *paircreate(TALLOC_CTX *ctx, unsigned int attr, unsigned int vendor)
 
 	da = dict_attrbyvalue(attr, vendor);
 	if (!da) {
-		da = dict_attrunknown(attr, vendor, true);
+		da = dict_unknown_afrom_fields(ctx, attr, vendor);
 		if (!da) {
 			return NULL;
 		}
@@ -188,7 +152,7 @@ int pair2unknown(VALUE_PAIR *vp)
 		return 0;
 	}
 
-	da = dict_attrunknown(vp->da->attr, vp->da->vendor, true);
+	da = dict_unknown_afrom_fields(vp, vp->da->attr, vp->da->vendor);
 	if (!da) {
 		return -1;
 	}
@@ -201,25 +165,16 @@ int pair2unknown(VALUE_PAIR *vp)
 /** Find the pair with the matching DAs
  *
  */
-VALUE_PAIR *pairfind_da(VALUE_PAIR *vp, DICT_ATTR const *da, int8_t tag)
+VALUE_PAIR *pair_find_by_da(VALUE_PAIR *vp, DICT_ATTR const *da, int8_t tag)
 {
 	vp_cursor_t 	cursor;
-	VALUE_PAIR	*i;
 
 	if(!fr_assert(da)) {
 		 return NULL;
 	}
 
-	for (i = fr_cursor_init(&cursor, &vp);
-	     i;
-	     i = fr_cursor_next(&cursor)) {
-		VERIFY_VP(i);
-		if ((i->da == da) && (!i->da->flags.has_tag || TAG_EQ(tag, i->tag))) {
-			return i;
-		}
-	}
-
-	return NULL;
+	(void) fr_cursor_init(&cursor, &vp);
+	return fr_cursor_next_by_da(&cursor, da, tag);
 }
 
 
@@ -230,23 +185,14 @@ VALUE_PAIR *pairfind_da(VALUE_PAIR *vp, DICT_ATTR const *da, int8_t tag)
 VALUE_PAIR *pairfind(VALUE_PAIR *vp, unsigned int attr, unsigned int vendor, int8_t tag)
 {
 	vp_cursor_t 	cursor;
-	VALUE_PAIR	*i;
 
 	/* List head may be NULL if it contains no VPs */
 	if (!vp) return NULL;
 
 	VERIFY_LIST(vp);
 
-	for (i = fr_cursor_init(&cursor, &vp);
-	     i;
-	     i = fr_cursor_next(&cursor)) {
-		if ((i->da->attr == attr) && (i->da->vendor == vendor) && \
-		    (!i->da->flags.has_tag || TAG_EQ(tag, i->tag))) {
-			return i;
-		}
-	}
-
-	return NULL;
+	(void) fr_cursor_init(&cursor, &vp);
+	return fr_cursor_next_by_num(&cursor, attr, vendor, tag);
 }
 
 /** Delete matching pairs
@@ -298,8 +244,18 @@ void pairadd(VALUE_PAIR **first, VALUE_PAIR *add)
 		*first = add;
 		return;
 	}
-	for(i = *first; i->next; i = i->next)
+
+	for (i = *first; i->next; i = i->next) {
+#ifdef WITH_VERIFY_PTR
 		VERIFY_VP(i);
+		/*
+		 *	The same VP should never by added multiple times
+		 *	to the same list.
+		 */
+		fr_assert(i != add);
+#endif
+	}
+
 	i->next = add;
 }
 
@@ -480,7 +436,7 @@ void pairvalidate_debug(TALLOC_CTX *ctx, VALUE_PAIR const *failed[2])
 	VALUE_PAIR const *filter = failed[0];
 	VALUE_PAIR const *list = failed[1];
 
-	char *value, *pair;
+	char *value, *str;
 
 	(void) fr_strerror();	/* Clear any existing messages */
 
@@ -503,12 +459,13 @@ void pairvalidate_debug(TALLOC_CTX *ctx, VALUE_PAIR const *failed[2])
 		return;
 	}
 
-	pair = vp_aprint(ctx, filter, true);
-	value = vp_aprint_value(ctx, list, true);
 
-	fr_strerror_printf("Attribute value \"%s\" didn't match filter \"%s\"", value, pair);
+	value = vp_aprints_value(ctx, list, '"');
+	str = vp_aprints(ctx, filter, '"');
 
-	talloc_free(pair);
+	fr_strerror_printf("Attribute value \"%s\" didn't match filter: %s", value, str);
+
+	talloc_free(str);
 	talloc_free(value);
 
 	return;
@@ -549,7 +506,7 @@ bool pairvalidate(VALUE_PAIR const *failed[2], VALUE_PAIR *filter, VALUE_PAIR *l
 		/*
 		 *	Lists are of different lengths
 		 */
-		if ((!match && check) || (check && !match)) goto mismatch;
+		if (!match || !check) goto mismatch;
 
 		/*
 		 *	The lists are sorted, so if the first
@@ -676,10 +633,12 @@ VALUE_PAIR *paircopyvp(TALLOC_CTX *ctx, VALUE_PAIR const *vp)
 
 	memcpy(n, vp, sizeof(*n));
 
-	n->da = dict_attr_copy(vp->da, true);
-	if (!n->da) {
-		talloc_free(n);
-		return NULL;
+	/*
+	 *	If the DA is unknown, steal "n" to "ctx".  This does
+	 *	nothing for "n", but will also copy the unknown "da".
+	 */
+	if (n->da->flags.is_unknown) {
+		pairsteal(ctx, n);
 	}
 
 	n->next = NULL;
@@ -697,12 +656,12 @@ VALUE_PAIR *paircopyvp(TALLOC_CTX *ctx, VALUE_PAIR const *vp)
 	case PW_TYPE_TLV:
 	case PW_TYPE_OCTETS:
 		n->vp_octets = NULL;	/* else pairmemcpy will free vp's value */
-		pairmemcpy(n, vp->vp_octets, n->length);
+		pairmemcpy(n, vp->vp_octets, n->vp_length);
 		break;
 
 	case PW_TYPE_STRING:
 		n->vp_strvalue = NULL;	/* else pairstrnpy will free vp's value */
-		pairstrncpy(n, vp->vp_strvalue, n->length);
+		pairstrncpy(n, vp->vp_strvalue, n->vp_length);
 		break;
 
 	default:
@@ -785,23 +744,38 @@ VALUE_PAIR *paircopy_by_num(TALLOC_CTX *ctx, VALUE_PAIR *from, unsigned int attr
 	return out;
 }
 
-/** Steal all members of a VALUE_PAIR list
+/** Steal one VP
  *
- * @param[in] ctx to move VALUE_PAIRs into
- * @param[in] from VALUE_PAIRs to move into the new context.
+ * @param[in] ctx to move VALUE_PAIR into
+ * @param[in] vp VALUE_PAIR to move into the new context.
  */
-VALUE_PAIR *pairsteal(TALLOC_CTX *ctx, VALUE_PAIR *from)
+void pairsteal(TALLOC_CTX *ctx, VALUE_PAIR *vp)
 {
-	vp_cursor_t cursor;
-	VALUE_PAIR *vp;
+	(void) talloc_steal(ctx, vp);
 
-	for (vp = fr_cursor_init(&cursor, &from);
-	     vp;
-	     vp = fr_cursor_next(&cursor)) {
-		(void) talloc_steal(ctx, vp);
+	/*
+	 *	The DA may be unknown.  If we're stealing the VPs to a
+	 *	different context, copy the unknown DA.  We use the VP
+	 *	as a context here instead of "ctx", so that when the
+	 *	VP is freed, so is the DA.
+	 *
+	 *	Since we have no introspection into OTHER VPs using
+	 *	the same DA, we can't have multiple VPs use the same
+	 *	DA.  So we might as well tie it to this VP.
+	 */
+	if (vp->da->flags.is_unknown) {
+		DICT_ATTR *da;
+		char *p;
+		size_t size;
+
+		size = talloc_get_size(vp->da);
+
+		p = talloc_zero_array(vp, char, size);
+		da = (DICT_ATTR *) p;
+		talloc_set_type(p, DICT_ATTR);
+		memcpy(da, vp->da, size);
+		vp->da = da;
 	}
-
-	return from;
 }
 
 /** Move pairs from source list to destination list respecting operator
@@ -843,6 +817,8 @@ void pairmove(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from)
 	 */
 	tail_from = from;
 	while ((i = *tail_from) != NULL) {
+		VALUE_PAIR *j;
+
 		VERIFY_VP(i);
 
 		/*
@@ -874,7 +850,7 @@ void pairmove(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from)
 		 *	it doesn't already exist.
 		 */
 		case T_OP_EQ:
-			found = pairfind(*to, i->da->attr, i->da->vendor, TAG_ANY);
+			found = pair_find_by_da(*to, i->da, TAG_ANY);
 			if (!found) goto do_add;
 
 			tail_from = &(i->next);
@@ -885,7 +861,7 @@ void pairmove(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from)
 		 *	of the same vendor/attr which already exists.
 		 */
 		case T_OP_SET:
-			found = pairfind(*to, i->da->attr, i->da->vendor, TAG_ANY);
+			found = pair_find_by_da(*to, i->da, TAG_ANY);
 			if (!found) goto do_add;
 
 			/*
@@ -900,8 +876,6 @@ void pairmove(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from)
 			 *	vp that it's pointing to.
 			 */
 			switch (found->da->type) {
-				VALUE_PAIR *j;
-
 			default:
 				j = found->next;
 				memcpy(found, i, sizeof(*found));
@@ -950,7 +924,8 @@ void pairmove(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from)
 	do_add:
 			*tail_from = i->next;
 			i->next = NULL;
-			*tail_new = talloc_steal(ctx, i);
+			*tail_new = i;
+			pairsteal(ctx, i);
 			tail_new = &(i->next);
 			continue;
 		}
@@ -1013,7 +988,7 @@ void pairfilter(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from, unsigned in
 		}
 
 		for (i = *from; i; i = i->next) {
-			(void) talloc_steal(ctx, i);
+			pairsteal(ctx, i);
 		}
 
 		*from = NULL;
@@ -1076,512 +1051,56 @@ void pairfilter(TALLOC_CTX *ctx, VALUE_PAIR **to, VALUE_PAIR **from, unsigned in
 			*to = i;
 		to_tail = i;
 		i->next = NULL;
-		(void) talloc_steal(ctx, i);
+		pairsteal(ctx, i);
 	}
 }
-
-static char const hextab[] = "0123456789abcdef";
 
 /** Convert string value to native attribute value
  *
  * @param vp to assign value to.
  * @param value string to convert. Binary safe for variable length values if len is provided.
- * @param inlen may be 0 in which case strlen(len) is used to determine length, else inline
+ * @param inlen may be < 0 in which case strlen(len) is used to determine length, else inline
  *	  should be the length of the string or sub string to parse.
- * @return true on success, else false.
+ * @return 0 on success -1 on error.
  */
 int pairparsevalue(VALUE_PAIR *vp, char const *value, size_t inlen)
 {
-	DICT_VALUE	*dval;
-	size_t		len;
-	char		buffer[256];
-
-	if (!value) return -1;
+	ssize_t ret;
+	PW_TYPE type;
 	VERIFY_VP(vp);
 
-	/*
-	 *	It's a comparison, not a real VALUE_PAIR, copy the string over verbatim
-	 */
-	if ((vp->op == T_OP_REG_EQ) || (vp->op == T_OP_REG_NE)) {
-		pairstrcpy(vp, value);	/* Icky hacky ewww */
-		goto finish;
-	}
+	if (!value) return -1;
 
-	len = (inlen == 0) ? strlen(value) : inlen;
+	type = vp->da->type;
 
 	/*
-	 *	It's a variable length type so we just alloc a new buffer
-	 *	of size len and copy.
+	 *	We presume that the input data is from a double quoted
+	 *	string, and needs escaping
 	 */
-	switch(vp->da->type) {
-	case PW_TYPE_STRING:
-	{
-		size_t		vp_len;
-		char const	*cp;
-		char		*p;
-		int		x;
-
-		/*
-		 *	Do escaping here
-		 */
-		vp->vp_strvalue = p = talloc_memdup(vp, value, len + 1);
-		p[len] = '\0';
-		talloc_set_type(p, char);
-
-		cp = value;
-		vp_len = 0;
-		while (*cp) {
-			char c = *cp++;
-
-			if (c == '\\') switch (*cp) {
-			case 'r':
-				c = '\r';
-				cp++;
-				break;
-			case 'n':
-				c = '\n';
-				cp++;
-				break;
-			case 't':
-				c = '\t';
-				cp++;
-				break;
-			case '"':
-				c = '"';
-				cp++;
-				break;
-			case '\'':
-				c = '\'';
-				cp++;
-				break;
-			case '\\':
-				c = '\\';
-				cp++;
-				break;
-			case '`':
-				c = '`';
-				cp++;
-				break;
-			case '\0':
-				c = '\\'; /* no cp++ */
-				break;
-			default:
-				if ((cp[0] >= '0') &&
-				    (cp[0] <= '9') &&
-				    (cp[1] >= '0') &&
-				    (cp[1] <= '9') &&
-				    (cp[2] >= '0') &&
-				    (cp[2] <= '9') &&
-				    (sscanf(cp, "%3o", &x) == 1)) {
-					c = x;
-					cp += 3;
-
-				} else if (cp[0]) {
-					/*
-					 *	\p --> p
-					 */
-					c = *cp++;
-				} /* else at EOL \ --> \ */
-			}
-			*p++ = c;
-			vp_len++;
-		}
-		*p = '\0';
-		vp->length = vp_len;
-	}
-		goto finish;
-
-	/* raw octets: 0x01020304... */
-	case PW_TYPE_VSA:
-		if (strcmp(value, "ANY") == 0) {
-			vp->length = 0;
-			goto finish;
-		} /* else it's hex */
-
-	case PW_TYPE_OCTETS:
-	{
-		uint8_t	*p;
-
-		/*
-		 *	No 0x prefix, just copy verbatim.
-		 */
-		if ((len < 2) || (strncasecmp(value, "0x", 2) != 0)) {
-			pairmemcpy(vp, (uint8_t const *) value, len);
-			goto finish;
-		}
-
-
-#ifdef WITH_ASCEND_BINARY
-	do_octets:
-#endif
-		len -= 2;
-
-		/*
-		 *	Invalid.
-		 */
-		if ((len & 0x01) != 0) {
-			fr_strerror_printf("Length of Hex String is not even, got %zu bytes", vp->length);
-			return -1;
-		}
-
-		vp->length = len >> 1;
-		p = talloc_array(vp, uint8_t, vp->length);
-		if (fr_hex2bin(p, vp->length, value + 2, len) != vp->length) {
-			talloc_free(p);
-			fr_strerror_printf("Invalid hex data");
-			return -1;
-		}
-
-		vp->vp_octets = p;
-	}
-		goto finish;
-
-	case PW_TYPE_ABINARY:
-#ifdef WITH_ASCEND_BINARY
-		if ((len > 1) && (strncasecmp(value, "0x", 2) == 0)) goto do_octets;
-
-		if (ascend_parse_filter(vp, value, len) < 0 ) {
-			/* Allow ascend_parse_filter's strerror to bubble up */
-			return -1;
-		}
-		goto finish;
-#else
-		/*
-		 *	If Ascend binary is NOT defined,
-		 *	then fall through to raw octets, so that
-		 *	the user can at least make them by hand...
-		 */
-	 	goto do_octets;
-#endif
-
-	/* don't use this! */
-	case PW_TYPE_TLV:
-	{
-		uint8_t	*p;
-
-		if ((len < 2) || (len & 0x01) || (strncasecmp(value, "0x", 2) != 0)) {
-			fr_strerror_printf("Invalid TLV specification");
-			return -1;
-		}
-		len -= 2;
-
-		vp->length = len >> 1;
-		p = talloc_array(vp, uint8_t, vp->length);
-		if (!p) {
-			fr_strerror_printf("No memory");
-			return -1;
-		}
-		if (fr_hex2bin(p, vp->length, value + 2, len) != vp->length) {
-			fr_strerror_printf("Invalid hex data in TLV");
-			return -1;
-		}
-
-		vp->vp_tlv = p;
-	}
-		goto finish;
-
-	case PW_TYPE_IPV4_ADDR:
-	{
-		fr_ipaddr_t addr;
-
-		if (fr_pton4(&addr, value, inlen, fr_hostname_lookups, false) < 0) return -1;
-
-		/*
-		 *	We allow v4 addresses to have a /32 suffix as some databases (PostgreSQL)
-		 *	print them this way.
-		 */
-		if (addr.prefix != 32) {
-			fr_strerror_printf("Invalid IPv4 mask length \"/%i\".  Only \"/32\" permitted "
-					   "for non-prefix types", addr.prefix);
-			return -1;
-		}
-
-		vp->vp_ipaddr = addr.ipaddr.ip4addr.s_addr;
-		vp->length = sizeof(vp->vp_ipaddr);
-	}
-		goto finish;
-
-	case PW_TYPE_IPV4_PREFIX:
-	{
-		fr_ipaddr_t addr;
-
-		if (fr_pton4(&addr, value, inlen, fr_hostname_lookups, false) < 0) return -1;
-
-		vp->vp_ipv4prefix[1] = addr.prefix;
-		memcpy(vp->vp_ipv4prefix + 2, &addr.ipaddr.ip4addr.s_addr, sizeof(vp->vp_ipv4prefix) - 2);
-		vp->length = sizeof(vp->vp_ipv4prefix);
-	}
-		goto finish;
-
-	case PW_TYPE_IPV6_ADDR:
-	{
-		fr_ipaddr_t addr;
-
-		if (fr_pton6(&addr, value, inlen, fr_hostname_lookups, false) < 0) return -1;
-
-		/*
-		 *	We allow v6 addresses to have a /128 suffix as some databases (PostgreSQL)
-		 *	print them this way.
-		 */
-		if (addr.prefix != 128) {
-			fr_strerror_printf("Invalid IPv6 mask length \"/%i\".  Only \"/128\" permitted "
-					   "for non-prefix types", addr.prefix);
-			return -1;
-		}
-
-		memcpy(&vp->vp_ipv6addr, &addr.ipaddr.ip6addr.s6_addr, sizeof(vp->vp_ipv6addr));
-		vp->length = sizeof(vp->vp_ipv6addr);
-	}
-		goto finish;
-
-	case PW_TYPE_IPV6_PREFIX:
-	{
-		fr_ipaddr_t addr;
-
-		if (fr_pton6(&addr, value, inlen, fr_hostname_lookups, false) < 0) return -1;
-
-		vp->vp_ipv6prefix[1] = addr.prefix;
-		memcpy(vp->vp_ipv6prefix + 2, &addr.ipaddr.ip6addr.s6_addr, sizeof(vp->vp_ipv6prefix) - 2);
-		vp->length = sizeof(vp->vp_ipv6prefix);
-	}
-		goto finish;
-
-	default:
-		break;
-	}
+	ret = value_data_from_str(vp, &vp->data, &type, vp->da, value, inlen, '"');
+	if (ret < 0) return -1;
 
 	/*
-	 *	It's a fixed size type, copy to a temporary buffer and
-	 *	\0 terminate if insize >= 0.
+	 *	If we parsed to a different type than the DA associated with
+	 *	the VALUE_PAIR we now need to fixup the DA.
 	 */
-	if (inlen > 0) {
-		if (len >= sizeof(buffer)) {
-			fr_strerror_printf("Temporary buffer too small");
-			return -1;
-		}
-
-		memcpy(buffer, value, inlen);
-		buffer[inlen] = '\0';
-		value = buffer;
-	}
-
-	switch(vp->da->type) {
-	case PW_TYPE_BYTE:
-	{
-		char *p;
-		vp->length = 1;
-
-		/*
-		 *	Note that ALL integers are unsigned!
-		 */
-		vp->vp_integer = fr_strtoul(value, &p);
-		if (!*p) {
-			if (vp->vp_integer > 255) {
-				fr_strerror_printf("Byte value \"%s\" is larger than 255", value);
-				return -1;
-			}
-			break;
-		}
-		if (is_whitespace(p)) break;
-	}
-		goto check_for_value;
-
-	case PW_TYPE_SHORT:
-	{
-		char *p;
-
-		/*
-		 *	Note that ALL integers are unsigned!
-		 */
-		vp->vp_integer = fr_strtoul(value, &p);
-		vp->length = 2;
-		if (!*p) {
-			if (vp->vp_integer > 65535) {
-				fr_strerror_printf("Byte value \"%s\" is larger than 65535", value);
-				return -1;
-			}
-			break;
-		}
-		if (is_whitespace(p)) break;
-	}
-		goto check_for_value;
-
-	case PW_TYPE_INTEGER:
-	{
-		char *p;
-
-		/*
-		 *	Note that ALL integers are unsigned!
-		 */
-		vp->vp_integer = fr_strtoul(value, &p);
-		vp->length = 4;
-		if (!*p) break;
-		if (is_whitespace(p)) break;
-
-	check_for_value:
-		/*
-		 *	Look for the named value for the given
-		 *	attribute.
-		 */
-		if ((dval = dict_valbyname(vp->da->attr, vp->da->vendor, value)) == NULL) {
-			fr_strerror_printf("Unknown value '%s' for attribute '%s'", value, vp->da->name);
-			return -1;
-		}
-		vp->vp_integer = dval->value;
-	}
-		break;
-
-	case PW_TYPE_INTEGER64:
-	{
-		uint64_t y;
-
-		/*
-		 *	Note that ALL integers are unsigned!
-		 */
-		if (sscanf(value, "%" PRIu64, &y) != 1) {
-			fr_strerror_printf("Invalid value '%s' for attribute '%s'",
-					   value, vp->da->name);
-			return -1;
-		}
-		vp->vp_integer64 = y;
-		vp->length = 8;
-	}
-		break;
-
-	case PW_TYPE_DATE:
-	{
-		/*
-		 *	time_t may be 64 bits, whule vp_date
-		 *	MUST be 32-bits.  We need an
-		 *	intermediary variable to handle
-		 *	the conversions.
-		 */
-		time_t date;
-
-		if (fr_get_time(value, &date) < 0) {
-			fr_strerror_printf("failed to parse time string "
-				   "\"%s\"", value);
-			return -1;
-		}
-
-		vp->vp_date = date;
-		vp->length = 4;
-	}
-
-		break;
-
-	case PW_TYPE_IFID:
-		if (ifid_aton(value, (void *) &vp->vp_ifid) == NULL) {
-			fr_strerror_printf("Failed to parse interface-id string \"%s\"", value);
-			return -1;
-		}
-		vp->length = 8;
-		break;
-
-	case PW_TYPE_ETHERNET:
-	{
-		char const *c1, *c2, *cp;
-		size_t vp_len = 0;
-
-		/*
-		 *	Convert things which are obviously integers to Ethernet addresses
-		 *
-		 *	We assume the number is the bigendian representation of the
-		 *	ethernet address.
-		 */
-		if (is_integer(value)) {
-			uint64_t integer = htonll(atoll(value));
-
-			memcpy(&vp->vp_ether, &integer, sizeof(vp->vp_ether));
-			break;
-		}
-
-		cp = value;
-		while (*cp) {
-			if (cp[1] == ':') {
-				c1 = hextab;
-				c2 = memchr(hextab, tolower((int) cp[0]), 16);
-				cp += 2;
-			} else if ((cp[1] != '\0') && ((cp[2] == ':') || (cp[2] == '\0'))) {
-				c1 = memchr(hextab, tolower((int) cp[0]), 16);
-				c2 = memchr(hextab, tolower((int) cp[1]), 16);
-				cp += 2;
-				if (*cp == ':') cp++;
-			} else {
-				c1 = c2 = NULL;
-			}
-			if (!c1 || !c2 || (vp_len >= sizeof(vp->vp_ether))) {
-				fr_strerror_printf("failed to parse Ethernet address \"%s\"", value);
-				return -1;
-			}
-			vp->vp_ether[vp_len] = ((c1-hextab)<<4) + (c2-hextab);
-			vp_len++;
-		}
-
-		vp->length = 6;
-	}
-		break;
-
-	/*
-	 *	Crazy polymorphic (IPv4/IPv6) attribute type for WiMAX.
-	 *
-	 *	We try and make is saner by replacing the original
-	 *	da, with either an IPv4 or IPv6 da type.
-	 *
-	 *	These are not dynamic da, and will have the same vendor
-	 *	and attribute as the original.
-	 */
-	case PW_TYPE_IP_ADDR:
-	{
+	if (type != vp->da->type) {
 		DICT_ATTR const *da;
 
-		if (inet_pton(AF_INET6, value, &vp->vp_ipv6addr) > 0) {
-			da = dict_attrbytype(vp->da->attr, vp->da->vendor, PW_TYPE_IPV6_ADDR);
-			if (!da) {
-				fr_strerror_printf("Cannot find ipv6addr for %s", vp->da->name);
-				return -1;
-			}
-
-			vp->length = 16; /* length of IPv6 address */
-		} else {
-			fr_ipaddr_t ipaddr;
-
-			da = dict_attrbytype(vp->da->attr, vp->da->vendor,
-					     PW_TYPE_IPV4_ADDR);
-			if (!da) {
-				fr_strerror_printf("Cannot find ipaddr for %s", vp->da->name);
-				return -1;
-			}
-
-			if (ip_hton(&ipaddr, AF_INET, value, false) < 0) {
-				fr_strerror_printf("Failed to find IPv4 address for %s", value);
-				return -1;
-			}
-
-			vp->vp_ipaddr = ipaddr.ipaddr.ip4addr.s_addr;
-			vp->length = 4;
+		da = dict_attrbytype(vp->da->attr, vp->da->vendor, type);
+		if (!da) {
+			fr_strerror_printf("Cannot find %s variant of attribute \"%s\"",
+					   fr_int2str(dict_attr_types, type, "<INVALID>"), vp->da->name);
+			return -1;
 		}
-
 		vp->da = da;
 	}
-		break;
 
-	case PW_TYPE_SIGNED:
-		/* Damned code for 1 WiMAX attribute */
-		vp->vp_signed = (int32_t) strtol(value, NULL, 10);
-		vp->length = 4;
-		break;
-
-		/*
-		 *  Anything else.
-		 */
-	default:
-		fr_strerror_printf("unknown attribute type %d", vp->da->type);
-		return -1;
-	}
-
-finish:
+	vp->vp_length = ret;
 	vp->type = VT_DATA;
+
+	VERIFY_VP(vp);
+
 	return 0;
 }
 
@@ -1636,7 +1155,7 @@ VALUE_PAIR *pairmake_ip(TALLOC_CTX *ctx, char const *value, DICT_ATTR *ipv4, DIC
 finish:
 	vp = pairalloc(ctx, da);
 	if (!vp) return NULL;
-	if (pairparsevalue(vp, value, 0) < 0) {
+	if (pairparsevalue(vp, value, -1) < 0) {
 		talloc_free(vp);
 		return NULL;
 	}
@@ -1644,6 +1163,38 @@ finish:
 	return vp;
 }
 
+
+static VALUE_PAIR *pair_unknown2known(VALUE_PAIR *vp, DICT_ATTR const *da)
+{
+	ssize_t len;
+	VALUE_PAIR *vp2;
+
+	len = data2vp(NULL, NULL, NULL, NULL, da,
+		      vp->vp_octets, vp->vp_length, vp->vp_length,
+		      &vp2);
+	if (len < 0) return vp; /* it's really unknown */
+
+	if (vp2->da->flags.is_unknown) {
+		pairfree(&vp2);
+		return vp;
+	}
+
+	/*
+	 *	Didn't parse all of it.  Return the "unknown" one.
+	 *
+	 *	FIXME: it COULD have parsed 2 attributes and
+	 *	then not the third, so returning 2 "knowns"
+	 *	and 1 "unknown" is likely preferable.
+	 */
+	if ((size_t) len < vp->vp_length) {
+		pairfree(&vp2);
+		return vp;
+	}
+
+	pairsteal(talloc_parent(vp), vp2);
+	pairfree(&vp);
+	return vp2;
+}
 
 /** Create a valuepair from an ASCII attribute and value
  *
@@ -1669,7 +1220,7 @@ static VALUE_PAIR *pairmake_any(TALLOC_CTX *ctx,
 	uint8_t 	*data;
 	size_t		size;
 
-	da = dict_attrunknownbyname(attribute, true);
+	da = dict_unknown_afrom_str(ctx, attribute);
 	if (!da) return NULL;
 
 	/*
@@ -1699,10 +1250,10 @@ static VALUE_PAIR *pairmake_any(TALLOC_CTX *ctx,
 	if (!value) return vp;
 
 	size = strlen(value + 2);
-	vp->length = size >> 1;
-	data = talloc_array(vp, uint8_t, vp->length);
+	vp->vp_length = size >> 1;
+	data = talloc_array(vp, uint8_t, vp->vp_length);
 
-	if (fr_hex2bin(data, vp->length, value + 2, size) != vp->length) {
+	if (fr_hex2bin(data, vp->vp_length, value + 2, size) != vp->vp_length) {
 		fr_strerror_printf("Invalid hex string");
 		talloc_free(vp);
 		return NULL;
@@ -1710,6 +1261,15 @@ static VALUE_PAIR *pairmake_any(TALLOC_CTX *ctx,
 
 	vp->vp_octets = data;
 	vp->type = VT_DATA;
+
+	/*
+	 *	Convert unknowns to knowns
+	 */
+	da = dict_attrbyvalue(vp->da->attr, vp->da->vendor);
+	if (da) {
+		return pair_unknown2known(vp, da);
+	}
+
 	return vp;
 }
 
@@ -1823,7 +1383,7 @@ VALUE_PAIR *pairmake(TALLOC_CTX *ctx, VALUE_PAIR **vps,
 	case T_OP_CMP_TRUE:
 	case T_OP_CMP_FALSE:
 		vp->vp_strvalue = NULL;
-		vp->length = 0;
+		vp->vp_length = 0;
 		value = NULL;	/* ignore it! */
 		break;
 
@@ -1835,12 +1395,12 @@ VALUE_PAIR *pairmake(TALLOC_CTX *ctx, VALUE_PAIR **vps,
 	case T_OP_REG_EQ:	/* =~ */
 	case T_OP_REG_NE:	/* !~ */
 	{
-#ifndef WITH_REGEX
+#ifndef HAVE_REGEX
 		fr_strerror_printf("Regular expressions are not supported");
 		return NULL;
 #else
-		int compare;
-		regex_t reg;
+		ssize_t slen;
+		regex_t *preg;
 
 		/*
 		 *	Someone else will fill in the value.
@@ -1849,14 +1409,13 @@ VALUE_PAIR *pairmake(TALLOC_CTX *ctx, VALUE_PAIR **vps,
 
 		talloc_free(vp);
 
-		compare = regcomp(&reg, value, REG_EXTENDED);
-		if (compare != 0) {
-			regerror(compare, &reg, buffer, sizeof(buffer));
-			fr_strerror_printf("Illegal regular expression in attribute: %s: %s",
-					   attribute, buffer);
+		slen = regex_compile(ctx, &preg, value, strlen(value), false, false, false, true);
+		if (slen <= 0) {
+			fr_strerror_printf("Error at offset %zu compiling regex for %s: %s", -slen,
+					   attribute, fr_strerror());
 			return NULL;
 		}
-		regfree(&reg);
+		talloc_free(preg);
 
 		vp = pairmake(ctx, NULL, attribute, NULL, op);
 		if (!vp) return NULL;
@@ -1882,7 +1441,7 @@ VALUE_PAIR *pairmake(TALLOC_CTX *ctx, VALUE_PAIR **vps,
 	 *	We probably want to fix pairparsevalue to accept
 	 *	octets as values for any attribute.
 	 */
-	if (value && (pairparsevalue(vp, value, 0) < 0)) {
+	if (value && (pairparsevalue(vp, value, -1) < 0)) {
 		talloc_free(vp);
 		return NULL;
 	}
@@ -1918,14 +1477,15 @@ int pairmark_xlat(VALUE_PAIR *vp, char const *value)
 
 	vp->type = VT_XLAT;
 	vp->value.xlat = raw;
-	vp->length = 0;
+	vp->vp_length = 0;
 
 	return 0;
 }
 
+
 /** Read a single valuepair from a buffer, and advance the pointer
  *
- * Sets *eol to T_EOL if end of line was encountered.
+ *  Returns T_EOL if end of line was encountered.
  *
  * @param[in,out] ptr to read from and update.
  * @param[out] raw The struct to write the raw VALUE_PAIR to.
@@ -1935,12 +1495,12 @@ FR_TOKEN pairread(char const **ptr, VALUE_PAIR_RAW *raw)
 {
 	char const	*p;
 	char *q;
-	FR_TOKEN	ret = T_OP_INVALID, next, quote;
+	FR_TOKEN	ret = T_INVALID, next, quote;
 	char		buf[8];
 
 	if (!ptr || !*ptr || !raw) {
 		fr_strerror_printf("Invalid arguments");
-		return T_OP_INVALID;
+		return T_INVALID;
 	}
 
 	/*
@@ -1952,14 +1512,10 @@ FR_TOKEN pairread(char const **ptr, VALUE_PAIR_RAW *raw)
 	if (!*p) {
 		fr_strerror_printf("No token read where we expected "
 				   "an attribute name");
-		return T_OP_INVALID;
+		return T_INVALID;
 	}
 
-	if (*p == '#') {
-		fr_strerror_printf("Read a comment instead of a token");
-
-		return T_HASH;
-	}
+	if (*p == '#') return T_HASH;
 
 	/*
 	 *	Try to get the attribute name.
@@ -1972,16 +1528,7 @@ FR_TOKEN pairread(char const **ptr, VALUE_PAIR_RAW *raw)
 		if (q >= (raw->l_opand + sizeof(raw->l_opand))) {
 		too_long:
 			fr_strerror_printf("Attribute name too long");
-			return T_OP_INVALID;
-		}
-
-		/*
-		 *	Only ASCII is allowed, and only a subset of that.
-		 */
-		if ((*t < 32) || (*t >= 128)) {
-		invalid:
-			fr_strerror_printf("Invalid attribute name");
-			return T_OP_INVALID;
+			return T_INVALID;
 		}
 
 		/*
@@ -1989,7 +1536,7 @@ FR_TOKEN pairread(char const **ptr, VALUE_PAIR_RAW *raw)
 		 *	out which operators come after the attribute
 		 *	name.  Yes, our "lexer" is bad.
 		 */
-		if (!dict_attr_allowed_chars[(int) *t]) {
+		if (!dict_attr_allowed_chars[(unsigned int) *t]) {
 			break;
 		}
 
@@ -2008,9 +1555,12 @@ FR_TOKEN pairread(char const **ptr, VALUE_PAIR_RAW *raw)
 	}
 
 	/*
-	 *	ASCII, but not a valid attribute name.
+	 *	Haven't found any valid characters in the name.
 	 */
-	if (!*raw->l_opand) goto invalid;
+	if (!*raw->l_opand) {
+		fr_strerror_printf("Invalid attribute name");
+		return T_INVALID;
+	}
 
 	/*
 	 *	Look for tag (:#).  This is different from :=, which
@@ -2038,7 +1588,7 @@ FR_TOKEN pairread(char const **ptr, VALUE_PAIR_RAW *raw)
 	if (raw->op  < T_EQSTART || raw->op  > T_EQEND) {
 		fr_strerror_printf("Expecting operator");
 
-		return T_OP_INVALID;
+		return T_INVALID;
 	}
 
 	/*
@@ -2048,7 +1598,7 @@ FR_TOKEN pairread(char const **ptr, VALUE_PAIR_RAW *raw)
 	if (quote == T_EOL) {
 		fr_strerror_printf("Failed to get value");
 
-		return T_OP_INVALID;
+		return T_INVALID;
 	}
 
 	/*
@@ -2058,8 +1608,11 @@ FR_TOKEN pairread(char const **ptr, VALUE_PAIR_RAW *raw)
 
 	next = gettoken(&p, buf, sizeof(buf), false);
 	switch (next) {
-	case T_EOL:
 	case T_HASH:
+		next = T_EOL;
+		break;
+
+	case T_EOL:
 		break;
 
 	case T_COMMA:
@@ -2068,7 +1621,7 @@ FR_TOKEN pairread(char const **ptr, VALUE_PAIR_RAW *raw)
 
 	default:
 		fr_strerror_printf("Expected end of line or comma");
-		return T_OP_INVALID;
+		return T_INVALID;
 	}
 	ret = next;
 
@@ -2102,20 +1655,19 @@ FR_TOKEN pairread(char const **ptr, VALUE_PAIR_RAW *raw)
  *
  * The line may specify multiple attributes separated by commas.
  *
- * @note If the function returns T_OP_INVALID, an error has occurred and
+ * @note If the function returns T_INVALID, an error has occurred and
  * @note the valuepair list should probably be freed.
  *
  * @param ctx for talloc
  * @param buffer to read valuepairs from.
  * @param list where the parsed VALUE_PAIRs will be appended.
- * @return the last token parsed, or T_OP_INVALID
+ * @return the last token parsed, or T_INVALID
  */
 FR_TOKEN userparse(TALLOC_CTX *ctx, char const *buffer, VALUE_PAIR **list)
 {
 	VALUE_PAIR	*vp, *head, **tail;
 	char const	*p;
-	FR_TOKEN	last_token = T_OP_INVALID;
-	FR_TOKEN	previous_token;
+	FR_TOKEN	last_token = T_INVALID;
 	VALUE_PAIR_RAW	raw;
 
 	/*
@@ -2133,26 +1685,33 @@ FR_TOKEN userparse(TALLOC_CTX *ctx, char const *buffer, VALUE_PAIR **list)
 		raw.l_opand[0] = '\0';
 		raw.r_opand[0] = '\0';
 
-		previous_token = last_token;
-
 		last_token = pairread(&p, &raw);
-		if (last_token == T_OP_INVALID) break;
+
+		/*
+		 *	JUST a hash.  Don't try to create a VP.
+		 *	Let the caller determine if an empty list is OK.
+		 */
+		if (last_token == T_HASH) {
+			last_token = T_EOL;
+			break;
+		}
+		if (last_token == T_INVALID) break;
 
 		if (raw.quote == T_DOUBLE_QUOTED_STRING) {
 			vp = pairmake(ctx, NULL, raw.l_opand, NULL, raw.op);
 			if (!vp) {
-				last_token = T_OP_INVALID;
+				last_token = T_INVALID;
 				break;
 			}
 			if (pairmark_xlat(vp, raw.r_opand) < 0) {
 				talloc_free(vp);
-				last_token = T_OP_INVALID;
+				last_token = T_INVALID;
 				break;
 			}
 		} else {
 			vp = pairmake(ctx, NULL, raw.l_opand, raw.r_opand, raw.op);
 			if (!vp) {
-				last_token = T_OP_INVALID;
+				last_token = T_INVALID;
 				break;
 			}
 		}
@@ -2161,14 +1720,7 @@ FR_TOKEN userparse(TALLOC_CTX *ctx, char const *buffer, VALUE_PAIR **list)
 		tail = &((*tail)->next);
 	} while (*p && (last_token == T_COMMA));
 
-	/*
-	 *	Don't tell the caller that there was a comment.
-	 */
-	if (last_token == T_HASH) {
-		last_token = previous_token;
-	}
-
-	if (last_token == T_OP_INVALID) {
+	if (last_token == T_INVALID) {
 		pairfree(&head);
 	} else {
 		pairadd(list, head);
@@ -2183,7 +1735,7 @@ FR_TOKEN userparse(TALLOC_CTX *ctx, char const *buffer, VALUE_PAIR **list)
 /*
  *	Read valuepairs from the fp up to End-Of-File.
  */
-int readvp2(VALUE_PAIR **out, TALLOC_CTX *ctx, FILE *fp, bool *pfiledone)
+int readvp2(TALLOC_CTX *ctx, VALUE_PAIR **out, FILE *fp, bool *pfiledone)
 {
 	char buf[8192];
 	FR_TOKEN last_token = T_EOL;
@@ -2191,7 +1743,6 @@ int readvp2(VALUE_PAIR **out, TALLOC_CTX *ctx, FILE *fp, bool *pfiledone)
 	vp_cursor_t cursor;
 
 	VALUE_PAIR *vp = NULL;
-
 	fr_cursor_init(&cursor, out);
 
 	while (fgets(buf, sizeof(buf), fp) != NULL) {
@@ -2200,7 +1751,10 @@ int readvp2(VALUE_PAIR **out, TALLOC_CTX *ctx, FILE *fp, bool *pfiledone)
 		 *      the end of that VP
 		 */
 		if (buf[0] == '\n') {
-			if (vp) return 0;
+			if (vp) {
+				*pfiledone = false;
+				return 0;
+			}
 			continue;
 		}
 
@@ -2222,390 +1776,16 @@ int readvp2(VALUE_PAIR **out, TALLOC_CTX *ctx, FILE *fp, bool *pfiledone)
 		fr_cursor_merge(&cursor, vp);
 		buf[0] = '\0';
 	}
-
 	*pfiledone = true;
 
 	return 0;
 
 error:
+	*pfiledone = false;
 	vp = fr_cursor_first(&cursor);
 	if (vp) pairfree(&vp);
 
 	return -1;
-}
-
-/** Compare two attribute values
- *
- * @param[in] one the first attribute.
- * @param[in] two the second attribute.
- * @return -1 if one is less than two, 0 if both are equal, 1 if one is more than two, < -1 on error.
- */
-int paircmp_value(VALUE_PAIR const *one, VALUE_PAIR const *two)
-{
-	int compare = 0;
-
-	VERIFY_VP(one);
-	VERIFY_VP(two);
-
-	if (one->da->type != two->da->type) {
-		fr_strerror_printf("Can't compare attribute values of different types");
-		return -2;
-	}
-
-	/*
-	 *	After doing the previous check for special comparisons,
-	 *	do the per-type comparison here.
-	 */
-	switch (one->da->type) {
-	case PW_TYPE_ABINARY:
-	case PW_TYPE_OCTETS:
-	case PW_TYPE_STRING:	/* We use memcmp to be \0 safe */
-	{
-		size_t length;
-
-		if (one->length > two->length) {
-			length = one->length;
-		} else {
-			length = two->length;
-		}
-
-		if (length) {
-			compare = memcmp(one->vp_octets, two->vp_octets, length);
-			if (compare != 0) break;
-		}
-
-		/*
-		 *	Contents are the same.  The return code
-		 *	is therefore the difference in lengths.
-		 *
-		 *	i.e. "0x00" is smaller than "0x0000"
-		 */
-		compare = one->length - two->length;
-	}
-		break;
-
-		/*
-		 *	Short-hand for simplicity.
-		 */
-#define CHECK(_type) if (one->vp_##_type < two->vp_##_type)   { compare = -1; \
-		} else if (one->vp_##_type > two->vp_##_type) { compare = +1; }
-
-	case PW_TYPE_BOOLEAN:	/* this isn't a RADIUS type, and shouldn't really ever be used */
-	case PW_TYPE_BYTE:
-		CHECK(byte);
-		break;
-
-
-	case PW_TYPE_SHORT:
-		CHECK(short);
-		break;
-
-	case PW_TYPE_DATE:
-		CHECK(date);
-		break;
-
-	case PW_TYPE_INTEGER:
-		CHECK(integer);
-		break;
-
-	case PW_TYPE_SIGNED:
-		CHECK(signed);
-		break;
-
-	case PW_TYPE_INTEGER64:
-		CHECK(integer64);
-		break;
-
-	case PW_TYPE_ETHERNET:
-		compare = memcmp(&one->vp_ether, &two->vp_ether, sizeof(one->vp_ether));
-		break;
-
-	case PW_TYPE_IPV4_ADDR: {
-			uint32_t a, b;
-
-			a = ntohl(one->vp_ipaddr);
-			b = ntohl(two->vp_ipaddr);
-			if (a < b) {
-				compare = -1;
-			} else if (a > b) {
-				compare = +1;
-			}
-		}
-		break;
-
-	case PW_TYPE_IPV6_ADDR:
-		compare = memcmp(&one->vp_ipv6addr, &two->vp_ipv6addr, sizeof(one->vp_ipv6addr));
-		break;
-
-	case PW_TYPE_IPV6_PREFIX:
-		compare = memcmp(&one->vp_ipv6prefix, &two->vp_ipv6prefix, sizeof(one->vp_ipv6prefix));
-		break;
-
-	case PW_TYPE_IPV4_PREFIX:
-		compare = memcmp(&one->vp_ipv4prefix, &two->vp_ipv4prefix, sizeof(one->vp_ipv4prefix));
-		break;
-
-	case PW_TYPE_IFID:
-		compare = memcmp(&one->vp_ifid, &two->vp_ifid, sizeof(one->vp_ifid));
-		break;
-
-	/*
-	 *	None of the types below should be in the REQUEST
-	 */
-	case PW_TYPE_INVALID:		/* We should never see these */
-	case PW_TYPE_IP_ADDR:		/* This should have been converted into IPADDR/IPV6ADDR */
-	case PW_TYPE_IP_PREFIX:		/* This should have been converted into IPADDR/IPV6ADDR */
-	case PW_TYPE_TLV:
-	case PW_TYPE_EXTENDED:
-	case PW_TYPE_LONG_EXTENDED:
-	case PW_TYPE_EVS:
-	case PW_TYPE_VSA:
-	case PW_TYPE_TIMEVAL:
-	case PW_TYPE_MAX:
-		fr_assert(0);	/* unknown type */
-		return -2;
-
-	/*
-	 *	Do NOT add a default here, as new types are added
-	 *	static analysis will warn us they're not handled
-	 */
-	}
-
-	if (compare > 0) {
-		return 1;
-	} else if (compare < 0) {
-		return -1;
-	}
-	return 0;
-}
-
-/*
- *	We leverage the fact that IPv4 and IPv6 prefixes both
- *	have the same format:
- *
- *	reserved, prefix-len, data...
- */
-static int paircmp_op_cidr(FR_TOKEN op, int bytes,
-			   uint8_t one_net, uint8_t const *one,
-			   uint8_t two_net, uint8_t const *two)
-{
-	int i, common;
-	uint32_t mask;
-
-	/*
-	 *	Handle the case of netmasks being identical.
-	 */
-	if (one_net == two_net) {
-		int compare;
-
-		compare = memcmp(one, two, bytes);
-
-		/*
-		 *	If they're identical return true for
-		 *	identical.
-		 */
-		if ((compare == 0) &&
-		    ((op == T_OP_CMP_EQ) ||
-		     (op == T_OP_LE) ||
-		     (op == T_OP_GE))) {
-			return true;
-		}
-
-		/*
-		 *	Everything else returns false.
-		 *
-		 *	10/8 == 24/8  --> false
-		 *	10/8 <= 24/8  --> false
-		 *	10/8 >= 24/8  --> false
-		 */
-		return false;
-	}
-
-	/*
-	 *	Netmasks are different.  That limits the
-	 *	possible results, based on the operator.
-	 */
-	switch (op) {
-	case T_OP_CMP_EQ:
-		return false;
-
-	case T_OP_NE:
-		return true;
-
-	case T_OP_LE:
-	case T_OP_LT:	/* 192/8 < 192.168/16 --> false */
-		if (one_net < two_net) {
-			return false;
-		}
-		break;
-
-	case T_OP_GE:
-	case T_OP_GT:	/* 192/16 > 192.168/8 --> false */
-		if (one_net > two_net) {
-			return false;
-		}
-		break;
-
-	default:
-		return false;
-	}
-
-	if (one_net < two_net) {
-		common = one_net;
-	} else {
-		common = two_net;
-	}
-
-	/*
-	 *	Do the check byte by byte.  If the bytes are
-	 *	identical, it MAY be a match.  If they're different,
-	 *	it is NOT a match.
-	 */
-	i = 0;
-	while (i < bytes) {
-		/*
-		 *	All leading bytes are identical.
-		 */
-		if (common == 0) return true;
-
-		/*
-		 *	Doing bitmasks takes more work.
-		 */
-		if (common < 8) break;
-
-		if (one[i] != two[i]) return false;
-
-		common -= 8;
-		i++;
-		continue;
-	}
-
-	mask = 1;
-	mask <<= (8 - common);
-	mask--;
-	mask = ~mask;
-
-	if ((one[i] & mask) == ((two[i] & mask))) {
-		return true;
-	}
-
-	return false;
-}
-
-/** Compare two attributes using an operator
- *
- * @param[in] a the first attribute
- * @param[in] op the operator for comparison.
- * @param[in] b the second attribute
- * @return 1 if true, 0 if false, -1 on error.
- */
-int paircmp_op(VALUE_PAIR const *a, FR_TOKEN op, VALUE_PAIR const *b)
-{
-	int compare = 0;
-
-	if (!a || !b) return -1;
-
-	switch (a->da->type) {
-	case PW_TYPE_IPV4_ADDR:
-		switch (b->da->type) {
-		case PW_TYPE_IPV4_ADDR:		/* IPv4 and IPv4 */
-			goto cmp;
-
-		case PW_TYPE_IPV4_PREFIX:	/* IPv4 and IPv4 Prefix */
-			return paircmp_op_cidr(op, 4, 32, (uint8_t const *) &a->vp_ipaddr,
-					       b->vp_ipv4prefix[1], (uint8_t const *) &b->vp_ipv4prefix + 2);
-
-		default:
-			fr_strerror_printf("Cannot compare IPv4 with IPv6 address");
-			return -1;
-		}
-		break;
-
-	case PW_TYPE_IPV4_PREFIX:		/* IPv4 and IPv4 Prefix */
-		switch (b->da->type) {
-		case PW_TYPE_IPV4_ADDR:
-			return paircmp_op_cidr(op, 4, a->vp_ipv4prefix[1],
-					       (uint8_t const *) &a->vp_ipv4prefix + 2,
-					       32, (uint8_t const *) &b->vp_ipaddr);
-
-		case PW_TYPE_IPV4_PREFIX:	/* IPv4 Prefix and IPv4 Prefix */
-			return paircmp_op_cidr(op, 4, a->vp_ipv4prefix[1],
-					       (uint8_t const *) &a->vp_ipv4prefix + 2,
-					       b->vp_ipv4prefix[1], (uint8_t const *) &b->vp_ipv4prefix + 2);
-
-		default:
-			fr_strerror_printf("Cannot compare IPv4 with IPv6 address");
-			return -1;
-		}
-		break;
-
-	case PW_TYPE_IPV6_ADDR:
-		switch (b->da->type) {
-		case PW_TYPE_IPV6_ADDR:		/* IPv6 and IPv6 */
-			goto cmp;
-
-		case PW_TYPE_IPV6_PREFIX:	/* IPv6 and IPv6 Preifx */
-			return paircmp_op_cidr(op, 16, 128, (uint8_t const *) &a->vp_ipv6addr,
-					       b->vp_ipv6prefix[1], (uint8_t const *) &b->vp_ipv6prefix + 2);
-			break;
-
-		default:
-			fr_strerror_printf("Cannot compare IPv6 with IPv4 address");
-			return -1;
-		}
-		break;
-
-	case PW_TYPE_IPV6_PREFIX:
-		switch (b->da->type) {
-		case PW_TYPE_IPV6_ADDR:		/* IPv6 Prefix and IPv6 */
-			return paircmp_op_cidr(op, 16, a->vp_ipv6prefix[1],
-					       (uint8_t const *) &a->vp_ipv6prefix + 2,
-					       128, (uint8_t const *) &b->vp_ipv6addr);
-
-		case PW_TYPE_IPV6_PREFIX:	/* IPv6 Prefix and IPv6 */
-			return paircmp_op_cidr(op, 16, a->vp_ipv6prefix[1],
-					       (uint8_t const *) &a->vp_ipv6prefix + 2,
-					       b->vp_ipv6prefix[1], (uint8_t const *) &b->vp_ipv6prefix + 2);
-
-		default:
-			fr_strerror_printf("Cannot compare IPv6 with IPv4 address");
-			return -1;
-		}
-		break;
-
-	default:
-	cmp:
-		compare = paircmp_value(a, b);
-		if (compare < -1) {	/* comparison error */
-			return -1;
-		}
-	}
-
-	/*
-	 *	Now do the operator comparison.
-	 */
-	switch (op) {
-	case T_OP_CMP_EQ:
-		return (compare == 0);
-
-	case T_OP_NE:
-		return (compare != 0);
-
-	case T_OP_LT:
-		return (compare < 0);
-
-	case T_OP_GT:
-		return (compare > 0);
-
-	case T_OP_LE:
-		return (compare <= 0);
-
-	case T_OP_GE:
-		return (compare >= 0);
-
-	default:
-		return 0;
-	}
 }
 
 /** Compare two pairs, using the operator from "a"
@@ -2640,49 +1820,49 @@ int paircmp(VALUE_PAIR *a, VALUE_PAIR *b)
 		 */
 	case T_OP_REG_EQ:
 	case T_OP_REG_NE:
-#ifndef WITH_REGEX
+#ifndef HAVE_REGEX
 		return -1;
 #else
+		if (!b) return false;
+
 		{
-			int compare;
-			regex_t reg;
-			char buffer[MAX_STRING_LEN * 4 + 1];
+			ssize_t	slen;
+			regex_t	*preg;
+			char	*value;
 
-			compare = regcomp(&reg, a->vp_strvalue, REG_EXTENDED);
-			if (compare != 0) {
-				regerror(compare, &reg, buffer, sizeof(buffer));
-				fr_strerror_printf("Illegal regular expression in attribute: %s: %s",
-						   a->da->name, buffer);
+			if (!fr_assert(a->da->type == PW_TYPE_STRING)) return -1;
+
+			slen = regex_compile(NULL, &preg, a->vp_strvalue, a->vp_length, false, false, false, true);
+			if (slen <= 0) {
+				fr_strerror_printf("Error at offset %zu compiling regex for %s: %s",
+						   -slen, a->da->name, fr_strerror());
 				return -1;
 			}
-
-			if (!b) {
-				regfree(&reg);
+			value = vp_aprints_value(NULL, b, '\0');
+			if (!value) {
+				talloc_free(preg);
 				return -1;
 			}
-
-			vp_prints_value(buffer, sizeof(buffer), b, 0);
 
 			/*
-			 *	Don't care about substring matches,
-			 *	oh well...
+			 *	Don't care about substring matches, oh well...
 			 */
-			compare = regexec(&reg, buffer, 0, NULL, 0);
+			slen = regex_exec(preg, value, talloc_array_length(value) - 1, NULL, NULL);
+			talloc_free(preg);
+			talloc_free(value);
 
-			regfree(&reg);
-			if (a->op == T_OP_REG_EQ) {
-				return (compare == 0);
-			}
-
-			return (compare != 0);
+			if (slen < 0) return -1;
+			if (a->op == T_OP_REG_EQ) return (int)slen;
+			return !slen;
 		}
 #endif
 
 	default:		/* we're OK */
+		if (!b) return false;
 		break;
 	}
 
-	return paircmp_op(b, a->op, a);
+	return paircmp_op(a->op, b, a);
 }
 
 /** Determine equality of two lists
@@ -2721,7 +1901,8 @@ int pairlistcmp(VALUE_PAIR *a, VALUE_PAIR *b)
 			return 1;
 		}
 
-		ret = paircmp_value(a_p, b_p);
+		ret = value_data_cmp(a_p->da->type, &a_p->data, a_p->vp_length,
+				     b_p->da->type, &b_p->data, b_p->vp_length);
 		if (ret != 0) {
 			fr_assert(ret >= -1); 	/* Comparison error */
 			return ret;
@@ -2748,7 +1929,7 @@ static void pairtypeset(VALUE_PAIR *vp)
 {
 	if (!vp->data.ptr) return;
 
-	switch(vp->da->type) {
+	switch (vp->da->type) {
 	case PW_TYPE_OCTETS:
 	case PW_TYPE_TLV:
 		talloc_set_type(vp->data.ptr, uint8_t);
@@ -2785,7 +1966,7 @@ void pairmemcpy(VALUE_PAIR *vp, uint8_t const *src, size_t size)
 	TALLOC_FREE(q);
 
 	vp->vp_octets = p;
-	vp->length = size;
+	vp->vp_length = size;
 
 	if (size > 0) pairtypeset(vp);
 }
@@ -2806,7 +1987,7 @@ void pairmemsteal(VALUE_PAIR *vp, uint8_t const *src)
 
 	vp->vp_octets = talloc_steal(vp, src);
 	vp->type = VT_DATA;
-	vp->length = talloc_array_length(vp->vp_strvalue);
+	vp->vp_length = talloc_array_length(vp->vp_strvalue);
 	pairtypeset(vp);
 }
 
@@ -2826,7 +2007,7 @@ void pairstrsteal(VALUE_PAIR *vp, char const *src)
 
 	vp->vp_strvalue = talloc_steal(vp, src);
 	vp->type = VT_DATA;
-	vp->length = talloc_array_length(vp->vp_strvalue) - 1;
+	vp->vp_length = talloc_array_length(vp->vp_strvalue) - 1;
 	pairtypeset(vp);
 }
 
@@ -2850,11 +2031,14 @@ void pairstrcpy(VALUE_PAIR *vp, char const *src)
 
 	vp->vp_strvalue = p;
 	vp->type = VT_DATA;
-	vp->length = talloc_array_length(vp->vp_strvalue) - 1;
+	vp->vp_length = talloc_array_length(vp->vp_strvalue) - 1;
 	pairtypeset(vp);
 }
 
 /** Copy data into an "string" data type.
+ *
+ * @note unlike the original strncpy, this function does not stop
+ *	if it finds \0 bytes embedded in the string.
  *
  * @param[in,out] vp to update.
  * @param[in] src data to copy.
@@ -2877,89 +2061,8 @@ void pairstrncpy(VALUE_PAIR *vp, char const *src, size_t len)
 
 	vp->vp_strvalue = p;
 	vp->type = VT_DATA;
-	vp->length = len;
+	vp->vp_length = len;
 	pairtypeset(vp);
-}
-
-/** Copy data from one VP to another
- *
- * Allocate a new pair using da, and copy over the value from the specified vp.
- *
- * @todo Should be able to do type conversions.
- *
- * @param[in,out] vp to update.
- * @param[in] da Type of data represented by data.
- * @param[in] data to copy.
- * @param[in] len of data to copy.
- */
-int pairdatacpy(VALUE_PAIR *vp, DICT_ATTR const *da, value_data_t const *data, size_t len)
-{
-	void *old;
-	VERIFY_VP(vp);
-
-	/*
-	 *	The da->types have to be identical, OR the "from" da->type has
-	 *	to be octets.
-	 */
-	if (vp->da->type != da->type) {
-		/*
-		 *	Decode the octets buffer using the RADIUS decoder.
-		 */
-		if (da->type == PW_TYPE_OCTETS) {
-			if (data2vp(vp, NULL, NULL, NULL, vp->da, data->octets, len, len, &vp) < 0) return -1;
-			vp->type = VT_DATA;
-			return 0;
-		}
-
-		/*
-		 *	Else if the destination da->type is octets
-		 */
-		if (vp->da->type == PW_TYPE_OCTETS) {
-			int ret;
-			uint8_t *buff;
-			VALUE_PAIR const *pvp = vp;
-
-			buff = talloc_array(vp, uint8_t, dict_attr_sizes[da->type][1] + 2);
-
-			ret = rad_vp2rfc(NULL, NULL, NULL, &pvp, buff, dict_attr_sizes[da->type][1]);
-			if (ret < 0) return -1;
-
-			pairmemcpy(vp, buff + 2, ret - 2);
-			talloc_free(buff);
-
-			return 0;
-		}
-
-		/*
-		 *	Fixme...
-		 */
-		fr_strerror_printf("Data conversion not supported");
-		return -1;
-	}
-
-	/*
-	 *	Clear existing value if there is one
-	 */
-	memcpy(&old, &vp->data.ptr, sizeof(old));
-	talloc_free(old);
-
-	switch (vp->da->type) {
-	case PW_TYPE_TLV:
-	case PW_TYPE_OCTETS:
-		pairmemcpy(vp, data->octets, len);
-		break;
-
-	case PW_TYPE_STRING:
-		pairstrncpy(vp, data->strvalue, len);
-		break;
-
-	default:
-		memcpy(&vp->data, data, sizeof(vp->data));
-		break;
-	}
-	vp->length = len;
-
-	return 0;
 }
 
 /** Print data into an "string" data type.
@@ -2986,7 +2089,7 @@ void pairsprintf(VALUE_PAIR *vp, char const *fmt, ...)
 	vp->vp_strvalue = p;
 	vp->type = VT_DATA;
 
-	vp->length = talloc_array_length(vp->vp_strvalue) - 1;
+	vp->vp_length = talloc_array_length(vp->vp_strvalue) - 1;
 	pairtypeset(vp);
 }
 

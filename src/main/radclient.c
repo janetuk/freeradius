@@ -61,7 +61,7 @@ static int sockfd;
 static int last_used_id = -1;
 
 #ifdef WITH_TCP
-char const *proto = NULL;
+static char const *proto = NULL;
 #endif
 static int ipproto = IPPROTO_UDP;
 
@@ -73,9 +73,7 @@ static int sleep_time = -1;
 static rc_request_t *request_head = NULL;
 static rc_request_t *rc_request_tail = NULL;
 
-static int rc_debug_flag;
-
-char const *radclient_version = "radclient version " RADIUSD_VERSION_STRING
+static char const *radclient_version = "radclient version " RADIUSD_VERSION_STRING
 #ifdef RADIUSD_VERSION_COMMIT
 " (git #" STRINGIFY(RADIUSD_VERSION_COMMIT) ")"
 #endif
@@ -169,9 +167,9 @@ static int mschapv1_encode(RADIUS_PACKET *packet, VALUE_PAIR **request,
 	}
 
 	pairadd(request, challenge);
-	challenge->length = 8;
-	challenge->vp_octets = p = talloc_array(challenge, uint8_t, challenge->length);
-	for (i = 0; i < challenge->length; i++) {
+	challenge->vp_length = 8;
+	challenge->vp_octets = p = talloc_array(challenge, uint8_t, challenge->vp_length);
+	for (i = 0; i < challenge->vp_length; i++) {
 		p[i] = fr_rand();
 	}
 
@@ -181,9 +179,9 @@ static int mschapv1_encode(RADIUS_PACKET *packet, VALUE_PAIR **request,
 	}
 
 	pairadd(request, reply);
-	reply->length = 50;
-	reply->vp_octets = p = talloc_array(reply, uint8_t, reply->length);
-	memset(p, 0, reply->length);
+	reply->vp_length = 50;
+	reply->vp_octets = p = talloc_array(reply, uint8_t, reply->vp_length);
+	memset(p, 0, reply->vp_length);
 
 	p[1] = 0x01; /* NT hash */
 
@@ -198,12 +196,10 @@ static int mschapv1_encode(RADIUS_PACKET *packet, VALUE_PAIR **request,
 
 static int getport(char const *name)
 {
-	struct	servent *svp;
+	struct servent *svp;
 
 	svp = getservbyname(name, "udp");
-	if (!svp) {
-		return 0;
-	}
+	if (!svp) return 0;
 
 	return ntohs(svp->s_port);
 }
@@ -246,6 +242,13 @@ static void radclient_get_port(PW_CODE type, uint16_t *port)
  */
 static PW_CODE radclient_get_code(uint16_t port)
 {
+	/*
+	 *	getport returns 0 if the service doesn't exist
+	 *	so we need to return early, to avoid incorrect
+	 *	codes.
+	 */
+	if (port == 0) return PW_CODE_UNDEFINED;
+
 	if ((port == getport("radius")) || (port == PW_AUTH_UDP_PORT) || (port == PW_AUTH_UDP_PORT_ALT)) {
 		return PW_CODE_ACCESS_REQUEST;
 	}
@@ -334,8 +337,16 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 		/*
 		 *	Read the request VP's.
 		 */
-		if (readvp2(&request->packet->vps, request->packet, packets, &packets_done) < 0) {
-			REDEBUG("Error parsing \"%s\"", files->packets);
+		if (readvp2(request->packet, &request->packet->vps, packets, &packets_done) < 0) {
+			char const *input;
+
+			if ((files->packets[0] == '-') && (files->packets[1] == '\0')) {
+				input = "stdin";
+			} else {
+				input = files->packets;
+			}
+
+			REDEBUG("Error parsing \"%s\"", input);
 			goto error;
 		}
 
@@ -353,7 +364,7 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 		if (filters) {
 			bool filters_done;
 
-			if (readvp2(&request->filter, request, filters, &filters_done) < 0) {
+			if (readvp2(request, &request->filter, filters, &filters_done) < 0) {
 				REDEBUG("Error parsing \"%s\"", files->filters);
 				goto error;
 			}
@@ -379,7 +390,7 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 				if (vp->type == VT_XLAT) {
 					vp->type = VT_DATA;
 					vp->vp_strvalue = vp->value.xlat;
-					vp->length = talloc_array_length(vp->vp_strvalue) - 1;
+					vp->vp_length = talloc_array_length(vp->vp_strvalue) - 1;
 				}
 
 				if (vp->da->vendor == 0 ) switch (vp->da->attr) {
@@ -414,7 +425,7 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 			if (vp->type == VT_XLAT) {
 				vp->type = VT_DATA;
 				vp->vp_strvalue = vp->value.xlat;
-				vp->length = talloc_array_length(vp->vp_strvalue) - 1;
+				vp->vp_length = talloc_array_length(vp->vp_strvalue) - 1;
 			}
 
 			if (!vp->da->vendor) switch (vp->da->attr) {
@@ -440,25 +451,34 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 			case PW_PACKET_DST_IP_ADDRESS:
 				request->packet->dst_ipaddr.af = AF_INET;
 				request->packet->dst_ipaddr.ipaddr.ip4addr.s_addr = vp->vp_ipaddr;
+				request->packet->dst_ipaddr.prefix = 32;
 				break;
 
 			case PW_PACKET_DST_IPV6_ADDRESS:
 				request->packet->dst_ipaddr.af = AF_INET6;
 				request->packet->dst_ipaddr.ipaddr.ip6addr = vp->vp_ipv6addr;
+				request->packet->dst_ipaddr.prefix = 128;
 				break;
 
 			case PW_PACKET_SRC_PORT:
+				if ((vp->vp_integer < 1024) ||
+				    (vp->vp_integer > 65535)) {
+					ERROR("Invalid value '%u' for Packet-Src-Port", vp->vp_integer);
+					goto error;
+				}
 				request->packet->src_port = (vp->vp_integer & 0xffff);
 				break;
 
 			case PW_PACKET_SRC_IP_ADDRESS:
 				request->packet->src_ipaddr.af = AF_INET;
 				request->packet->src_ipaddr.ipaddr.ip4addr.s_addr = vp->vp_ipaddr;
+				request->packet->src_ipaddr.prefix = 32;
 				break;
 
 			case PW_PACKET_SRC_IPV6_ADDRESS:
 				request->packet->src_ipaddr.af = AF_INET6;
 				request->packet->src_ipaddr.ipaddr.ip6addr = vp->vp_ipv6addr;
+				request->packet->src_ipaddr.prefix = 128;
 				break;
 
 			case PW_DIGEST_REALM:
@@ -476,12 +496,12 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 				DICT_ATTR const *da;
 				uint8_t *p, *q;
 
-				p = talloc_array(vp, uint8_t, vp->length + 2);
+				p = talloc_array(vp, uint8_t, vp->vp_length + 2);
 
-				memcpy(p + 2, vp->vp_octets, vp->length);
+				memcpy(p + 2, vp->vp_octets, vp->vp_length);
 				p[0] = vp->da->attr - PW_DIGEST_REALM + 1;
-				vp->length += 2;
-				p[1] = vp->length;
+				vp->vp_length += 2;
+				p[1] = vp->vp_length;
 
 				da = dict_attrbyvalue(PW_DIGEST_ATTRIBUTES, 0);
 				if (!da) {
@@ -832,7 +852,7 @@ static int send_one_packet(rc_request_t *request)
 				 *	of the characters being 32..255 is (1-7/8)^17, or (1/8)^17,
 				 *	or 1/(2^51), which is pretty much zero.
 				 */
-				if (vp->length == 17) {
+				if (vp->vp_length == 17) {
 					for (i = 0; i < 17; i++) {
 						if (vp->vp_octets[i] < 32) {
 							already_hex = true;
@@ -859,7 +879,7 @@ static int send_one_packet(rc_request_t *request)
 							p,
 							fr_rand() & 0xff, vp);
 					vp->vp_octets = p;
-					vp->length = 17;
+					vp->vp_length = 17;
 				}
 			} else if (pairfind(request->packet->vps, PW_MS_CHAP_PASSWORD, 0, TAG_ANY) != NULL) {
 				mschapv1_encode(request->packet, &request->packet->vps, request->password);
@@ -871,16 +891,6 @@ static int send_one_packet(rc_request_t *request)
 		request->timestamp = time(NULL);
 		request->tries = 1;
 		request->resend++;
-
-#ifdef WITH_TCP
-		/*
-		 *	WTF?
-		 */
-		if (client_port == 0) {
-			client_ipaddr = request->packet->src_ipaddr;
-			client_port = request->packet->src_port;
-		}
-#endif
 
 	} else {		/* request->packet->id >= 0 */
 		time_t now = time(NULL);
@@ -948,6 +958,9 @@ static int send_one_packet(rc_request_t *request)
 	if (rad_send(request->packet, NULL, secret) < 0) {
 		REDEBUG("Failed to send packet for ID %d", request->packet->id);
 	}
+
+	fr_packet_header_print(fr_log_fp, request->packet, false);
+	if (fr_debug_flag > 0) vp_printlist(fr_log_fp, request->packet->vps);
 
 	return 0;
 }
@@ -1047,6 +1060,9 @@ static int recv_one_packet(int wait_time)
 		goto packet_done;
 	}
 
+	fr_packet_header_print(fr_log_fp, request->reply, true);
+	if (fr_debug_flag > 0) vp_printlist(fr_log_fp, request->reply->vps);
+
 	/*
 	 *	Increment counters...
 	 */
@@ -1126,7 +1142,6 @@ int main(int argc, char **argv)
 	 *	verbosity of library calls and the verbosity of
 	 *	radclient.
 	 */
-	rc_debug_flag = 1;
 	fr_debug_flag = 0;
 	fr_log_fp = stdout;
 
@@ -1150,7 +1165,7 @@ int main(int argc, char **argv)
 #ifdef WITH_TCP
 		"P:"
 #endif
-			   )) != EOF) switch(c) {
+			   )) != EOF) switch (c) {
 		case '4':
 			force_af = AF_INET;
 			break;
@@ -1294,17 +1309,14 @@ int main(int argc, char **argv)
 		case 'v':
 			DEBUG("%s", radclient_version);
 			exit(0);
-			break;
 
 		case 'x':
 			fr_debug_flag++;
-			rc_debug_flag++;
 			break;
 
 		case 'h':
 		default:
 			usage();
-			break;
 	}
 	argc -= (optind - 1);
 	argv += (optind - 1);
@@ -1392,7 +1404,6 @@ int main(int argc, char **argv)
 		 */
 		if (packet_code == PW_CODE_UNDEFINED) packet_code = radclient_get_code(server_port);
 	}
-
 	radclient_get_port(packet_code, &server_port);
 
 	/*
@@ -1436,11 +1447,12 @@ int main(int argc, char **argv)
 	if (request_head->packet->src_ipaddr.af == AF_UNSPEC) {
 		memset(&client_ipaddr, 0, sizeof(client_ipaddr));
 		client_ipaddr.af = server_ipaddr.af;
-		client_port = 0;
 	} else {
 		client_ipaddr = request_head->packet->src_ipaddr;
-		client_port = request_head->packet->src_port;
 	}
+
+	client_port = request_head->packet->src_port;
+
 #ifdef WITH_TCP
 	if (proto) {
 		sockfd = fr_tcp_client_socket(NULL, &server_ipaddr, server_port);

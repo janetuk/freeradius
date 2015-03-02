@@ -1,7 +1,8 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 if the
- *   License as published by the Free Software Foundation.
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -152,7 +153,7 @@ static home_server_t *srvr_blk_to_home_server(TALLOC_CTX *ctx,
 
 	rad_assert(blk != NULL);
 	tid_srvr_get_address(blk, &sa, &sa_len);
-	switch(sa->sa_family) {
+	switch (sa->sa_family) {
 
 	case AF_INET: {
 		const struct sockaddr_in *sin = (const struct sockaddr_in *) sa;
@@ -194,8 +195,8 @@ static home_server_t *srvr_blk_to_home_server(TALLOC_CTX *ctx,
 	hs->type = HOME_TYPE_AUTH;
 	hs->ipaddr = home_server_ip;
 	hs->src_ipaddr.af = home_server_ip.af;
-	hs->name = talloc_asprintf(hs, "%s-for-%s", nametemp, realm_name);
-	hs->hostname = talloc_strdup(hs, nametemp);
+	hs->log_name = talloc_asprintf(hs, "%s-for-%s", nametemp, realm_name);
+	hs->name = talloc_strdup(hs, nametemp);
 	hs->port = port;
 	hs->proto = IPPROTO_TCP;
 	hs->secret = talloc_strdup(hs, "radsec");

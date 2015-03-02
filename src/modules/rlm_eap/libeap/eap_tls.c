@@ -363,7 +363,7 @@ static fr_tls_status_t eaptls_verify(eap_handler_t *handler)
 	 *	We send TLS_START, but do not receive it.
 	 */
 	if (TLS_START(eaptls_packet->flags)) {
-		RDEBUG("Received unexpected EAP-TLS Start message");
+		REDEBUG("Received unexpected EAP-TLS Start message");
 		return FR_TLS_INVALID;
 	}
 
@@ -381,7 +381,7 @@ static fr_tls_status_t eaptls_verify(eap_handler_t *handler)
 	 *	from a fragment acknowledgement.
 	 */
 	if (TLS_LENGTH_INCLUDED(eaptls_packet->flags)) {
-		DEBUG2("  TLS Length %d",
+		RDEBUG2("TLS Length %d",
 		       eaptls_packet->data[2] * 256 | eaptls_packet->data[3]);
 		if (TLS_MORE_FRAGMENTS(eaptls_packet->flags)) {
 			/*
@@ -422,17 +422,17 @@ static fr_tls_status_t eaptls_verify(eap_handler_t *handler)
 
 /*
  * EAPTLS_PACKET
- * code   =  EAP-code
- * id     =  EAP-id
- * length = code + id + length + flags + tlsdata
- *	=  1   +  1 +   2    +  1    +  X
- * length = EAP-length - 1(EAP-Type = 1 octet)
- * flags  = EAP-typedata[0] (1 octet)
- * dlen   = EAP-typedata[1-4] (4 octets), if L flag set
- *	= length - 5(code+id+length+flags), otherwise
- * data   = EAP-typedata[5-n], if L flag set
- *	= EAP-typedata[1-n], otherwise
- * packet = EAP-typedata (complete typedata)
+ * code    = EAP-code
+ * id      = EAP-id
+ * length  = code + id + length + flags + tlsdata
+ *	   =  1   +  1 +   2    +  1    +  X
+ * length  = EAP-length - 1(EAP-Type = 1 octet)
+ * flags   = EAP-typedata[0] (1 octet)
+ * dlen    = EAP-typedata[1-4] (4 octets), if L flag set
+ *	   = length - 5(code+id+length+flags), otherwise
+ * data    = EAP-typedata[5-n], if L flag set
+ *	   = EAP-typedata[1-n], otherwise
+ * packet  = EAP-typedata (complete typedata)
  *
  * Points to consider during EAP-TLS data extraction
  * 1. In the received packet, No data will be present incase of ACK-NAK
@@ -937,7 +937,7 @@ fr_tls_server_conf_t *eaptls_conf_parse(CONF_SECTION *cs, char const *attr)
 
 	rad_assert(attr != NULL);
 
-	parent = cf_item_parent(cf_sectiontoitem(cs));
+	parent = cf_item_parent(cf_section_to_item(cs));
 
 	cp = cf_pair_find(cs, attr);
 	if (cp) {

@@ -10,9 +10,18 @@
 #ifndef _RLM_LDAP_H
 #define _RLM_LDAP_H
 
-#include	<freeradius-devel/radiusd.h>
-#include	<freeradius-devel/modules.h>
-#include	<ldap.h>
+#include <freeradius-devel/radiusd.h>
+#include <freeradius-devel/modules.h>
+
+/*
+ *	We're mostly using the new API now, but ldap_bind
+ *	is in the list of deprecated functions, at we may
+ *	always need to support that.
+ */
+#define LDAP_DEPRECATED 1
+#include <lber.h>
+#include <ldap.h>
+#include "config.h"
 
 /*
  *      For compatibility with other LDAP libraries
@@ -63,14 +72,15 @@ typedef struct ldap_instance {
 	CONF_SECTION	*cs;				//!< Main configuration section for this instance.
 	fr_connection_pool_t *pool;			//!< Connection pool instance.
 
-	char const	*server;			//!< Initial server to bind to.
-	int		is_url;				//!< Whether ldap_is_ldap_url says 'server' is an
-							//!< ldap[s]:// url.
+	char const     	*config_server;			//!< server from the config files
+	char		*server;			//!< Initial server to bind to.
 	uint16_t	port;				//!< Port to use when binding to the server.
 
 	char const	*admin_dn;			//!< DN we bind as when we need to query the LDAP
 							//!< directory.
 	char const	*password;			//!< Password used in administrative bind.
+
+	char const	*admin_sasl_mech;		//!< SASL mechanism to use for administrative binds.
 
 	char const	*dereference_str;		//!< When to dereference (never, searching, finding, always)
 	int		dereference;			//!< libldap value specifying dereferencing behaviour.
@@ -101,8 +111,9 @@ typedef struct ldap_instance {
 	/*
 	 *	User object attributes and filters
 	 */
-	char const	*userobj_filter;		//!< Filter to retrieve only user objects.
-	char const	*userobj_base_dn;		//!< DN to search for users under.
+	char const	*user_sasl_mech;		//!< SASL mechanism to use for user binds.
+	value_pair_tmpl_t *userobj_filter;		//!< Filter to retrieve only user objects.
+	value_pair_tmpl_t *userobj_base_dn;		//!< DN to search for users under.
 	char const	*userobj_scope_str;		//!< Scope (sub, one, base).
 	int		userobj_scope;			//!< Search scope.
 
@@ -119,7 +130,7 @@ typedef struct ldap_instance {
 	 */
 
 	char const	*groupobj_filter;		//!< Filter to retrieve only group objects.
-	char const	*groupobj_base_dn;		//!< DN to search for users under.
+	value_pair_tmpl_t *groupobj_base_dn;		//!< DN to search for users under.
 	char const	*groupobj_scope_str;		//!< Scope (sub, one, base).
 	int		groupobj_scope;			//!< Search scope.
 
@@ -140,10 +151,10 @@ typedef struct ldap_instance {
 	char const	*cache_attribute;		//!< Sets the attribute we use when creating and retrieving
 							//!< cached group memberships.
 
-	DICT_ATTR const	*cache_da;			//!< The DA associated with this specific version of the
+	DICT_ATTR const	*cache_da;			//!< The DA associated with this specific instance of the
 							//!< rlm_ldap module.
 
-	DICT_ATTR const	*group_da;			//!< The DA associated with this specific version of the
+	DICT_ATTR const	*group_da;			//!< The DA associated with this specific instance of the
 							//!< rlm_ldap module.
 
 	/*
@@ -154,25 +165,18 @@ typedef struct ldap_instance {
 	char const	*clientobj_scope_str;		//!< Scope (sub, one, base).
 	int		clientobj_scope;		//!< Search scope.
 
-	char const	*clientobj_identifier;		//!< IP/FQDN/IP Prefix for the NAS.
-	char const	*clientobj_shortname;		//!< Short/Friendly name to assign.
-	char const	*clientobj_type;		//!< Type of NAS (not usually used).
-	char const	*clientobj_secret;		//!< RADIUS secret.
-	char const	*clientobj_server;		//!< Virtual server to associate the client with.
-	char const	*clientobj_require_ma;		//!< Require message-authenticator.
-
 	bool		do_clients;			//!< If true, attempt to load clients on instantiation.
 
 	/*
 	 *	Profiles
 	 */
-	char const	*default_profile;		//!< If this is set, we will search for a profile object
+	value_pair_tmpl_t *default_profile;		//!< If this is set, we will search for a profile object
 							//!< with this name, and map any attributes it contains.
 							//!< No value should be set if profiles are not being used
 							//!< as there is an associated performance penalty.
 	char const	*profile_attr;			//!< Attribute that identifies profiles to apply. May appear
 							//!< in userobj or groupobj.
-	char const	*profile_filter;		//!< Filter to retrieve only retrieve group objects.
+	value_pair_tmpl_t *profile_filter;		//!< Filter to retrieve only retrieve group objects.
 
 	/*
 	 *	Accounting
@@ -211,7 +215,6 @@ typedef struct ldap_instance {
 	/*
 	 *	Options
 	 */
-
 	uint32_t  	net_timeout;			//!< How long we wait for new connections to the LDAP server
 							//!< to be established.
 	uint32_t	res_timeout;			//!< How long we wait for a result from the server.
@@ -242,6 +245,7 @@ typedef struct ldap_instance {
 	uint32_t	keepalive_interval;		//!< Interval between keepalive probes.
 #endif
 
+	LDAP		*handle;			//!< Hack for OpenLDAP libldap global initialisation.
 } ldap_instance_t;
 
 typedef struct ldap_handle {
@@ -319,12 +323,14 @@ extern FR_NAME_NUMBER const ldap_tls_require_cert[];
  */
 size_t rlm_ldap_escape_func(UNUSED REQUEST *request, char *out, size_t outlen, char const *in, UNUSED void *arg);
 
-int rlm_ldap_is_dn(char const *str);
+bool rlm_ldap_is_dn(char const *in, size_t inlen);
+
+size_t rlm_ldap_normalise_dn(char *out, char const *in);
 
 ssize_t rlm_ldap_xlat_filter(REQUEST *request, char const **sub, size_t sublen, char *out, size_t outlen);
 
 ldap_rcode_t rlm_ldap_bind(ldap_instance_t const *inst, REQUEST *request, ldap_handle_t **pconn, char const *dn,
-			  char const *password, bool retry);
+			   char const *password, char const *sasl_mech, bool retry);
 
 char const *rlm_ldap_error_str(ldap_handle_t const *conn);
 
@@ -346,16 +352,17 @@ void rlm_ldap_check_reply(ldap_instance_t const *inst, REQUEST *request);
 /*
  *	ldap.c - Callbacks for the connection pool API.
  */
+char *rlm_ldap_berval_to_string(TALLOC_CTX *ctx, struct berval const *in);
+
 void *mod_conn_create(TALLOC_CTX *ctx, void *instance);
 
-ldap_handle_t *rlm_ldap_get_socket(ldap_instance_t const *inst, REQUEST *request);
+ldap_handle_t *mod_conn_get(ldap_instance_t const *inst, REQUEST *request);
 
-void rlm_ldap_release_socket(ldap_instance_t const *inst, ldap_handle_t *conn);
+void mod_conn_release(ldap_instance_t const *inst, ldap_handle_t *conn);
 
 /*
  *	groups.c - Group membership functions.
  */
-
 rlm_rcode_t rlm_ldap_cacheable_userobj(ldap_instance_t const *inst, REQUEST *request, ldap_handle_t **pconn,
 				       LDAPMessage *entry, char const *attr);
 
@@ -372,14 +379,14 @@ rlm_rcode_t rlm_ldap_check_cached(ldap_instance_t const *inst, REQUEST *request,
 /*
  *	attrmap.c - Attribute mapping code.
  */
-int rlm_ldap_map_verify(ldap_instance_t *inst, value_pair_map_t **head);
+int rlm_ldap_map_verify(value_pair_map_t *map, void *instance);
 
 void rlm_ldap_map_xlat_free(rlm_ldap_map_xlat_t const *expanded);
 
 int rlm_ldap_map_xlat(REQUEST *request, value_pair_map_t const *maps, rlm_ldap_map_xlat_t *expanded);
 
-void rlm_ldap_map_do(ldap_instance_t const *inst, REQUEST *request, LDAP *handle,
-		     rlm_ldap_map_xlat_t const *expanded, LDAPMessage *entry);
+int rlm_ldap_map_do(ldap_instance_t const *inst, REQUEST *request, LDAP *handle,
+		    rlm_ldap_map_xlat_t const *expanded, LDAPMessage *entry);
 
 rlm_rcode_t rlm_ldap_map_profile(ldap_instance_t const *inst, REQUEST *request, ldap_handle_t **pconn,
 				 char const *profile, rlm_ldap_map_xlat_t const *expanded);
@@ -387,7 +394,7 @@ rlm_rcode_t rlm_ldap_map_profile(ldap_instance_t const *inst, REQUEST *request, 
 /*
  *	clients.c - Dynamic clients (bulk load).
  */
-int  rlm_ldap_load_clients(ldap_instance_t const *inst);
+int  rlm_ldap_client_load(ldap_instance_t const *inst, CONF_SECTION *cs);
 
 /*
  *	edir.c - Magic extensions for Novell

@@ -51,6 +51,7 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 #include <openssl/ocsp.h>
 #endif
 
+#ifdef ENABLE_OPENSSL_VERSION_CHECK
 typedef struct libssl_defect {
 	uint64_t	high;
 	uint64_t	low;
@@ -71,6 +72,13 @@ static libssl_defect_t libssl_defects[] =
 		.comment	= "For more information see http://heartbleed.com"
 	}
 };
+#endif
+
+/* index we use to store cached session VPs
+ * needs to be dynamic so we can supply a "free" function
+ */
+static int fr_tls_ex_index_vps = -1;
+int fr_tls_ex_index_certs = -1;
 
 /* record */
 static void 		record_init(record_t *buf);
@@ -160,8 +168,11 @@ static unsigned int psk_server_callback(SSL *ssl, const char *identity,
 		return fr_hex2bin(psk, max_psk_len, buffer, hex_len);
 	}
 
-	if (!conf->psk_identity)
+	if (!conf->psk_identity) {
+		DEBUG("No static PSK identity set.  Rejecting the user");
 		return 0;
+	}
+
 	/*
 	 *	No REQUEST, or no dynamic query.  Just look for a
 	 *	static identity.
@@ -305,7 +316,10 @@ tls_session_t *tls_new_session(TALLOC_CTX *ctx, fr_tls_server_conf_t *conf, REQU
 	/* We use the SSL's "app_data" to indicate a call-back */
 	SSL_set_app_data(new_tls, NULL);
 
-	state = talloc_zero(ctx, tls_session_t);
+	if ((state = talloc_zero(ctx, tls_session_t)) == NULL) {
+		ERROR("SSL: Error allocating memory for SSL state");
+		return NULL;
+	}
 	session_init(state);
 	talloc_set_destructor(state, _tls_session_free);
 
@@ -380,9 +394,7 @@ tls_session_t *tls_new_session(TALLOC_CTX *ctx, fr_tls_server_conf_t *conf, REQU
 		state->offset = vp->vp_integer;
 	}
 
-	if (conf->session_cache_enable) {
-		state->allow_session_resumption = 1; /* otherwise it's zero */
-	}
+	if (conf->session_cache_enable) state->allow_session_resumption = true; /* otherwise it's false */
 
 	RDEBUG2("Initiate");
 
@@ -404,7 +416,7 @@ static int int_ssl_check(REQUEST *request, SSL *s, int ret, char const *text)
 	}
 	e = SSL_get_error(s, ret);
 
-	switch(e) {
+	switch (e) {
 		/*
 		 *	These seem to be harmless and already "dealt
 		 *	with" by our non-blocking environment. NB:
@@ -912,7 +924,7 @@ static CONF_PARSER ocsp_config[] = {
 	{ "url", FR_CONF_OFFSET(PW_TYPE_STRING, fr_tls_server_conf_t, ocsp_url), NULL },
 	{ "use_nonce", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_tls_server_conf_t, ocsp_use_nonce), "yes" },
 	{ "timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER, fr_tls_server_conf_t, ocsp_timeout), "yes" },
-	{ "softfail", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_tls_server_conf_t, ocsp_softfail), "yes" },
+	{ "softfail", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_tls_server_conf_t, ocsp_softfail), "no" },
 	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
 };
 #endif
@@ -953,6 +965,9 @@ static CONF_PARSER tls_server_config[] = {
 #endif
 #endif
 
+	{ "disable_tlsv1_1", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_tls_server_conf_t, disable_tlsv1_1), NULL },
+	{ "disable_tlsv1_2", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_tls_server_conf_t, disable_tlsv1_2), NULL },
+
 	{ "cache", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) cache_config },
 
 	{ "verify", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) verify_config },
@@ -992,6 +1007,13 @@ static CONF_PARSER tls_client_config[] = {
 #endif
 #endif
 
+#ifdef SSL_OP_NO_TLSv1_1
+	{ "disable_tlsv1_1", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_tls_server_conf_t, disable_tlsv1_1), NULL },
+#endif
+#ifdef SSL_OP_NO_TLSv1_2
+	{ "disable_tlsv1_2", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, fr_tls_server_conf_t, disable_tlsv1_2), NULL },
+#endif
+
 	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
 };
 
@@ -1029,30 +1051,6 @@ static int load_dh_params(SSL_CTX *ctx, char *file)
 	return 0;
 }
 
-
-/*
- *	Generate ephemeral RSA keys.
- */
-static int generate_eph_rsa_key(SSL_CTX *ctx)
-{
-	RSA *rsa;
-
-	rsa = RSA_generate_key(512, RSA_F4, NULL, NULL);
-
-	if (!SSL_CTX_set_tmp_rsa(ctx, rsa)) {
-		ERROR("tls: Couldn't set ephemeral RSA key");
-		return -1;
-	}
-
-	RSA_free(rsa);
-	return 0;
-}
-
-/* index we use to store cached session VPs
- * needs to be dynamic so we can supply a "free" function
- */
-int fr_tls_ex_index_vps = -1;
-int fr_tls_ex_index_certs = -1;
 
 /*
  *	Print debugging messages, and free data.
@@ -1315,6 +1313,7 @@ static int ocsp_check(X509_STORE *store, X509 *issuer_cert, X509 *client_cert,
 	char *host = NULL;
 	char *port = NULL;
 	char *path = NULL;
+	char hostheader[1024];
 	int use_ssl = -1;
 	long nsec = MAX_VALIDITY_PERIOD, maxage = -1;
 	BIO *cbio, *bio_out;
@@ -1363,6 +1362,13 @@ static int ocsp_check(X509_STORE *store, X509 *issuer_cert, X509 *client_cert,
 
 	DEBUG2("[ocsp] --> Responder URL = http://%s:%s%s", host, port, path);
 
+	/* Check host and port length are sane, then create Host: HTTP header */
+	if ((strlen(host) + strlen(port) + 2) > sizeof(hostheader)) {
+		ERROR("OCSP Host and port too long");
+		goto ocsp_skip;
+	}
+	snprintf(hostheader, sizeof(hostheader), "%s:%s", host, port);
+
 	/* Setup BIO socket to OCSP responder */
 	cbio = BIO_new_connect(host);
 
@@ -1397,9 +1403,21 @@ static int ocsp_check(X509_STORE *store, X509 *issuer_cert, X509 *client_cert,
 		goto ocsp_end;
 	}
 
-	ctx = OCSP_sendreq_new(cbio, path, req, -1);
+	ctx = OCSP_sendreq_new(cbio, path, NULL, -1);
 	if (!ctx) {
-		ERROR("Couldn't send OCSP request");
+		ERROR("Couldn't create OCSP request");
+		ocsp_ok = 2;
+		goto ocsp_end;
+	}
+
+	if (!OCSP_REQ_CTX_add1_header(ctx, "Host", hostheader)) {
+		ERROR("Couldn't set Host header");
+		ocsp_ok = 2;
+		goto ocsp_end;
+	}
+
+	if (!OCSP_REQ_CTX_set1_req(ctx, req)) {
+		ERROR("Couldn't add data to OCSP request");
 		ocsp_ok = 2;
 		goto ocsp_end;
 	}
@@ -1603,6 +1621,7 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 	X509_STORE *ocsp_store = NULL;
 	X509 *issuer_cert;
 #endif
+	VALUE_PAIR *vp;
 	TALLOC_CTX *talloc_ctx;
 
 	client_cert = X509_STORE_CTX_get_current_cert(ctx);
@@ -1642,6 +1661,9 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 	buf[0] = '\0';
 	sn = X509_get_serialNumber(client_cert);
 
+	RDEBUG2("TLS Verify adding attributes");
+	RINDENT();
+
 	/*
 	 *	For this next bit, we create the attributes *only* if
 	 *	we're at the client or issuing certificate, AND we
@@ -1657,7 +1679,8 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 			sprintf(p, "%02x", (unsigned int)sn->data[i]);
 			p += 2;
 		}
-		pairmake(talloc_ctx, certs, cert_attr_names[FR_TLS_SERIAL][lookup], buf, T_OP_SET);
+		vp = pairmake(talloc_ctx, certs, cert_attr_names[FR_TLS_SERIAL][lookup], buf, T_OP_SET);
+		rdebug_pair(L_DBG_LVL_2, request, vp, "&request:");
 	}
 
 
@@ -1670,7 +1693,8 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 	    (asn_time->length < (int) sizeof(buf))) {
 		memcpy(buf, (char*) asn_time->data, asn_time->length);
 		buf[asn_time->length] = '\0';
-		pairmake(talloc_ctx, certs, cert_attr_names[FR_TLS_EXPIRATION][lookup], buf, T_OP_SET);
+		vp = pairmake(talloc_ctx, certs, cert_attr_names[FR_TLS_EXPIRATION][lookup], buf, T_OP_SET);
+		rdebug_pair(L_DBG_LVL_2, request, vp, "&request:");
 	}
 
 	/*
@@ -1681,14 +1705,16 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 			  sizeof(subject));
 	subject[sizeof(subject) - 1] = '\0';
 	if (certs && identity && (lookup <= 1) && subject[0]) {
-		pairmake(talloc_ctx, certs, cert_attr_names[FR_TLS_SUBJECT][lookup], subject, T_OP_SET);
+		vp = pairmake(talloc_ctx, certs, cert_attr_names[FR_TLS_SUBJECT][lookup], subject, T_OP_SET);
+		rdebug_pair(L_DBG_LVL_2, request, vp, "&request:");
 	}
 
 	X509_NAME_oneline(X509_get_issuer_name(ctx->current_cert), issuer,
 			  sizeof(issuer));
 	issuer[sizeof(issuer) - 1] = '\0';
 	if (certs && identity && (lookup <= 1) && issuer[0]) {
-		pairmake(talloc_ctx, certs, cert_attr_names[FR_TLS_ISSUER][lookup], issuer, T_OP_SET);
+		vp = pairmake(talloc_ctx, certs, cert_attr_names[FR_TLS_ISSUER][lookup], issuer, T_OP_SET);
+		rdebug_pair(L_DBG_LVL_2, request, vp, "&request:");
 	}
 
 	/*
@@ -1698,7 +1724,8 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 				  NID_commonName, common_name, sizeof(common_name));
 	common_name[sizeof(common_name) - 1] = '\0';
 	if (certs && identity && (lookup <= 1) && common_name[0] && subject[0]) {
-		pairmake(talloc_ctx, certs, cert_attr_names[FR_TLS_CN][lookup], common_name, T_OP_SET);
+		vp = pairmake(talloc_ctx, certs, cert_attr_names[FR_TLS_CN][lookup], common_name, T_OP_SET);
+		rdebug_pair(L_DBG_LVL_2, request, vp, "&request:");
 	}
 
 	/*
@@ -1718,14 +1745,16 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 				switch (name->type) {
 #ifdef GEN_EMAIL
 				case GEN_EMAIL:
-					pairmake(talloc_ctx, certs, cert_attr_names[FR_TLS_SAN_EMAIL][lookup],
-						 (char *) ASN1_STRING_data(name->d.rfc822Name), T_OP_SET);
+					vp = pairmake(talloc_ctx, certs, cert_attr_names[FR_TLS_SAN_EMAIL][lookup],
+						      (char *) ASN1_STRING_data(name->d.rfc822Name), T_OP_SET);
+					rdebug_pair(L_DBG_LVL_2, request, vp, "&request:");
 					break;
 #endif	/* GEN_EMAIL */
 #ifdef GEN_DNS
 				case GEN_DNS:
-					pairmake(talloc_ctx, certs, cert_attr_names[FR_TLS_SAN_DNS][lookup],
-						 (char *) ASN1_STRING_data(name->d.dNSName), T_OP_SET);
+					vp = pairmake(talloc_ctx, certs, cert_attr_names[FR_TLS_SAN_DNS][lookup],
+						      (char *) ASN1_STRING_data(name->d.dNSName), T_OP_SET);
+					rdebug_pair(L_DBG_LVL_2, request, vp, "&request:");
 					break;
 #endif	/* GEN_DNS */
 #ifdef GEN_OTHERNAME
@@ -1734,11 +1763,12 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 					if (NID_ms_upn == OBJ_obj2nid(name->d.otherName->type_id)) {
 					    /* we've got a UPN - Must be ASN1-encoded UTF8 string */
 					    if (name->d.otherName->value->type == V_ASN1_UTF8STRING) {
-						pairmake(talloc_ctx, certs, cert_attr_names[FR_TLS_SAN_UPN][lookup],
-							 (char *) ASN1_STRING_data(name->d.otherName->value->value.utf8string), T_OP_SET);
+						    vp = pairmake(talloc_ctx, certs, cert_attr_names[FR_TLS_SAN_UPN][lookup],
+								  (char *) ASN1_STRING_data(name->d.otherName->value->value.utf8string), T_OP_SET);
+						    rdebug_pair(L_DBG_LVL_2, request, vp, "&request:");
 						break;
 					    } else {
-						RWARN("Invalid UPN in Subject Alt Name (should be UTF-8)\n");
+						RWARN("Invalid UPN in Subject Alt Name (should be UTF-8)");
 						break;
 					    }
 					}
@@ -1766,8 +1796,8 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 
 	if (!my_ok) {
 		char const *p = X509_verify_cert_error_string(err);
-		ERROR("--> verify error:num=%d:%s\n",err, p);
-		REDEBUG("SSL says error %d : %s", err, p);
+		RERROR("SSL says error %d : %s", err, p);
+		REXDENT();
 		return my_ok;
 	}
 
@@ -1793,7 +1823,6 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 		for (i = 0; i < sk_X509_EXTENSION_num(ext_list); i++) {
 			ASN1_OBJECT *obj;
 			X509_EXTENSION *ext;
-			VALUE_PAIR *vp;
 
 			ext = sk_X509_EXTENSION_value(ext_list, i);
 
@@ -1819,20 +1848,22 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 			}
 
 			vp = pairmake(talloc_ctx, certs, attribute, value, T_OP_ADD);
-			if (vp) debug_pair_list(vp);
+			rdebug_pair_list(L_DBG_LVL_2, request, vp, NULL);
 		}
 
 		BIO_free_all(out);
 	}
 
+	REXDENT();
+
 	switch (ctx->error) {
 	case X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT:
-		ERROR("issuer= %s\n", issuer);
+		RERROR("issuer=%s", issuer);
 		break;
 
 	case X509_V_ERR_CERT_NOT_YET_VALID:
 	case X509_V_ERR_ERROR_IN_CERT_NOT_BEFORE_FIELD:
-		ERROR("notBefore=");
+		RERROR("notBefore=");
 #if 0
 		ASN1_TIME_print(bio_err, X509_get_notBefore(ctx->current_cert));
 #endif
@@ -1840,7 +1871,7 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 
 	case X509_V_ERR_CERT_HAS_EXPIRED:
 	case X509_V_ERR_ERROR_IN_CERT_NOT_AFTER_FIELD:
-		ERROR("notAfter=");
+		RERROR("notAfter=");
 #if 0
 		ASN1_TIME_print(bio_err, X509_get_notAfter(ctx->current_cert));
 #endif
@@ -1884,10 +1915,11 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 #ifdef HAVE_OPENSSL_OCSP_H
 		if (my_ok && conf->ocsp_enable){
 			RDEBUG2("--> Starting OCSP Request");
-			if(X509_STORE_CTX_get1_issuer(&issuer_cert, ctx, client_cert)!=1) {
-				ERROR("Couldn't get issuer_cert for %s", common_name);
+			if (X509_STORE_CTX_get1_issuer(&issuer_cert, ctx, client_cert) != 1) {
+				RERROR("Couldn't get issuer_cert for %s", common_name);
+			} else {
+				my_ok = ocsp_check(ocsp_store, issuer_cert, client_cert, conf);
 			}
-			my_ok = ocsp_check(ocsp_store, issuer_cert, client_cert, conf);
 		}
 #endif
 
@@ -1928,8 +1960,9 @@ int cbtls_verify(int ok, X509_STORE_CTX *ctx)
 			}
 
 			RDEBUG("Verifying client certificate: %s", conf->verify_client_cert_cmd);
-			if (radius_exec_program(request, conf->verify_client_cert_cmd, true, true, NULL, 0,
-						EXEC_TIMEOUT, request->packet->vps, NULL) != 0) {
+			if (radius_exec_program(NULL, 0, NULL, request, conf->verify_client_cert_cmd,
+						request->packet->vps,
+						true, true, EXEC_TIMEOUT) != 0) {
 				AUTH("tls: Certificate CN (%s) fails external verification!", common_name);
 				my_ok = 0;
 			} else {
@@ -2035,7 +2068,7 @@ static void sess_free_vps(UNUSED void *parent, void *data_ptr,
 	VALUE_PAIR *vp = data_ptr;
 	if (!vp) return;
 
-	DEBUG2("  Freeing cached session VPs");;
+	DEBUG2("  Freeing cached session VPs");
 
 	pairfree(&vp);
 }
@@ -2063,8 +2096,14 @@ void tls_global_init(void)
 	SSL_library_init();		/* initialize library */
 	OpenSSL_add_all_algorithms();	/* required for SHA2 in OpenSSL < 0.9.8o and 1.0.0.a */
 	OPENSSL_config(NULL);
+
+	/*
+	 *	Initialize the index for the certificates.
+	 */
+	fr_tls_ex_index_certs = SSL_SESSION_get_ex_new_index(0, NULL, NULL, NULL, sess_free_certs);
 }
 
+#ifdef ENABLE_OPENSSL_VERSION_CHECK
 /** Check for vulnerable versions of libssl
  *
  * @param acknowledged The highest CVE number a user has confirmed is not present in the system's libssl.
@@ -2104,6 +2143,7 @@ int tls_global_version_check(char const *acknowledged)
 
 	return 0;
 }
+#endif
 
 /** Free any memory alloced by libssl
  *
@@ -2142,7 +2182,7 @@ SSL_CTX *tls_init_ctx(fr_tls_server_conf_t *conf, int client)
 	EVP_add_digest(EVP_sha256());
 #endif
 
-	ctx = SSL_CTX_new(TLSv1_method());
+	ctx = SSL_CTX_new(SSLv23_method()); /* which is really "all known SSL / TLS methods".  Idiots. */
 	if (!ctx) {
 		int err;
 		while ((err = ERR_get_error())) {
@@ -2234,7 +2274,12 @@ SSL_CTX *tls_init_ctx(fr_tls_server_conf_t *conf, int client)
 			return NULL;
 		}
 
-		SSL_CTX_set_psk_server_callback(ctx, psk_server_callback);
+		/*
+		 *	Set the callback only if we can check things.
+		 */
+		if (conf->psk_identity || conf->psk_query) {
+			SSL_CTX_set_psk_server_callback(ctx, psk_server_callback);
+		}
 
 	} else if (conf->psk_query) {
 		ERROR("Invalid PSK Configuration: psk_query cannot be used for outgoing connections");
@@ -2350,10 +2395,22 @@ post_ca:
 #endif
 
 	/*
-	 *	Set ctx_options
+	 *	We never want SSLv2 or SSLv3.
 	 */
 	ctx_options |= SSL_OP_NO_SSLv2;
 	ctx_options |= SSL_OP_NO_SSLv3;
+
+	/*
+	 *	As of 3.0.5, we always allow TLSv1.1 and TLSv1.2.
+	 *	Though they can be *globally* disabled if necessary.x
+	 */
+#ifdef SSL_OP_NO_TLSv1_1
+	if (conf->disable_tlsv1_1) ctx_options |= SSL_OP_NO_TLSv1_1;
+#endif
+#ifdef SSL_OP_NO_TLSv1_2
+	if (conf->disable_tlsv1_2) ctx_options |= SSL_OP_NO_TLSv1_2;
+#endif
+
 #ifdef SSL_OP_NO_TICKET
 	ctx_options |= SSL_OP_NO_TICKET ;
 #endif
@@ -2418,8 +2475,6 @@ post_ca:
 		SSL_CTX_set_quiet_shutdown(ctx, 1);
 		if (fr_tls_ex_index_vps < 0)
 			fr_tls_ex_index_vps = SSL_SESSION_get_ex_new_index(0, NULL, NULL, NULL, sess_free_vps);
-		if (fr_tls_ex_index_certs < 0)
-			fr_tls_ex_index_certs = SSL_SESSION_get_ex_new_index(0, NULL, NULL, NULL, sess_free_certs);
 	}
 
 	/*
@@ -2551,7 +2606,6 @@ static fr_tls_server_conf_t *tls_server_conf_alloc(TALLOC_CTX *ctx)
 	return conf;
 }
 
-
 fr_tls_server_conf_t *tls_server_conf_parse(CONF_SECTION *cs)
 {
 	fr_tls_server_conf_t *conf;
@@ -2615,10 +2669,6 @@ fr_tls_server_conf_t *tls_server_conf_parse(CONF_SECTION *cs)
 		}
 	}
 
-	if (generate_eph_rsa_key(conf->ctx) < 0) {
-		goto error;
-	}
-
 	if (conf->verify_tmp_dir) {
 		if (chmod(conf->verify_tmp_dir, S_IRWXU) < 0) {
 			ERROR("Failed changing permissions on %s: %s", conf->verify_tmp_dir, fr_syserror(errno));
@@ -2679,10 +2729,6 @@ fr_tls_server_conf_t *tls_client_conf_parse(CONF_SECTION *cs)
 		}
 	}
 
-	if (generate_eph_rsa_key(conf->ctx) < 0) {
-		goto error;
-	}
-
 	cf_data_add(cs, "tls-conf", conf, NULL);
 
 	return conf;
@@ -2709,11 +2755,11 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 	 *	user.
 	 */
 	if ((!ssn->allow_session_resumption) ||
-	    (((vp = pairfind(request->config_items, 1127, 0, TAG_ANY)) != NULL) &&
+	    (((vp = pairfind(request->config_items, PW_ALLOW_SESSION_RESUMPTION, 0, TAG_ANY)) != NULL) &&
 	     (vp->vp_integer == 0))) {
 		SSL_CTX_remove_session(ssn->ctx,
 				       ssn->ssl->session);
-		ssn->allow_session_resumption = 0;
+		ssn->allow_session_resumption = false;
 
 		/*
 		 *	If we're in a resumed session and it's
@@ -2723,11 +2769,10 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 			RDEBUG("FAIL: Forcibly stopping session resumption as it is not allowed");
 			return -1;
 		}
-
-		/*
-		 *	Else resumption IS allowed, so we store the
-		 *	user data in the cache.
-		 */
+	/*
+	 *	Else resumption IS allowed, so we store the
+	 *	user data in the cache.
+	 */
 	} else if (!SSL_session_reused(ssn->ssl)) {
 		size_t size;
 		VALUE_PAIR **certs;
@@ -2742,6 +2787,9 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 		if (vp) pairadd(&vps, vp);
 
 		vp = paircopy_by_num(talloc_ctx, request->packet->vps, PW_STRIPPED_USER_NAME, 0, TAG_ANY);
+		if (vp) pairadd(&vps, vp);
+
+		vp = paircopy_by_num(talloc_ctx, request->packet->vps, PW_STRIPPED_USER_DOMAIN, 0, TAG_ANY);
 		if (vp) pairadd(&vps, vp);
 
 		vp = paircopy_by_num(talloc_ctx, request->reply->vps, PW_CHARGEABLE_USER_IDENTITY, 0, TAG_ANY);
@@ -2765,19 +2813,18 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 
 		if (vps) {
 			RDEBUG2("Saving session %s vps %p in the cache", buffer, vps);
-			SSL_SESSION_set_ex_data(ssn->ssl->session,
-						fr_tls_ex_index_vps, vps);
+			SSL_SESSION_set_ex_data(ssn->ssl->session, fr_tls_ex_index_vps, vps);
 			if (conf->session_cache_path) {
 				/* write the VPs to the cache file */
 				char filename[256], buf[1024];
 				FILE *vp_file;
 
-				snprintf(filename, sizeof(filename), "%s%c%s.vps",
-					conf->session_cache_path, FR_DIR_SEP, buffer
-					);
+				snprintf(filename, sizeof(filename), "%s%c%s.vps", conf->session_cache_path,
+					 FR_DIR_SEP, buffer);
 				vp_file = fopen(filename, "w");
 				if (vp_file == NULL) {
-					RDEBUG2("Could not write session VPs to persistent cache: %s", fr_syserror(errno));
+					RDEBUG2("Could not write session VPs to persistent cache: %s",
+						fr_syserror(errno));
 				} else {
 					vp_cursor_t cursor;
 					/* generate a dummy user-style entry which is easy to read back */
@@ -2793,15 +2840,13 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 				}
 			}
 		} else {
-			RWDEBUG2("No information to cache: session caching will be disabled for session %s", buffer);
-			SSL_CTX_remove_session(ssn->ctx,
-					       ssn->ssl->session);
+			RDEBUG2("No information to cache: session caching will be disabled for session %s", buffer);
+			SSL_CTX_remove_session(ssn->ctx, ssn->ssl->session);
 		}
 
-		/*
-		 *	Else the session WAS allowed.  Copy the cached
-		 *	reply.
-		 */
+	/*
+	 *	Else the session WAS allowed.  Copy the cached reply.
+	 */
 	} else {
 		size_t size;
 		char buffer[2 * MAX_SESSION_SIZE + 1];
@@ -2811,18 +2856,15 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 
 		fr_bin2hex(buffer, ssn->ssl->session->session_id, size);
 
-		vps = SSL_SESSION_get_ex_data(ssn->ssl->session,
-					     fr_tls_ex_index_vps);
+		vps = SSL_SESSION_get_ex_data(ssn->ssl->session, fr_tls_ex_index_vps);
 		if (!vps) {
 			RWDEBUG("No information in cached session %s", buffer);
 			return -1;
-
 		} else {
 			vp_cursor_t cursor;
 
 			RDEBUG("Adding cached attributes for session %s:", buffer);
-			debug_pair_list(vps);
-
+			rdebug_pair_list(L_DBG_LVL_1, request, vps, NULL);
 			for (vp = fr_cursor_init(&cursor, &vps);
 			     vp;
 			     vp = fr_cursor_next(&cursor)) {
@@ -2831,13 +2873,11 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 				 *	the request list.
 				 */
 				if ((vp->da->vendor == 0) &&
-				    (vp->da->attr >= 1910) &&
-				    (vp->da->attr < 1929)) {
-					pairadd(&request->packet->vps,
-						paircopyvp(request->packet, vp));
+				    (vp->da->attr >= PW_TLS_CERT_SERIAL) &&
+				    (vp->da->attr <= PW_TLS_CLIENT_CERT_SUBJECT_ALT_NAME_UPN)) {
+					pairadd(&request->packet->vps, paircopyvp(request->packet, vp));
 				} else {
-					pairadd(&request->reply->vps,
-						paircopyvp(request->reply, vp));
+					pairadd(&request->reply->vps, paircopyvp(request->reply, vp));
 				}
 			}
 
@@ -2846,12 +2886,10 @@ int tls_success(tls_session_t *ssn, REQUEST *request)
 				char filename[256];
 
 				snprintf(filename, sizeof(filename), "%s%c%s.asn1",
-					conf->session_cache_path, FR_DIR_SEP, buffer
-					);
+					conf->session_cache_path, FR_DIR_SEP, buffer);
 				utime(filename, NULL);
 				snprintf(filename, sizeof(filename), "%s%c%s.vps",
-					conf->session_cache_path, FR_DIR_SEP, buffer
-					);
+					conf->session_cache_path, FR_DIR_SEP, buffer);
 				utime(filename, NULL);
 			}
 
@@ -2887,8 +2925,7 @@ fr_tls_status_t tls_application_data(tls_session_t *ssn,
 			ssn->dirty_in.used);
 	if (err != (int) ssn->dirty_in.used) {
 		record_init(&ssn->dirty_in);
-		RDEBUG("Failed writing %d to SSL BIO: %d",
-		       ssn->dirty_in.used, err);
+		RDEBUG("Failed writing %d to SSL BIO: %d", ssn->dirty_in.used, err);
 		return FR_TLS_FAIL;
 	}
 
@@ -2904,9 +2941,7 @@ fr_tls_status_t tls_application_data(tls_session_t *ssn,
 	 *      SSL session, and put it into the decrypted
 	 *      data buffer.
 	 */
-	err = SSL_read(ssn->ssl, ssn->clean_out.data,
-		       sizeof(ssn->clean_out.data));
-
+	err = SSL_read(ssn->ssl, ssn->clean_out.data, sizeof(ssn->clean_out.data));
 	if (err < 0) {
 		int code;
 
@@ -2923,8 +2958,7 @@ fr_tls_status_t tls_application_data(tls_session_t *ssn,
 			break;
 
 		default:
-			DEBUG("Error in fragmentation logic: %s",
-			      ERR_error_string(code, NULL));
+			DEBUG("Error in fragmentation logic: %s", ERR_error_string(code, NULL));
 
 			/*
 			 *	FIXME: Call int_ssl_check?
@@ -2934,9 +2968,7 @@ fr_tls_status_t tls_application_data(tls_session_t *ssn,
 		return FR_TLS_FAIL;
 	}
 
-	if (err == 0) {
-		RWDEBUG("No data inside of the tunnel");
-	}
+	if (err == 0) RWDEBUG("No data inside of the tunnel");
 
 	/*
 	 *	Passed all checks, successfully decrypted data
@@ -2965,8 +2997,7 @@ fr_tls_status_t tls_ack_handler(tls_session_t *ssn, REQUEST *request)
 		RDEBUG("No SSL info available. Waiting for more SSL data");
 		return FR_TLS_REQUEST;
 	}
-	if ((ssn->info.content_type == handshake) &&
-	    (ssn->info.origin == 0)) {
+	if ((ssn->info.content_type == handshake) && (ssn->info.origin == 0)) {
 		RERROR("FAIL: ACK without earlier message");
 		return FR_TLS_INVALID;
 	}
@@ -2977,8 +3008,7 @@ fr_tls_status_t tls_ack_handler(tls_session_t *ssn, REQUEST *request)
 		return FR_TLS_FAIL;
 
 	case handshake:
-		if ((ssn->info.handshake_type == handshake_finished) &&
-		    (ssn->dirty_out.used == 0)) {
+		if ((ssn->info.handshake_type == handshake_finished) && (ssn->dirty_out.used == 0)) {
 			RDEBUG2("ACK handshake is finished");
 
 			/*
@@ -3003,9 +3033,8 @@ fr_tls_status_t tls_ack_handler(tls_session_t *ssn, REQUEST *request)
 		 *	to the default section below.
 		 */
 	default:
-		RDEBUG2("ACK default");
-		RERROR("Invalid ACK received: %d",
-		       ssn->info.content_type);
+		RERROR("Invalid ACK received: %d", ssn->info.content_type);
+
 		return FR_TLS_INVALID;
 	}
 }

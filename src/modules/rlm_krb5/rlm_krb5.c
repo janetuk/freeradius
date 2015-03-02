@@ -94,7 +94,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
  *	rlm_krb5 was not built as threadsafe
  */
 #else
-		WARN("libkrb5 is not threadsafe, recompile it with thread support enabled ("
+		radlog(L_WARN, "libkrb5 is not threadsafe, recompile it with thread support enabled ("
 #  ifdef HEIMDAL_KRB5
 		       "--enable-pthread-support"
 #  else
@@ -174,15 +174,13 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	 *	Not necessarily the same as the config item
 	 */
 	DEBUG("rlm_krb5 (%s): Using service principal \"%s\"", inst->xlat_name, princ_name);
-
 	krb5_free_unparsed_name(inst->context, princ_name);
 
 	/*
 	 *	Setup options for getting credentials and verifying them
 	 */
-
-	/* For some reason the 'init' version of this function is deprecated */
-	ret = krb5_get_init_creds_opt_alloc(inst->context, &(inst->gic_options));
+	ret = krb5_get_init_creds_opt_alloc(inst->context, &(inst->gic_options)); /* For some reason the 'init' version
+										    of this function is deprecated */
 	if (ret) {
 		ERROR("rlm_krb5 (%s): Couldn't allocated inital credential options: %s", inst->xlat_name,
 		      rlm_krb5_error(inst->context, ret));
@@ -378,9 +376,9 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		krb5_creds cred;
 
 		krb5_cc_start_seq_get(conn->context, conn->ccache, &cursor);
-		for ((ret = krb5_cc_next_cred(conn->context, conn->ccache, &cursor, &cred));
+		for (ret = krb5_cc_next_cred(conn->context, conn->ccache, &cursor, &cred);
 		     ret == 0;
-		     (ret = krb5_cc_next_cred(conn->context, conn->ccache, &cursor, &cred))) {
+		     ret = krb5_cc_next_cred(conn->context, conn->ccache, &cursor, &cred)) {
 		     krb5_cc_remove_cred(conn->context, conn->ccache, 0, &cred);
 		}
 		krb5_cc_end_seq_get(conn->context, conn->ccache, &cursor);
@@ -468,6 +466,7 @@ cleanup:
 
 #endif /* MIT_KRB5 */
 
+extern module_t rlm_krb5;
 module_t rlm_krb5 = {
 	RLM_MODULE_INIT,
 	"krb5",
