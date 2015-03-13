@@ -210,14 +210,31 @@ static unsigned int psk_client_callback(SSL *ssl, UNUSED char const *hint,
 
 #endif
 
-tls_session_t *tls_new_client_session(fr_tls_server_conf_t *conf, int fd)
+static int _tls_session_free(tls_session_t *ssn)
+{
+	/*
+	 *	Free any opaque TTLS or PEAP data.
+	 */
+	if ((ssn->opaque) && (ssn->free_opaque)) {
+		ssn->free_opaque(ssn->opaque);
+		ssn->opaque = NULL;
+	}
+
+	session_close(ssn);
+
+	return 0;
+}
+
+tls_session_t *tls_new_client_session(TALLOC_CTX *ctx, fr_tls_server_conf_t *conf, int fd)
 {
 	int verify_mode;
 	tls_session_t *ssn = NULL;
 	REQUEST *request;
 
-	ssn = talloc_zero(conf, tls_session_t);
+	ssn = talloc_zero(ctx, tls_session_t);
 	if (!ssn) return NULL;
+
+	talloc_set_destructor(ssn, _tls_session_free);
 
 	ssn->ctx = conf->ctx;
 
@@ -256,7 +273,6 @@ tls_session_t *tls_new_client_session(fr_tls_server_conf_t *conf, int fd)
 		while ((err = ERR_get_error())) {
 			ERROR("tls: %s", ERR_error_string(err, NULL));
 		}
-		SSL_free(ssn->ssl);
 		talloc_free(ssn);
 
 		return NULL;
@@ -265,21 +281,6 @@ tls_session_t *tls_new_client_session(fr_tls_server_conf_t *conf, int fd)
 	ssn->offset = conf->fragment_size;
 
 	return ssn;
-}
-
-static int _tls_session_free(tls_session_t *ssn)
-{
-	/*
-	 *	Free any opaque TTLS or PEAP data.
-	 */
-	if ((ssn->opaque) && (ssn->free_opaque)) {
-		ssn->free_opaque(ssn->opaque);
-		ssn->opaque = NULL;
-	}
-
-	session_close(ssn);
-
-	return 0;
 }
 
 tls_session_t *tls_new_session(TALLOC_CTX *ctx, fr_tls_server_conf_t *conf, REQUEST *request, bool client_cert)

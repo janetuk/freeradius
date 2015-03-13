@@ -363,7 +363,7 @@ static bool update_required(REALM const *r)
 
     
 
-REALM *tr_query_realm(char const *realm,
+REALM *tr_query_realm(REQUEST *request, char const *realm,
 		      char const  *community,
 		      char const *rprealm,
 		      char const *trustrouter,
@@ -371,6 +371,7 @@ REALM *tr_query_realm(char const *realm,
 {
 	int conn = 0;
 	int rcode;
+	VALUE_PAIR *vp;
 	gss_ctx_id_t gssctx;
 	struct resp_opaque cookie;
 
@@ -378,6 +379,12 @@ REALM *tr_query_realm(char const *realm,
 
 	/* clear the cookie structure */
 	memset (&cookie, 0, sizeof(cookie));
+
+	/* See if the request overrides the community*/
+	vp = pairfind(request->packet->vps, PW_UKERNA_TR_COI, VENDORPEC_UKERNA, TAG_ANY);
+	if (vp)
+		community = vp->vp_strvalue;
+	else pairmake_packet("Trust-Router-COI", community, T_OP_SET);
 
 	cookie.fr_realm_name = talloc_asprintf(NULL,
 					       "%s%%%s",
@@ -408,6 +415,13 @@ REALM *tr_query_realm(char const *realm,
 		/* Handle error */
 		DEBUG2("Error in tidc_send_request, rc = %d.\n", rcode);
 		goto cleanup;
+	}
+	if (cookie.result != TID_SUCCESS) {
+		DEBUG2("TID response is error, rc = %d: %s.\n", cookie.result,
+		       cookie.err_msg?cookie.err_msg:"(NO ERROR TEXT)");
+		if (cookie.err_msg) 
+			pairmake_reply("Reply-Message", cookie.err_msg, T_OP_SET);
+		pairmake_reply("Error-Cause", "502", T_OP_SET); /*proxy unroutable*/
 	}
 
 cleanup:

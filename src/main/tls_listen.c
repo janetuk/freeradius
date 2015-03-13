@@ -169,7 +169,7 @@ static int tls_socket_recv(rad_listen_t *listener)
 
 		rad_assert(sock->ssn == NULL);
 
-		sock->ssn = tls_new_session(listener->tls, listener->tls, sock->request,
+		sock->ssn = tls_new_session(sock, listener->tls, sock->request,
 					    listener->tls->require_client_cert);
 		if (!sock->ssn) {
 			TALLOC_FREE(sock->request);
@@ -177,7 +177,6 @@ static int tls_socket_recv(rad_listen_t *listener)
 			return 0;
 		}
 
-		(void) talloc_steal(sock, sock->ssn);
 		SSL_set_ex_data(sock->ssn->ssl, FR_TLS_EX_INDEX_REQUEST, (void *)request);
 		SSL_set_ex_data(sock->ssn->ssl, fr_tls_ex_index_certs, (void *)&request->packet->vps);
 		SSL_set_ex_data(sock->ssn->ssl, FR_TLS_EX_INDEX_TALLOC, sock->parent);
@@ -320,6 +319,11 @@ app:
 
 	FR_STATS_INC(auth, total_requests);
 
+	/*
+	 *	Re-parent the packet to nothing.
+	 */
+	(void) talloc_steal(NULL, packet);
+
 	return 1;
 }
 
@@ -327,7 +331,6 @@ app:
 int dual_tls_recv(rad_listen_t *listener)
 {
 	RADIUS_PACKET *packet;
-	REQUEST *request;
 	RAD_REQUEST_FUNP fun = NULL;
 	listen_socket_t *sock = listener->data;
 	RADCLIENT	*client = sock->client;
@@ -338,13 +341,10 @@ int dual_tls_recv(rad_listen_t *listener)
 		return 0;
 	}
 
-	rad_assert(sock->request != NULL);
-	rad_assert(sock->request->packet != NULL);
 	rad_assert(sock->packet != NULL);
 	rad_assert(sock->ssn != NULL);
 	rad_assert(client != NULL);
 
-	request = sock->request;
 	packet = sock->packet;
 
 	/*
@@ -382,7 +382,6 @@ int dual_tls_recv(rad_listen_t *listener)
 			FR_STATS_INC(auth, total_unknown_types);
 			WARN("Ignoring Status-Server request due to security configuration");
 			rad_free(&sock->packet);
-			request->packet = NULL;
 			return 0;
 		}
 		fun = rad_status_server;
@@ -395,19 +394,16 @@ int dual_tls_recv(rad_listen_t *listener)
 		DEBUG("Invalid packet code %d sent from client %s port %d : IGNORED",
 		      packet->code, client->shortname, packet->src_port);
 		rad_free(&sock->packet);
-		request->packet = NULL;
 		return 0;
 	} /* switch over packet types */
 
 	if (!request_receive(NULL, listener, packet, client, fun)) {
 		FR_STATS_INC(auth, total_packets_dropped);
 		rad_free(&sock->packet);
-		request->packet = NULL;
 		return 0;
 	}
 
 	sock->packet = NULL;	/* we have no need for more partial reads */
-	request->packet = NULL;
 
 	return 1;
 }
