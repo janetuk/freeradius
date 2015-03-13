@@ -1,4 +1,4 @@
-freeradius (3.0.7+moonshot1-1) unstable; urgency=medium
+freeradius (3.0.7+moonshot2-2) unstable; urgency=medium
 
   * New moonshot release
   * Include patch for trust router to compile
