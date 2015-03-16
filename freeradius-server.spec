@@ -381,6 +381,7 @@ exit 0
 /etc/raddb/certs/README
 %config(noreplace) /etc/raddb/certs/xpextensions
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/certs/*.cnf
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/certs/passwords.mk
 %attr(750,root,radiusd) /etc/raddb/certs/bootstrap
 
 # mods-config
@@ -576,6 +577,7 @@ exit 0
 %{_libdir}/freeradius/rlm_always.so
 %{_libdir}/freeradius/rlm_attr_filter.so
 %{_libdir}/freeradius/rlm_cache.so
+%{_libdir}/freeradius/rlm_cache_rbtree.so
 %{_libdir}/freeradius/rlm_chap.so
 %{_libdir}/freeradius/rlm_counter.so
 %{_libdir}/freeradius/rlm_cram.so
@@ -620,6 +622,7 @@ exit 0
 %{_libdir}/freeradius/rlm_sqlcounter.so
 %{_libdir}/freeradius/rlm_sqlippool.so
 %{_libdir}/freeradius/rlm_sql_null.so
+%{_libdir}/freeradius/rlm_test.so
 %{_libdir}/freeradius/rlm_unix.so
 %{_libdir}/freeradius/rlm_unpack.so
 %{_libdir}/freeradius/rlm_utf8.so
