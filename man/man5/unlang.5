@@ -218,7 +218,7 @@ See raddb/sites-available/originate-coa for additional information.
 
 The "session-state" list is primarily used for EAP.  Attributes put
 into the "session-state" list are saved for the next packet in the
-session.  They are automatically retreived when the next packet is
+session.  They are automatically retrieved when the next packet is
 received.
 
 The only contents permitted in an "update" section are attributes and
@@ -348,9 +348,6 @@ name in a list.  The "Attribute-Name" reference will return the first
 attribute.  Using an array offset allows the policy to refer to the
 second and subsequent attributes.
 
-If '#' is used in the NUM portion, it evaluates to the number of times
-the attribute appears in the request.
-
 If '*' is used in the NUM portion, it evaluates to all instances of
 the attribute in the request.
 
@@ -447,7 +444,7 @@ true.  Valid comparison operators are "==", "!=", "<", "<=", ">",
 ">=", "=~", and "!~", all with their usual meanings.  Invalid
 comparison operators are ":=" and "=".
 .RE
-.IP Attribute Comparisons
+.IP "Attribute Comparisons"
 .DS
 	(&User-Name == "foo")
 .DE
@@ -457,7 +454,7 @@ evaluates to true if the comparison holds true.  The comparison is
 done by printing the attribute to a string, and then doing a string
 comparison of the two sides of the condition.
 .RE
-.IP Inter-Attribute Comparisons
+.IP "Inter-Attribute Comparisons"
 .DS
 	(&User-Name == &Filter-Id)
 .DE
@@ -685,6 +682,27 @@ The hex value of the Attribute-Name, as a series of hex digits.
 
 e.g. If a request contains "Framed-IP-Address = 127.0.0.1", the expansion
 of %{hex:Framed-IP-Address} will yeild "0x7f000001".
+
+.IP %{Attribute-Name[#]}
+The number of instances of Attribute-Name.
+
+e.g. If a request contains "User-Name = bob", the expansion
+of %{User-Name[#]} will yeild "1".
+
+.IP %{Attribute-Name[*]}
+All values of Attribute-Name, concatenated together with ',' as the
+separator.
+
+.IP %{List-Name:[#]}
+The number of attributes in the named list.
+
+.IP %{List-Name:[*]}
+All values of attributes in the named-list, concatenated together with ','
+as the separator. Use the %{pairs:} xlat to get a list of attributes and
+values.
+
+e.g. If a response contains "Reply-Message = 'Hello', Reply-Message = 'bob'
+the expansion of "%{reply:Reply-Message[*]} will yield "Hello\\nbob"
 
 .SH ATTRIBUTE ASSIGNMENTS
 The attribute lists described above may be edited by listing one or

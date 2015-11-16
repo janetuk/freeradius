@@ -43,8 +43,7 @@ static CONF_PARSER tls_config[] = {
 	{ "random_file", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, tls_random_file), NULL },
 	{ "check_cert", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_rest_section_t, tls_check_cert), "yes" },
 	{ "check_cert_cn", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_rest_section_t, tls_check_cert_cn), "yes" },
-
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 
 /*
@@ -75,15 +74,13 @@ static const CONF_PARSER section_config[] = {
 
 	/* TLS Parameters */
 	{ "tls", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) tls_config },
-
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 
 static const CONF_PARSER module_config[] = {
 	{ "connect_uri", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_t, connect_uri), NULL },
 	{ "connect_timeout", FR_CONF_OFFSET(PW_TYPE_TIMEVAL, rlm_rest_t, connect_timeout_tv), "4.0" },
-
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 
 static int rlm_rest_perform(rlm_rest_t *instance, rlm_rest_section_t *section, void *handle, REQUEST *request,
@@ -235,7 +232,7 @@ static ssize_t rest_xlat(void *instance, REQUEST *request,
 
 	RDEBUG("Expanding URI components");
 
-	handle = fr_connection_get(inst->conn_pool);
+	handle = fr_connection_get(inst->pool);
 	if (!handle) return -1;
 
 	/*
@@ -336,7 +333,7 @@ error:
 finish:
 	rlm_rest_cleanup(instance, &section, handle);
 
-	fr_connection_release(inst->conn_pool, handle);
+	fr_connection_release(inst->pool, handle);
 
 	return outlen;
 }
@@ -359,7 +356,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 
 	if (!section->name) return RLM_MODULE_NOOP;
 
-	handle = fr_connection_get(inst->conn_pool);
+	handle = fr_connection_get(inst->pool);
 	if (!handle) return RLM_MODULE_FAIL;
 
 	ret = rlm_rest_perform(instance, section, handle, request, NULL, NULL);
@@ -427,7 +424,7 @@ finish:
 
 	rlm_rest_cleanup(instance, section, handle);
 
-	fr_connection_release(inst->conn_pool, handle);
+	fr_connection_release(inst->pool, handle);
 
 	return rcode;
 }
@@ -464,7 +461,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		return RLM_MODULE_INVALID;
 	}
 
-	handle = fr_connection_get(inst->conn_pool);
+	handle = fr_connection_get(inst->pool);
 	if (!handle) return RLM_MODULE_FAIL;
 
 	ret = rlm_rest_perform(instance, section, handle, request, username->vp_strvalue, password->vp_strvalue);
@@ -532,7 +529,7 @@ finish:
 
 	rlm_rest_cleanup(instance, section, handle);
 
-	fr_connection_release(inst->conn_pool, handle);
+	fr_connection_release(inst->pool, handle);
 
 	return rcode;
 }
@@ -552,7 +549,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 
 	if (!section->name) return RLM_MODULE_NOOP;
 
-	handle = fr_connection_get(inst->conn_pool);
+	handle = fr_connection_get(inst->pool);
 	if (!handle) return RLM_MODULE_FAIL;
 
 	ret = rlm_rest_perform(inst, section, handle, request, NULL, NULL);
@@ -588,7 +585,7 @@ finish:
 
 	rlm_rest_cleanup(inst, section, handle);
 
-	fr_connection_release(inst->conn_pool, handle);
+	fr_connection_release(inst->pool, handle);
 
 	return rcode;
 }
@@ -608,7 +605,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 
 	if (!section->name) return RLM_MODULE_NOOP;
 
-	handle = fr_connection_get(inst->conn_pool);
+	handle = fr_connection_get(inst->pool);
 	if (!handle) return RLM_MODULE_FAIL;
 
 	ret = rlm_rest_perform(inst, section, handle, request, NULL, NULL);
@@ -644,7 +641,7 @@ finish:
 
 	rlm_rest_cleanup(inst, section, handle);
 
-	fr_connection_release(inst->conn_pool, handle);
+	fr_connection_release(inst->pool, handle);
 
 	return rcode;
 }
@@ -781,6 +778,24 @@ static int parse_sub_section(CONF_SECTION *parent, rlm_rest_section_t *config, r
 	return 0;
 }
 
+
+static int mod_bootstrap(CONF_SECTION *conf, void *instance)
+{
+	rlm_rest_t *inst = instance;
+
+	inst->xlat_name = cf_section_name2(conf);
+	if (!inst->xlat_name) inst->xlat_name = cf_section_name1(conf);
+
+	/*
+	 *	Register the rest xlat function
+	 */
+	xlat_register(inst->xlat_name, rest_xlat, rest_uri_escape, inst);
+	xlat_register("jsonquote", jsonquote_xlat, NULL, inst);
+
+	return 0;
+}
+
+
 /*
  *	Do any per-module initialization that is separate to each
  *	configured instance of the module.  e.g. set up connections
@@ -794,32 +809,18 @@ static int parse_sub_section(CONF_SECTION *parent, rlm_rest_section_t *config, r
 static int mod_instantiate(CONF_SECTION *conf, void *instance)
 {
 	rlm_rest_t *inst = instance;
-	char const *xlat_name;
-
-	xlat_name = cf_section_name2(conf);
-	if (!xlat_name) {
-		xlat_name = cf_section_name1(conf);
-	}
-
-	inst->xlat_name = xlat_name;
-
-	/*
-	 *	Register the rest xlat function
-	 */
-	xlat_register(inst->xlat_name, rest_xlat, rest_uri_escape, inst);
-	xlat_register("jsonquote", jsonquote_xlat, NULL, inst);
 
 	/*
 	 *	Parse sub-section configs.
 	 */
 	if (
-		(parse_sub_section(conf, &inst->authorize, RLM_COMPONENT_AUTZ) < 0) ||
-		(parse_sub_section(conf, &inst->authenticate, RLM_COMPONENT_AUTH) < 0) ||
-		(parse_sub_section(conf, &inst->accounting, RLM_COMPONENT_ACCT) < 0) ||
+		(parse_sub_section(conf, &inst->authorize, MOD_AUTHORIZE) < 0) ||
+		(parse_sub_section(conf, &inst->authenticate, MOD_AUTHENTICATE) < 0) ||
+		(parse_sub_section(conf, &inst->accounting, MOD_ACCOUNTING) < 0) ||
 
 /* @todo add behaviour for checksimul */
-/*		(parse_sub_section(conf, &inst->checksimul, RLM_COMPONENT_SESS) < 0) || */
-		(parse_sub_section(conf, &inst->post_auth, RLM_COMPONENT_POST_AUTH) < 0))
+/*		(parse_sub_section(conf, &inst->checksimul, MOD_SESSION) < 0) || */
+		(parse_sub_section(conf, &inst->post_auth, MOD_POST_AUTH) < 0))
 	{
 		return -1;
 	}
@@ -833,8 +834,8 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 
 	inst->connect_timeout = ((inst->connect_timeout_tv.tv_usec * 1000) +
 				 (inst->connect_timeout_tv.tv_sec / 1000));
-	inst->conn_pool = fr_connection_pool_module_init(conf, inst, mod_conn_create, mod_conn_alive, NULL);
-	if (!inst->conn_pool) return -1;
+	inst->pool = fr_connection_pool_module_init(conf, inst, mod_conn_create, mod_conn_alive, NULL);
+	if (!inst->pool) return -1;
 
 	return 0;
 }
@@ -847,7 +848,7 @@ static int mod_detach(void *instance)
 {
 	rlm_rest_t *inst = instance;
 
-	fr_connection_pool_delete(inst->conn_pool);
+	fr_connection_pool_free(inst->pool);
 
 	/* Free any memory used by libcurl */
 	rest_cleanup();
@@ -866,21 +867,18 @@ static int mod_detach(void *instance)
  */
 extern module_t rlm_rest;
 module_t rlm_rest = {
-	RLM_MODULE_INIT,
-	"rlm_rest",
-	RLM_TYPE_THREAD_SAFE,		/* type */
-	sizeof(rlm_rest_t),
-	module_config,
-	mod_instantiate,		/* instantiation */
-	mod_detach,			/* detach */
-	{
-		mod_authenticate,	/* authentication */
-		mod_authorize,		/* authorization */
-		NULL,			/* preaccounting */
-		mod_accounting,		/* accounting */
-		NULL,			/* checksimul */
-		NULL,			/* pre-proxy */
-		NULL,			/* post-proxy */
-		mod_post_auth		/* post-auth */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "rest",
+	.type		= RLM_TYPE_THREAD_SAFE,
+	.inst_size	= sizeof(rlm_rest_t),
+	.config		= module_config,
+	.bootstrap	= mod_bootstrap,
+	.instantiate	= mod_instantiate,
+	.detach		= mod_detach,
+	.methods = {
+		[MOD_AUTHENTICATE]	= mod_authenticate,
+		[MOD_AUTHORIZE]		= mod_authorize,
+		[MOD_ACCOUNTING]	= mod_accounting,
+		[MOD_POST_AUTH]		= mod_post_auth
 	},
 };

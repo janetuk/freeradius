@@ -34,7 +34,7 @@ use warnings;
 use Data::Dumper;
 
 # Bring the global hashes into the package scope
-our (%RAD_REQUEST, %RAD_REPLY, %RAD_CHECK);
+our (%RAD_REQUEST, %RAD_REPLY, %RAD_CHECK, %RAD_STATE);
 
 # This is hash wich hold original request from radius
 #my %RAD_REQUEST;
@@ -42,8 +42,23 @@ our (%RAD_REQUEST, %RAD_REPLY, %RAD_CHECK);
 #my %RAD_REPLY;
 #This is for check items
 #my %RAD_CHECK;
+# This is the session-sate
+#my %RAD_STATE;
 # This is configuration items from "config" perl module configuration section
 #my %RAD_PERLCONF;
+
+# Multi-value attributes are mapped to perl arrayrefs.
+#
+#  update request {
+#    Filter-Id := 'foo'
+#    Filter-Id += 'bar'
+#  }
+#
+# This results to the following entry in %RAD_REQUEST:
+#
+#  $RAD_REQUEST{'Filter-Id'} = [ 'foo', 'bar' ];
+#
+# Likewise, you can assign an arrayref to return multi-value attributes
 
 #
 # This the remapping of return values

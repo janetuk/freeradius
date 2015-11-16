@@ -356,7 +356,7 @@ int gettimeofday (struct timeval *tv, void *tz);
 #endif
 
 /*
- *	Work around diffrent ctime_r styles
+ *	Work around different ctime_r styles
  */
 #if defined(CTIMERSTYLE) && (CTIMERSTYLE == SOLARISSTYLE)
 #  define CTIME_R(a,b,c) ctime_r(a,b,c)
@@ -403,7 +403,7 @@ typedef struct int128_t { uint8_t v[16]; } int128_t;
 
 /* abcd efgh -> dcba hgfe -> hgfe dcba */
 #ifndef HAVE_HTONLL
-#  ifdef RADIUS_LITTLE_ENDIAN
+#  ifdef FR_LITTLE_ENDIAN
 #    ifdef HAVE_BUILTIN_BSWAP64
 #      define ntohll(x) __builtin_bswap64(x)
 #    else
@@ -416,7 +416,7 @@ typedef struct int128_t { uint8_t v[16]; } int128_t;
 #endif
 
 #ifndef HAVE_HTONLLL
-#  ifdef RADIUS_LITTLE_ENDIAN
+#  ifdef FR_LITTLE_ENDIAN
 #    ifdef HAVE_128BIT_INTEGERS
 #      define ntohlll(x) (((uint128_t)ntohll((uint64_t)(x >> 64))) | (((uint128_t)ntohll(((uint64_t) x)) << 64)))
 #    else
@@ -436,6 +436,11 @@ typedef void(*sig_t)(int);
 }
 #endif
 
+/*
+ *	Not really missing, but may be submitted as patches
+ *	to the talloc project at some point in the future.
+ */
 char *talloc_typed_strdup(const void *t, const char *p);
 char *talloc_typed_asprintf(const void *t, const char *fmt, ...) CC_HINT(format (printf, 2, 3));
+char *talloc_bstrndup(const void *t, char const *in, size_t inlen);
 #endif /* _FR_MISSING_H */

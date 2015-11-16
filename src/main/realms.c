@@ -110,8 +110,7 @@ static const CONF_PARSER proxy_config[] = {
 	{ "dead_time", FR_CONF_OFFSET(PW_TYPE_INTEGER, realm_config_t, dead_time), STRINGIFY(DEAD_TIME)  },
 
 	{ "wake_all_if_all_dead", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, realm_config_t, wake_all_if_all_dead), "no" },
-
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 #endif
 
@@ -290,8 +289,7 @@ static CONF_PARSER limit_config[] = {
 	{ "max_requests", FR_CONF_OFFSET(PW_TYPE_INTEGER, home_server_t, limit.max_requests), "0" },
 	{ "lifetime", FR_CONF_OFFSET(PW_TYPE_INTEGER, home_server_t, limit.lifetime), "0" },
 	{ "idle_timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER, home_server_t, limit.idle_timeout), "0" },
-
-	{ NULL, -1, 0, NULL, NULL }		/* end the list */
+	CONF_PARSER_TERMINATOR
 };
 
 #ifdef WITH_COA
@@ -300,8 +298,7 @@ static CONF_PARSER home_server_coa[] = {
 	{ "mrt",  FR_CONF_OFFSET(PW_TYPE_INTEGER, home_server_t, coa_mrt), STRINGIFY(16) },
 	{ "mrc",  FR_CONF_OFFSET(PW_TYPE_INTEGER, home_server_t, coa_mrc), STRINGIFY(5) },
 	{ "mrd",  FR_CONF_OFFSET(PW_TYPE_INTEGER, home_server_t, coa_mrd), STRINGIFY(30) },
-
-	{ NULL, -1, 0, NULL, NULL }		/* end the list */
+	CONF_PARSER_TERMINATOR
 };
 #endif
 
@@ -354,7 +351,7 @@ static CONF_PARSER home_server_config[] = {
 	{ "coa", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) home_server_coa },
 #endif
 
-	{ NULL, -1, 0, NULL, NULL }		/* end the list */
+	CONF_PARSER_TERMINATOR
 };
 
 
@@ -506,7 +503,7 @@ bool realm_home_server_add(home_server_t *home)
 		inet_ntop(home->ipaddr.af, &home->ipaddr.ipaddr, buffer, sizeof(buffer));
 
 		cf_log_err_cs(home->cs, "Duplicate home server address%s%s%s: %s:%s%s/%i",
-			      home->name ? " (already in use by" : "",
+			      home->name ? " (already in use by " : "",
 			      home->name ? home->name : "",
 			      home->name ? ")" : "",
 			      buffer,
@@ -523,7 +520,16 @@ bool realm_home_server_add(home_server_t *home)
 
 	if (!home_server_insert(home, home->cs)) return false;
 
-	if (home->dual) {
+	/*
+	 *	Dual home servers cause us to auto-create an
+	 *	accounting server for UDP sockets, and leave
+	 *	everything alone for TLS sockets.
+	 */
+	if (home->dual
+#ifdef WITH_TLS
+	    && !home->tls
+#endif
+) {
 		home_server_t *home2 = talloc(talloc_parent(home), home_server_t);
 
 		memcpy(home2, home, sizeof(*home2));
@@ -531,6 +537,7 @@ bool realm_home_server_add(home_server_t *home)
 		home2->type = HOME_TYPE_ACCT;
 		home2->dual = true;
 		home2->port++;
+
 		home2->ping_user_password = NULL;
 		home2->cs = home->cs;
 		home2->parent_server = home->parent_server;
@@ -559,16 +566,16 @@ bool realm_home_server_add(home_server_t *home)
 home_server_t *home_server_afrom_cs(TALLOC_CTX *ctx, realm_config_t *rc, CONF_SECTION *cs)
 {
 	home_server_t	*home;
-
 	CONF_SECTION	*tls;
 
 	if (!rc) rc = realm_config; /* Use the global config */
 
 	home = talloc_zero(ctx, home_server_t);
 	home->name = cf_section_name2(cs);
-	home->log_name = home->name;
+	home->log_name = talloc_typed_strdup(home, home->name);
 	home->cs = cs;
 	home->state = HOME_STATE_UNKNOWN;
+	home->proto = IPPROTO_UDP;
 
 	/*
 	 *	Parse the configuration into the home server
@@ -615,7 +622,7 @@ home_server_t *home_server_afrom_cs(TALLOC_CTX *ctx, realm_config_t *rc, CONF_SE
 		}
 
 		home->secret = "";
-		home->log_name = home->server;
+		home->log_name = talloc_typed_strdup(home, home->server);
 	/*
 	 *	Otherwise it's an invalid config section and we
 	 *	raise an error.
@@ -633,15 +640,15 @@ home_server_t *home_server_afrom_cs(TALLOC_CTX *ctx, realm_config_t *rc, CONF_SE
 
  		if (home->type_str) type = fr_str2int(home_server_types, home->type_str, HOME_TYPE_INVALID);
 
+		home->type = type;
+
  		switch (type) {
  		case HOME_TYPE_AUTH_ACCT:
 			home->dual = true;
-			home->type = HOME_TYPE_AUTH;
 			break;
 
 		case HOME_TYPE_AUTH:
 		case HOME_TYPE_ACCT:
-			home->type = type;
 			break;
 
 #ifdef WITH_COA
@@ -650,7 +657,6 @@ home_server_t *home_server_afrom_cs(TALLOC_CTX *ctx, realm_config_t *rc, CONF_SE
 				cf_log_err_cs(cs, "Home servers of type \"coa\" cannot point to a virtual server");
 				goto error;
 			}
-			home->type = type;
 			break;
 #endif
 
@@ -694,11 +700,11 @@ home_server_t *home_server_afrom_cs(TALLOC_CTX *ctx, realm_config_t *rc, CONF_SE
  	}
 
 	{
-		int type = IPPROTO_UDP;
+		int proto = IPPROTO_UDP;
 
-		if (home->proto_str) type = fr_str2int(home_proto, home->proto_str, -1);
+		if (home->proto_str) proto = fr_str2int(home_proto, home->proto_str, -1);
 
-		switch (type) {
+		switch (proto) {
 		case IPPROTO_UDP:
 			home_servers_udp = true;
 			break;
@@ -720,7 +726,7 @@ home_server_t *home_server_afrom_cs(TALLOC_CTX *ctx, realm_config_t *rc, CONF_SE
 			goto error;
 		}
 
-		home->proto = type;
+		home->proto = proto;
 	}
 
 	if (!home->server && rbtree_finddata(home_servers_byaddr, home)) {
@@ -732,6 +738,12 @@ home_server_t *home_server_afrom_cs(TALLOC_CTX *ctx, realm_config_t *rc, CONF_SE
 	 *	Check the TLS configuration.
 	 */
 	tls = cf_section_sub_find(cs, "tls");
+#ifndef WITH_TLS
+	if (tls) {
+		cf_log_err_cs(cs, "TLS transport is not available in this executable");
+		goto error;
+	}
+#endif
 
 	/*
 	 *	If were doing RADSEC (tls+tcp) the secret should default
@@ -750,27 +762,49 @@ home_server_t *home_server_afrom_cs(TALLOC_CTX *ctx, realm_config_t *rc, CONF_SE
 	}
 
 	/*
-	 *	If the home is not a virtual server, guess the port
-	 *	and look up the source ip address.
+	 *	Virtual servers have some TLS restrictions.
 	 */
-	if (!home->server) {
+	if (home->server) {
+		if (tls) {
+			cf_log_err_cs(cs, "Virtual home_servers cannot have a \"tls\" subsection");
+			goto error;
+		}
+	} else {
+		/*
+		 *	If the home is not a virtual server, guess the port
+		 *	and look up the source ip address.
+		 */
 		rad_assert(home->ipaddr.af != AF_UNSPEC);
 
+#ifdef WITH_TLS
+		if (tls && (home->proto != IPPROTO_TCP)) {
+			cf_log_err_cs(cs, "TLS transport is not available for UDP sockets");
+			goto error;
+		}
+#endif
+
 		/*
-		 *	Guess the port if we need to.
+		 *	Set the default port if necessary.
 		 */
 		if (home->port == 0) {
+			char buffer[INET6_ADDRSTRLEN + 3];
+
 			/*
 			 *	For RADSEC we use the special RADIUS over TCP/TLS port
 			 *	for both accounting and authentication, but for some
 			 *	bizarre reason for RADIUS over plain TCP we use separate
 			 *	ports 1812 and 1813.
-			 *
-			 *	Blame whoever wrote RFC 6613.
 			 */
+#ifdef WITH_TLS
 			if (tls) {
 				home->port = PW_RADIUS_TLS_PORT;
-			} else switch (home->type) {
+			} else
+#endif
+			switch (home->type) {
+			default:
+				rad_assert(0);
+				/* FALL-THROUGH */
+
 			case HOME_TYPE_AUTH:
 				home->port = PW_AUTH_UDP_PORT;
 				break;
@@ -782,10 +816,16 @@ home_server_t *home_server_afrom_cs(TALLOC_CTX *ctx, realm_config_t *rc, CONF_SE
 			case HOME_TYPE_COA:
 				home->port = PW_COA_UDP_PORT;
 				break;
-
-			default:
-				rad_assert(0);
 			}
+
+			/*
+			 *	Now that we have a real port, use that.
+			 */
+			rad_const_free(home->log_name);
+
+			fr_ntop(buffer, sizeof(buffer), &home->ipaddr);
+
+			home->log_name = talloc_asprintf(home, "%s:%i", buffer, home->port);
 		}
 
 		/*
@@ -807,17 +847,7 @@ home_server_t *home_server_afrom_cs(TALLOC_CTX *ctx, realm_config_t *rc, CONF_SE
 			home->src_ipaddr.af = home->ipaddr.af;
 		}
 
-		if (tls && (home->proto != IPPROTO_TCP)) {
-			cf_log_err_cs(cs, "TLS transport is not available for UDP sockets");
-			goto error;
-		}
-
-#ifndef WITH_TLS
-		if (tls) {
-			cf_log_err_cs(cs, "TLS transport is not available in this executable");
-			goto error;
-		}
-#else
+#ifdef WITH_TLS
 		/*
 		 *	Parse the SSL client configuration.
 		 */
@@ -828,11 +858,7 @@ home_server_t *home_server_afrom_cs(TALLOC_CTX *ctx, realm_config_t *rc, CONF_SE
 			}
 		}
 #endif
-
-	} else if (tls) {
-		cf_log_err_cs(cs, "Virtual home_servers cannot have a \"tls\" subsection");
-		goto error;
-	}
+	} /* end of parse home server */
 
 	realm_home_server_sanitize(home, cs);
 
@@ -951,6 +977,21 @@ static int pool_check_home_server(UNUSED realm_config_t *rc, CONF_PAIR *cp,
 	if (home) {
 		*phome = home;
 		return 1;
+	}
+
+	switch (server_type) {
+	case HOME_TYPE_AUTH:
+	case HOME_TYPE_ACCT:
+		myhome.type = HOME_TYPE_AUTH_ACCT;
+		home = rbtree_finddata(home_servers_byname, &myhome);
+		if (home) {
+			*phome = home;
+			return 1;
+		}
+		break;
+
+	default:
+		break;
 	}
 
 	cf_log_err_cp(cp, "Unknown home_server \"%s\".", name);
@@ -1229,13 +1270,21 @@ static int server_pool_add(realm_config_t *rc,
 
 		home = rbtree_finddata(home_servers_byname, &myhome);
 		if (!home) {
-			DEBUG2("Internal sanity check failed");
-			goto error;
+			switch (server_type) {
+			case HOME_TYPE_AUTH:
+			case HOME_TYPE_ACCT:
+				myhome.type = HOME_TYPE_AUTH_ACCT;
+				home = rbtree_finddata(home_servers_byname, &myhome);
+				break;
+
+			default:
+				break;
+			}
 		}
 
-		if (0) {
-			WARN("Duplicate home server %s in server pool %s", home->name, pool->name);
-			continue;
+		if (!home) {
+			ERROR("Failed to find home server %s", value);
+			goto error;
 		}
 
 		if (do_print) cf_log_info(cs, "\thome_server = %s", home->name);
@@ -1317,6 +1366,8 @@ static int old_server_add(realm_config_t *rc, CONF_SECTION *cs,
 	myhome.type = type;
 	home = rbtree_finddata(home_servers_byname, &myhome);
 	if (home) {
+		WARN("Please use pools instead of authhost and accthost");
+
 		if (secret && (strcmp(home->secret, secret) != 0)) {
 			cf_log_err_cs(cs, "Inconsistent shared secret for home server \"%s\"", name);
 			return 0;
@@ -1641,7 +1692,13 @@ static int old_realm_config(realm_config_t *rc, CONF_SECTION *cs, REALM *r)
 		}
 	}
 
-	if (secret) cf_log_info(cs, "\tsecret = %s", secret);
+	if (secret) {
+		if (rad_debug_lvl <= 2) {
+			cf_log_info(cs, "\tsecret = <<< secret >>>");
+		} else {
+			cf_log_info(cs, "\tsecret = %s", secret);
+		}
+	}
 
 	return 1;
 
@@ -1888,7 +1945,6 @@ static int realm_add(realm_config_t *rc, CONF_SECTION *cs)
 
  error:
 	cf_log_info(cs, " } # realm %s", name2);
-	free(r);
 	return 0;
 }
 
@@ -2260,7 +2316,7 @@ void home_server_update_request(home_server_t *home, REQUEST *request)
 		 *	attribute is the one hacked through
 		 *	the 'hints' file.
 		 */
-		request->proxy->vps = paircopy(request->proxy,
+		request->proxy->vps = fr_pair_list_copy(request->proxy,
 					       request->packet->vps);
 	}
 
@@ -2281,8 +2337,8 @@ void home_server_update_request(home_server_t *home, REQUEST *request)
 	 *	unless one already exists.
 	 */
 	if ((request->packet->code == PW_CODE_ACCESS_REQUEST) &&
-	    !pairfind(request->proxy->vps, PW_MESSAGE_AUTHENTICATOR, 0, TAG_ANY)) {
-		pairmake(request->proxy, &request->proxy->vps,
+	    !fr_pair_find_by_num(request->proxy->vps, PW_MESSAGE_AUTHENTICATOR, 0, TAG_ANY)) {
+		fr_pair_make(request->proxy, &request->proxy->vps,
 			 "Message-Authenticator", "0x00",
 			 T_OP_SET);
 	}
@@ -2353,7 +2409,7 @@ home_server_t *home_server_ldb(char const *realmname,
 		break;
 
 	case HOME_POOL_KEYED_BALANCE:
-		if ((vp = pairfind(request->config_items, PW_LOAD_BALANCE_KEY, 0, TAG_ANY)) != NULL) {
+		if ((vp = fr_pair_find_by_num(request->config, PW_LOAD_BALANCE_KEY, 0, TAG_ANY)) != NULL) {
 			hash = fr_hash(vp->vp_strvalue, vp->vp_length);
 			start = hash % pool->num_home_servers;
 			break;

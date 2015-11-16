@@ -42,6 +42,8 @@ RCSID("$Id$")
 
 #include <ctype.h>
 
+bool check_config = false;
+
 typedef enum conf_property {
 	CONF_PROPERTY_INVALID = 0,
 	CONF_PROPERTY_NAME,
@@ -74,30 +76,33 @@ struct conf_item {
  *
  */
 struct conf_pair {
-	CONF_ITEM item;
-	char const *attr;		//!< Attribute name
-	char const *value;		//!< Attribute value
-	FR_TOKEN op;			//!< Operator e.g. =, :=
-	FR_TOKEN lhs_type;		//!< Name quoting style T_(DOUBLE|SINGLE|BACK)_QUOTE_STRING or T_BARE_WORD.
-	FR_TOKEN rhs_type;		//!< Value Quoting style T_(DOUBLE|SINGLE|BACK)_QUOTE_STRING or T_BARE_WORD.
+	CONF_ITEM	item;
+	char const	*attr;		//!< Attribute name
+	char const	*value;		//!< Attribute value
+	FR_TOKEN	op;		//!< Operator e.g. =, :=
+	FR_TOKEN	lhs_type;	//!< Name quoting style T_(DOUBLE|SINGLE|BACK)_QUOTE_STRING or T_BARE_WORD.
+	FR_TOKEN	rhs_type;	//!< Value Quoting style T_(DOUBLE|SINGLE|BACK)_QUOTE_STRING or T_BARE_WORD.
+	bool		pass2;		//!< do expansion in pass2.
+	bool		parsed;		//!< Was this item used during parsing?
 };
 
 /** Internal data that is associated with a configuration section
  *
  */
 struct conf_data {
-	CONF_ITEM  item;
-	char const *name;
-	int	   flag;
-	void	   *data;		//!< User data
-	void       (*free)(void *);	//!< Free user data function
+	CONF_ITEM  	item;
+	char const 	*name;
+	int	   	flag;
+	void	   	*data;		//!< User data
+	void       	(*free)(void *);	//!< Free user data function
 };
 
 struct conf_part {
-	CONF_ITEM item;
-	char const	*name1;
-	char const	*name2;
-	FR_TOKEN	name2_type;
+	CONF_ITEM	item;
+	char const	*name1;		//!< First name token.  Given ``foo bar {}`` would be ``foo``.
+	char const	*name2;		//!< Second name token. Given ``foo bar {}`` would be ``bar``.
+
+	FR_TOKEN	name2_type;	//!< The type of quoting around name2.
 
 	CONF_ITEM	*children;
 	CONF_ITEM	*tail;		//!< For speed.
@@ -114,6 +119,13 @@ struct conf_part {
 	CONF_PARSER const *variables;
 };
 
+typedef struct cf_file_t {
+	char const	*filename;
+	CONF_SECTION	*cs;
+	bool		input;
+	struct stat	buf;
+} cf_file_t;
+
 CONF_SECTION *root_config = NULL;
 bool cf_new_escape = false;
 
@@ -126,7 +138,11 @@ static void		*cf_data_find_internal(CONF_SECTION const *cs, char const *name, in
 static char const 	*cf_expand_variables(char const *cf, int *lineno,
 					     CONF_SECTION *outercs,
 					     char *output, size_t outsize,
-					     char const *input);
+					     char const *input, bool *soft_fail);
+
+static int cf_file_include(CONF_SECTION *cs, char const *filename_in);
+
+
 
 /*
  *	Isolate the scary casts in these tiny provably-safe functions
@@ -268,6 +284,199 @@ static int data_cmp(void const *a, void const *b)
 	return strcmp(one->name, two->name);
 }
 
+/*
+ *	Functions for tracking filenames.
+ */
+static int filename_cmp(void const *a, void const *b)
+{
+	cf_file_t const *one = a;
+	cf_file_t const *two = b;
+
+	if (one->buf.st_dev < two->buf.st_dev) return -1;
+	if (one->buf.st_dev > two->buf.st_dev) return +1;
+
+	if (one->buf.st_ino < two->buf.st_ino) return -1;
+	if (one->buf.st_ino > two->buf.st_ino) return +1;
+
+	return 0;
+}
+
+static FILE *cf_file_open(CONF_SECTION *cs, char const *filename)
+{
+	cf_file_t *file;
+	CONF_DATA *cd;
+	CONF_SECTION *top;
+	rbtree_t *tree;
+	int fd;
+	FILE *fp;
+
+	top = cf_top_section(cs);
+	cd = cf_data_find_internal(top, "filename", 0);
+	if (!cd) return NULL;
+
+	tree = cd->data;
+
+	fp = fopen(filename, "r");
+	if (!fp) {
+		ERROR("Unable to open file \"%s\": %s",
+		      filename, fr_syserror(errno));
+		return NULL;
+	}
+
+	fd = fileno(fp);
+
+	file = talloc(tree, cf_file_t);
+	if (!file) {
+		fclose(fp);
+		return NULL;
+	}
+
+	file->filename = filename;
+	file->cs = cs;
+	file->input = true;
+
+	if (fstat(fd, &file->buf) == 0) {
+#ifdef S_IWOTH
+		if ((file->buf.st_mode & S_IWOTH) != 0) {
+			ERROR("Configuration file %s is globally writable.  "
+			      "Refusing to start due to insecure configuration.", filename);
+
+			fclose(fp);
+			talloc_free(file);
+			return NULL;
+		}
+#endif
+	}
+
+	/*
+	 *	We can include the same file twice.  e.g. when it
+	 *	contains common definitions, such as for SQL.
+	 *
+	 *	Though the admin should really use templates for that.
+	 */
+	if (!rbtree_insert(tree, file)) {
+		talloc_free(file);
+	}
+
+	return fp;
+}
+
+/*
+ *	Do some checks on the file as an "input" file.  i.e. one read
+ *	by a module.
+ */
+static bool cf_file_input(CONF_SECTION *cs, char const *filename)
+{
+	cf_file_t *file;
+	CONF_DATA *cd;
+	CONF_SECTION *top;
+	rbtree_t *tree;
+
+	top = cf_top_section(cs);
+	cd = cf_data_find_internal(top, "filename", 0);
+	if (!cd) return false;
+
+	tree = cd->data;
+
+	file = talloc(tree, cf_file_t);
+	if (!file) return false;
+
+	file->filename = filename;
+	file->cs = cs;
+	file->input = true;
+
+	if (stat(filename, &file->buf) < 0) {
+		ERROR("Unable to open file \"%s\": %s", filename, fr_syserror(errno));
+		talloc_free(file);
+		return false;
+	}
+
+#ifdef S_IWOTH
+	if ((file->buf.st_mode & S_IWOTH) != 0) {
+		ERROR("Configuration file %s is globally writable.  "
+		      "Refusing to start due to insecure configuration.", filename);
+		talloc_free(file);
+		return false;
+	}
+#endif
+
+	/*
+	 *	It's OK to include the same file twice...
+	 */
+	if (!rbtree_insert(tree, file)) {
+		talloc_free(file);
+	}
+
+	return true;
+
+}
+
+
+typedef struct cf_file_callback_t {
+	int		rcode;
+	rb_walker_t	callback;
+	CONF_SECTION	*modules;
+} cf_file_callback_t;
+
+
+/*
+ *	Return 0 for keep going, 1 for stop.
+ */
+static int file_callback(void *ctx, void *data)
+{
+	cf_file_callback_t *cb = ctx;
+	cf_file_t *file = data;
+	struct stat buf;
+
+	/*
+	 *	The file doesn't exist or we can no longer read it.
+	 */
+	if (stat(file->filename, &buf) < 0) {
+		cb->rcode = CF_FILE_ERROR;
+		return 1;
+	}
+
+	/*
+	 *	The file changed, we'll need to re-read it.
+	 */
+	if (buf.st_mtime != file->buf.st_mtime) {
+		if (!file->input) {
+			cb->rcode |= CF_FILE_CONFIG;
+		} else {
+			(void) cb->callback(cb->modules, file->cs);
+			cb->rcode |= CF_FILE_MODULE;
+		}
+	}
+
+	return 0;
+}
+
+
+/*
+ *	See if any of the files have changed.
+ */
+int cf_file_changed(CONF_SECTION *cs, rb_walker_t callback)
+{
+	CONF_DATA *cd;
+	CONF_SECTION *top;
+	cf_file_callback_t cb;
+	rbtree_t *tree;
+
+	top = cf_top_section(cs);
+	cd = cf_data_find_internal(top, "filename", 0);
+	if (!cd) return true;
+
+	tree = cd->data;
+
+	cb.rcode = CF_FILE_NONE;
+	cb.callback = callback;
+	cb.modules = cf_section_sub_find(cs, "modules");
+
+	(void) rbtree_walk(tree, RBTREE_IN_ORDER, file_callback, &cb);
+
+	return cb.rcode;
+}
+
 static int _cf_section_free(CONF_SECTION *cs)
 {
 	/*
@@ -351,8 +560,17 @@ CONF_PAIR *cf_pair_dup(CONF_SECTION *parent, CONF_PAIR *cp)
 
 	new = cf_pair_alloc(parent, cp->attr, cf_pair_value(cp),
 			    cp->op, cp->lhs_type, cp->rhs_type);
-	if (new) {
-		new->item.lineno = cp->item.lineno;
+	if (!new) return NULL;
+
+	new->parsed = cp->parsed;
+	new->item.lineno = cp->item.lineno;
+
+	/*
+	 *	Avoid mallocs if possible.
+	 */
+	if (!cp->item.filename || (strcmp(parent->item.filename, cp->item.filename) == 0)) {
+		new->item.filename = parent->item.filename;
+	} else {
 		new->item.filename = talloc_strdup(new, cp->item.filename);
 	}
 
@@ -383,12 +601,12 @@ CONF_SECTION *cf_section_alloc(CONF_SECTION *parent, char const *name1, char con
 
 	if (!name1) return NULL;
 
-	if (name2) {
+	if (name2 && parent) {
 		if (strchr(name2, '$')) {
 			name2 = cf_expand_variables(parent->item.filename,
-						&parent->item.lineno,
-						parent,
-						buffer, sizeof(buffer), name2);
+						    &parent->item.lineno,
+						    parent,
+						    buffer, sizeof(buffer), name2, NULL);
 			if (!name2) {
 				ERROR("Failed expanding section name");
 				return NULL;
@@ -438,7 +656,7 @@ CONF_SECTION *cf_section_alloc(CONF_SECTION *parent, char const *name1, char con
  * @note recursively duplicates any child sections.
  * @note does not duplicate any data associated with a section, or its child sections.
  *
- * @param parent section.
+ * @param parent section (may be NULL).
  * @param cs to duplicate.
  * @param name1 of new section.
  * @param name2 of new section.
@@ -462,7 +680,12 @@ CONF_SECTION *cf_section_dup(CONF_SECTION *parent, CONF_SECTION const *cs,
 	}
 
 	new->item.lineno = cs->item.lineno;
-	new->item.filename = talloc_strdup(new, cs->item.filename);
+
+	if (!cs->item.filename || (parent && (strcmp(parent->item.filename, cs->item.filename) == 0))) {
+		new->item.filename = parent->item.filename;
+	} else {
+		new->item.filename = talloc_strdup(new, cs->item.filename);
+	}
 
 	for (ci = cs->children; ci; ci = ci->next) {
 		switch (ci->type) {
@@ -762,7 +985,10 @@ CONF_ITEM *cf_reference_item(CONF_SECTION const *parentcs,
 	 *	section.
 	 */
 	cp = cf_pair_find(cs, p);
-	if (cp) return &(cp->item);
+	if (cp) {
+		cp->parsed = true;	/* conf pairs which are referenced count as parsed */
+		return &(cp->item);
+	}
 
 	next = cf_section_sub_find(cs, p);
 	if (next) return &(next->item);
@@ -776,7 +1002,6 @@ CONF_ITEM *cf_reference_item(CONF_SECTION const *parentcs,
 	}
 
 no_such_item:
-	WARN("No such configuration item %s", ptr);
 	return NULL;
 }
 
@@ -799,12 +1024,14 @@ CONF_SECTION *cf_top_section(CONF_SECTION *cs)
 static char const *cf_expand_variables(char const *cf, int *lineno,
 				       CONF_SECTION *outercs,
 				       char *output, size_t outsize,
-				       char const *input)
+				       char const *input, bool *soft_fail)
 {
 	char *p;
 	char const *end, *ptr;
 	CONF_SECTION const *parentcs;
 	char name[8192];
+
+	if (soft_fail) *soft_fail = false;
 
 	/*
 	 *	Find the master parent conf section.
@@ -850,7 +1077,7 @@ static char const *cf_expand_variables(char const *cf, int *lineno,
 			 */
 			if ((size_t) (end - ptr) >= sizeof(name)) {
 				ERROR("%s[%d]: Reference string is too large",
-				       cf, *lineno);
+				      cf, *lineno);
 				return NULL;
 			}
 
@@ -864,7 +1091,8 @@ static char const *cf_expand_variables(char const *cf, int *lineno,
 
 			ci = cf_reference_item(parentcs, outercs, name);
 			if (!ci) {
-				ERROR("%s[%d]: Reference \"%s\" not found", cf, *lineno, input);
+				if (soft_fail) *soft_fail = true;
+				ERROR("%s[%d]: Reference \"${%s}\" not found", cf, *lineno, name);
 				return NULL;
 			}
 
@@ -901,6 +1129,21 @@ static char const *cf_expand_variables(char const *cf, int *lineno,
 				 *  Substitute the value of the variable.
 				 */
 				cp = cf_item_to_pair(ci);
+
+				/*
+				 *	If the thing we reference is
+				 *	marked up as being expanded in
+				 *	pass2, don't expand it now.
+				 *	Let it be expanded in pass2.
+				 */
+				if (cp->pass2) {
+					if (soft_fail) *soft_fail = true;
+
+					ERROR("%s[%d]: Reference \"%s\" points to a variable which has not been expanded.",
+					      cf, *lineno, input);
+					return NULL;
+				}
+
 				if (!cp->value) {
 					ERROR("%s[%d]: Reference \"%s\" has no value",
 					       cf, *lineno, input);
@@ -1074,23 +1317,80 @@ static inline int fr_item_validate_ipaddr(CONF_SECTION *cs, char const *name, PW
 	}
 }
 
-/*
- *	Parses an item (not a CONF_ITEM) into the specified format,
- *	with a default value.
+/** Parses a #CONF_PAIR into a C data type, with a default value.
  *
- *	Returns -1 on error, -2 if deprecated, 0 for correctly parsed,
- *	and 1 if the default value was used.  Note that the default
- *	value will be used ONLY if the CONF_PAIR is NULL.
+ * Takes fields from a #CONF_PARSER struct and uses them to parse the string value
+ * of a #CONF_PAIR into a C data type matching the type argument.
+ *
+ * The format of the types are the same as #value_data_t types.
+ *
+ * @note The dflt value will only be used if no matching #CONF_PAIR is found. Empty strings will not
+ *	 result in the dflt value being used.
+ *
+ * **PW_TYPE to data type mappings**
+ * | PW_TYPE                 | Data type          | Dynamically allocated  |
+ * | ----------------------- | ------------------ | ---------------------- |
+ * | PW_TYPE_TMPL            | ``vp_tmpl_t``      | Yes                    |
+ * | PW_TYPE_BOOLEAN         | ``bool``           | No                     |
+ * | PW_TYPE_INTEGER         | ``uint32_t``       | No                     |
+ * | PW_TYPE_SHORT           | ``uint16_t``       | No                     |
+ * | PW_TYPE_INTEGER64       | ``uint64_t``       | No                     |
+ * | PW_TYPE_SIGNED          | ``int32_t``        | No                     |
+ * | PW_TYPE_STRING          | ``char const *``   | Yes                    |
+ * | PW_TYPE_IPV4_ADDR       | ``fr_ipaddr_t``    | No                     |
+ * | PW_TYPE_IPV4_PREFIX     | ``fr_ipaddr_t``    | No                     |
+ * | PW_TYPE_IPV6_ADDR       | ``fr_ipaddr_t``    | No                     |
+ * | PW_TYPE_IPV6_PREFIX     | ``fr_ipaddr_t``    | No                     |
+ * | PW_TYPE_COMBO_IP_ADDR   | ``fr_ipaddr_t``    | No                     |
+ * | PW_TYPE_COMBO_IP_PREFIX | ``fr_ipaddr_t``    | No                     |
+ * | PW_TYPE_TIMEVAL         | ``struct timeval`` | No                     |
+ *
+ * @param cs to search for matching #CONF_PAIR in.
+ * @param name of #CONF_PAIR to search for.
+ * @param type Data type to parse #CONF_PAIR value as.
+ *	Should be one of the following ``data`` types, and one or more of the following ``flag`` types or'd together:
+ *	- ``data`` #PW_TYPE_TMPL 		- @copybrief PW_TYPE_TMPL
+ *					  	  Feeds the value into #tmpl_afrom_str. Value can be
+ *					  	  obtained when processing requests, with #tmpl_expand or #tmpl_aexpand.
+ *	- ``data`` #PW_TYPE_BOOLEAN		- @copybrief PW_TYPE_BOOLEAN
+ *	- ``data`` #PW_TYPE_INTEGER		- @copybrief PW_TYPE_INTEGER
+ *	- ``data`` #PW_TYPE_SHORT		- @copybrief PW_TYPE_SHORT
+ *	- ``data`` #PW_TYPE_INTEGER64		- @copybrief PW_TYPE_INTEGER64
+ *	- ``data`` #PW_TYPE_SIGNED		- @copybrief PW_TYPE_SIGNED
+ *	- ``data`` #PW_TYPE_STRING		- @copybrief PW_TYPE_STRING
+ *	- ``data`` #PW_TYPE_IPV4_ADDR		- @copybrief PW_TYPE_IPV4_ADDR (IPv4 address with prefix 32).
+ *	- ``data`` #PW_TYPE_IPV4_PREFIX		- @copybrief PW_TYPE_IPV4_PREFIX (IPv4 address with variable prefix).
+ *	- ``data`` #PW_TYPE_IPV6_ADDR		- @copybrief PW_TYPE_IPV6_ADDR (IPv6 address with prefix 128).
+ *	- ``data`` #PW_TYPE_IPV6_PREFIX		- @copybrief PW_TYPE_IPV6_PREFIX (IPv6 address with variable prefix).
+ *	- ``data`` #PW_TYPE_COMBO_IP_ADDR 	- @copybrief PW_TYPE_COMBO_IP_ADDR (IPv4/IPv6 address with
+ *						  prefix 32/128).
+ *	- ``data`` #PW_TYPE_COMBO_IP_PREFIX	- @copybrief PW_TYPE_COMBO_IP_PREFIX (IPv4/IPv6 address with
+ *						  variable prefix).
+ *	- ``data`` #PW_TYPE_TIMEVAL		- @copybrief PW_TYPE_TIMEVAL
+ *	- ``flag`` #PW_TYPE_DEPRECATED		- @copybrief PW_TYPE_DEPRECATED
+ *	- ``flag`` #PW_TYPE_REQUIRED		- @copybrief PW_TYPE_REQUIRED
+ *	- ``flag`` #PW_TYPE_ATTRIBUTE		- @copybrief PW_TYPE_ATTRIBUTE
+ *	- ``flag`` #PW_TYPE_SECRET		- @copybrief PW_TYPE_SECRET
+ *	- ``flag`` #PW_TYPE_FILE_INPUT		- @copybrief PW_TYPE_FILE_INPUT
+ *	- ``flag`` #PW_TYPE_NOT_EMPTY		- @copybrief PW_TYPE_NOT_EMPTY
+ * @param data Pointer to a global variable, or pointer to a field in the struct being populated with values.
+ * @param dflt value to use, if no #CONF_PAIR is found.
+ * @return
+ *	- 1 if default value was used.
+ *	- 0 on success.
+ *	- -1 on error.
+ *	- -2 if deprecated.
  */
 int cf_item_parse(CONF_SECTION *cs, char const *name, unsigned int type, void *data, char const *dflt)
 {
 	int rcode;
-	bool deprecated, required, attribute, secret, file_input, cant_be_empty, tmpl, xlat;
+	bool deprecated, required, attribute, secret, file_input, cant_be_empty, tmpl, multi;
 	char **q;
 	char const *value;
-	CONF_PAIR const *cp = NULL;
+	CONF_PAIR *cp = NULL;
 	fr_ipaddr_t *ipaddr;
 	char buffer[8192];
+	CONF_ITEM *c_item = &cs->item;
 
 	if (!cs) return -1;
 
@@ -1101,30 +1401,63 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, unsigned int type, void *d
 	file_input = (type == PW_TYPE_FILE_INPUT);	/* check, not and */
 	cant_be_empty = (type & PW_TYPE_NOT_EMPTY);
 	tmpl = (type & PW_TYPE_TMPL);
-	xlat = (type & PW_TYPE_XLAT);
+	multi = (type & PW_TYPE_MULTI);
 
 	if (attribute) required = true;
 	if (required) cant_be_empty = true;	/* May want to review this in the future... */
 
+	/*
+	 *	Everything except templates must have a base type.
+	 */
+	if (!(type & 0xff) && !tmpl) {
+		cf_log_err(c_item, "Configuration item \"%s\" must have a data type", name);
+		return -1;
+	}
+
 	type &= 0xff;				/* normal types are small */
+
 	rcode = 0;
 
 	cp = cf_pair_find(cs, name);
-	if (cp) {
-		value = cp->value;
-	} else {
+
+	/*
+	 *	No pairs match the configuration item name in the current
+	 *	section, use the default value.
+	 */
+	if (!cp) {
+		if (deprecated) return 0;	/* Don't set the default value */
+
 		rcode = 1;
 		value = dflt;
+	/*
+	 *	Something matched, used the CONF_PAIR value.
+	 */
+	} else {
+		CONF_PAIR *next = cp;
+		value = cp->value;
+		cp->parsed = true;
+		c_item = &cp->item;
+
+		/*
+		 *	@fixme We should actually validate
+		 *	the value of the pairs too
+		 */
+		if (multi) while ((next = cf_pair_find_next(cs, next, name))) {
+			next->parsed = true;
+		}
+
+		if (deprecated) {
+			cf_log_err(c_item, "Configuration item \"%s\" is deprecated", name);
+
+			return -2;
+		}
 	}
 
 	if (!value) {
 		if (required) {
 		is_required:
-			if (!cp) {
-				cf_log_err(&(cs->item), "Configuration item '%s' must have a value", name);
-			} else {
-				cf_log_err(&(cp->item), "Configuration item '%s' must have a value", name);
-			}
+			cf_log_err(c_item, "Configuration item \"%s\" must have a value", name);
+
 			return -1;
 		}
 		return rcode;
@@ -1132,107 +1465,29 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, unsigned int type, void *d
 
 	if ((value[0] == '\0') && cant_be_empty) {
 	cant_be_empty:
-		if (!cp) {
-			cf_log_err(&(cs->item), "Configuration item '%s' must not be empty (zero length)", name);
-			if (!required) cf_log_err(&(cs->item), "Comment item to silence this message");
-		} else {
-			cf_log_err(&(cp->item), "Configuration item '%s' must not be empty (zero length)", name);
-			if (!required) cf_log_err(&(cp->item), "Comment item to silence this message");
-		}
+		cf_log_err(c_item, "Configuration item \"%s\" must not be empty (zero length)", name);
+		if (!required) cf_log_err(c_item, "Comment item to silence this message");
+
 		return -1;
 	}
 
-	if (deprecated) {
-		cf_log_err(&(cs->item), "Configuration item \"%s\" is deprecated", name);
-
-		return -2;
-	}
 
 	/*
-	 *
+	 *	Process a value as a LITERAL template.  Once all of
+	 *	the attrs and xlats are defined, the pass2 code
+	 *	converts it to the appropriate type.
 	 */
 	if (tmpl) {
-		ssize_t slen;
-		value_pair_tmpl_t *vpt;
+		vp_tmpl_t *vpt;
 
-		if (!value || (cf_pair_value_type(cp) == T_INVALID)) {
-			*(value_pair_tmpl_t **)data = NULL;
+		if (!value) {
+			*(vp_tmpl_t **)data = NULL;
 			return 0;
 		}
 
-		slen = tmpl_afrom_str(cs, &vpt, value, strlen(value),
-				      cf_pair_value_type(cp), REQUEST_CURRENT, PAIR_LIST_REQUEST);
-		if (slen < 0) {
-			char *spaces, *text;
-
-			fr_canonicalize_error(cs, &spaces, &text, slen, fr_strerror());
-
-			cf_log_err_cs(cs, "Failed parsing configuration item '%s'", name);
-			cf_log_err_cs(cs, "%s", value);
-			cf_log_err_cs(cs, "%s^ %s", spaces, text);
-
-			talloc_free(spaces);
-			talloc_free(text);
-
-			return -1;
-		}
-
-		/*
-		 *	Sanity check
-		 *
-		 *	Don't add default - update with new types.
-		 */
-		switch (vpt->type) {
-		case TMPL_TYPE_LITERAL:
-		case TMPL_TYPE_ATTR:
-		case TMPL_TYPE_ATTR_UNDEFINED:
-		case TMPL_TYPE_LIST:
-		case TMPL_TYPE_DATA:
-		case TMPL_TYPE_EXEC:
-		case TMPL_TYPE_XLAT:
-		case TMPL_TYPE_XLAT_STRUCT:
-			break;
-
-		case TMPL_TYPE_UNKNOWN:
-		case TMPL_TYPE_REGEX:
-		case TMPL_TYPE_REGEX_STRUCT:
-		case TMPL_TYPE_NULL:
-			rad_assert(0);
-		}
-
-		/*
-		 *	If the attribute flag is set, the template must be an
-		 *	attribute reference.
-		 */
-		if (attribute && (vpt->type != TMPL_TYPE_ATTR)) {
-			cf_log_err(&(cs->item), "Configuration item '%s' must be an attr "
-				   "but is an %s", name, fr_int2str(tmpl_names, vpt->type, "<INVALID>"));
-			talloc_free(vpt);
-			return -1;
-		}
-
-		/*
-		 *	If the xlat flag is set, the template must be an xlat
-		 */
-		if (xlat && (vpt->type != TMPL_TYPE_XLAT_STRUCT)) {
-			cf_log_err(&(cs->item), "Configuration item '%s' must be an xlat expansion but is an %s",
-				   name, fr_int2str(tmpl_names, vpt->type, "<INVALID>"));
-			talloc_free(vpt);
-			return -1;
-		}
-
-		/*
-		 *	If we have a type, and the template is an attribute reference
-		 *	check that the attribute reference matches the type.
-		 */
-		if ((type > 0) && (vpt->type == TMPL_TYPE_ATTR) && (vpt->tmpl_da->type != type)) {
-			cf_log_err(&(cs->item), "Configuration item '%s' attr must be an %s, but is an %s",
-				   name, fr_int2str(dict_attr_types, type, "<INVALID>"),
-				   fr_int2str(dict_attr_types, vpt->tmpl_da->type, "<INVALID>"));
-			talloc_free(vpt);
-			return -1;
-		}
-		*(value_pair_tmpl_t **)data = vpt;
+		rad_assert(!attribute);
+		vpt = tmpl_alloc(cs, TMPL_TYPE_LITERAL, value, strlen(value));
+		*(vp_tmpl_t **)data = vpt;
 
 		return 0;
 	}
@@ -1240,12 +1495,14 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, unsigned int type, void *d
 	switch (type) {
 	case PW_TYPE_BOOLEAN:
 		/*
-		 *	Allow yes/no and on/off
+		 *	Allow yes/no, true/false, and on/off
 		 */
 		if ((strcasecmp(value, "yes") == 0) ||
+		    (strcasecmp(value, "true") == 0) ||
 		    (strcasecmp(value, "on") == 0)) {
 			*(bool *)data = true;
 		} else if ((strcasecmp(value, "no") == 0) ||
+			   (strcasecmp(value, "false") == 0) ||
 			   (strcasecmp(value, "off") == 0)) {
 			*(bool *)data = false;
 		} else {
@@ -1277,6 +1534,20 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, unsigned int type, void *d
 
 		*(uint32_t *)data = v;
 		cf_log_info(cs, "%.*s\t%s = %u", cs->depth, parse_spaces, name, *(uint32_t *)data);
+	}
+		break;
+
+	case PW_TYPE_BYTE:
+	{
+		unsigned long v = strtoul(value, 0, 0);
+
+		if (v > UINT8_MAX) {
+			cf_log_err(&(cs->item), "Invalid value \"%s\" for variable %s, must be between 0-%u", value,
+				   name, UINT8_MAX);
+			return -1;
+		}
+		*(uint8_t *)data = (uint8_t) v;
+		cf_log_info(cs, "%.*s\t%s = %u", cs->depth, parse_spaces, name, *(uint8_t *)data);
 	}
 		break;
 
@@ -1323,7 +1594,7 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, unsigned int type, void *d
 			value = cf_expand_variables("<internal>",
 						    &lineno,
 						    cs, buffer, sizeof(buffer),
-						    value);
+						    value, NULL);
 			if (!value) {
 				cf_log_err(&(cs->item),"Failed expanding variable %s", name);
 				return -1;
@@ -1348,7 +1619,7 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, unsigned int type, void *d
 		/*
 		 *	Hide secrets when using "radiusd -X".
 		 */
-		if (secret && (debug_flag <= 2)) {
+		if (secret && (rad_debug_lvl <= 2)) {
 			cf_log_info(cs, "%.*s\t%s = <<< secret >>>",
 				    cs->depth, parse_spaces, name);
 		} else {
@@ -1363,21 +1634,8 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, unsigned int type, void *d
 		 *	to be caught as early as possible, during
 		 *	server startup.
 		 */
-		if (*q && file_input) {
-			struct stat buf;
-
-			if (stat(*q, &buf) < 0) {
-				char user[255], group[255];
-
-				ERROR("Unable to open file \"%s\": %s", value, fr_syserror(errno));
-				ERROR("Our effective user and group was %s:%s",
-				      (rad_prints_uid(NULL, user, sizeof(user), geteuid()) < 0) ?
-				      "unknown" : user,
-				      (rad_prints_gid(NULL, group, sizeof(group), getegid()) < 0) ?
-				      "unknown" : group );
-
-				return -1;
-			}
+		if (*q && file_input && !cf_file_input(cs, *q)) {
+			return -1;
 		}
 		break;
 
@@ -1407,7 +1665,7 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, unsigned int type, void *d
 	case PW_TYPE_COMBO_IP_PREFIX:
 		ipaddr = data;
 
-		if (fr_pton(ipaddr, value, -1, true) < 0) {
+		if (fr_pton(ipaddr, value, -1, AF_UNSPEC, true) < 0) {
 			ERROR("%s", fr_strerror());
 			return -1;
 		}
@@ -1469,6 +1727,7 @@ int cf_item_parse(CONF_SECTION *cs, char const *name, unsigned int type, void *d
 
 		cpn = cf_pair_alloc(cs, name, value, T_OP_SET, T_BARE_WORD, T_BARE_WORD);
 		if (!cpn) return -1;
+		cpn->parsed = true;
 		cpn->item.filename = "<internal>";
 		cpn->item.lineno = 0;
 		cf_item_add(cs, &(cpn->item));
@@ -1503,8 +1762,7 @@ static void cf_section_parse_init(CONF_SECTION *cs, void *base,
 			 *	etc. allocated in the subsection.
 			 */
 			if (!subcs) {
-				subcs = cf_section_alloc(cs, variables[i].name,
-							 NULL);
+				subcs = cf_section_alloc(cs, variables[i].name, NULL);
 				if (!subcs) return;
 
 				subcs->item.filename = cs->item.filename;
@@ -1512,7 +1770,7 @@ static void cf_section_parse_init(CONF_SECTION *cs, void *base,
 				cf_item_add(cs, &(subcs->item));
 			}
 
-			cf_section_parse_init(subcs, base,
+			cf_section_parse_init(subcs, (uint8_t *)base + variables[i].offset,
 					      (CONF_PARSER const *) variables[i].dflt);
 			continue;
 		}
@@ -1534,24 +1792,58 @@ static void cf_section_parse_init(CONF_SECTION *cs, void *base,
 }
 
 
-/*
- *	Parse a configuration section into user-supplied variables.
- */
-int cf_section_parse(CONF_SECTION *cs, void *base,
-		     CONF_PARSER const *variables)
+static void cf_section_parse_warn(CONF_SECTION *cs)
 {
-	int ret;
+	CONF_ITEM *ci;
+
+	for (ci = cs->children; ci; ci = ci->next) {
+		/*
+		 *	Don't recurse on sections. We can only safely
+		 *	check conf pairs at the same level as the
+		 *	section that was just parsed.
+		 */
+		if (ci->type == CONF_ITEM_SECTION) continue;
+		if (ci->type == CONF_ITEM_PAIR) {
+			CONF_PAIR *cp;
+
+			cp = cf_item_to_pair(ci);
+			if (cp->parsed) continue;
+
+			WARN("%s[%d]: The item '%s' is defined, but is unused by the configuration",
+			     cp->item.filename ? cp->item.filename : "unknown",
+			     cp->item.lineno ? cp->item.lineno : 0,
+				cp->attr);
+		}
+
+		/*
+		 *	Skip everything else.
+		 */
+	}
+}
+
+/** Parse a configuration section into user-supplied variables
+ *
+ * @param cs to parse.
+ * @param base pointer to a struct to fill with data.  Any buffers will also be talloced
+ *	using this parent as a pointer.
+ * @param variables mappings between struct fields and #CONF_ITEM s.
+ * @return
+ *	- 0 on success.
+ *	- -1 on general error.
+ *	- -2 if a deprecated #CONF_ITEM was found.
+ */
+int cf_section_parse(CONF_SECTION *cs, void *base, CONF_PARSER const *variables)
+{
+	int ret = 0;
 	int i;
 	void *data;
 
 	cs->variables = variables; /* this doesn't hurt anything */
 
 	if (!cs->name2) {
-		cf_log_info(cs, "%.*s%s {", cs->depth, parse_spaces,
-		       cs->name1);
+		cf_log_info(cs, "%.*s%s {", cs->depth, parse_spaces, cs->name1);
 	} else {
-		cf_log_info(cs, "%.*s%s %s {", cs->depth, parse_spaces,
-		       cs->name1, cs->name2);
+		cf_log_info(cs, "%.*s%s %s {", cs->depth, parse_spaces, cs->name1, cs->name2);
 	}
 
 	cf_section_parse_init(cs, base, variables);
@@ -1565,18 +1857,21 @@ int cf_section_parse(CONF_SECTION *cs, void *base,
 		 */
 		if (variables[i].type == PW_TYPE_SUBSECTION) {
 			CONF_SECTION *subcs;
+
 			subcs = cf_section_sub_find(cs, variables[i].name);
-
+			/*
+			 *	Default in this case is overloaded to mean a pointer
+			 *	to the CONF_PARSER struct for the subsection.
+			 */
 			if (!variables[i].dflt || !subcs) {
-				DEBUG2("Internal sanity check 1 failed in cf_section_parse %s",
-				       variables[i].name);
-				goto error;
+				ERROR("Internal sanity check 1 failed in cf_section_parse %s", variables[i].name);
+				ret = -1;
+				goto finish;
 			}
 
-			if (cf_section_parse(subcs, base,
-					     (CONF_PARSER const *) variables[i].dflt) < 0) {
-				goto error;
-			}
+			ret = cf_section_parse(subcs, (uint8_t *)base + variables[i].offset,
+					       (CONF_PARSER const *) variables[i].dflt);
+			if (ret < 0) goto finish;
 			continue;
 		} /* else it's a CONF_PAIR */
 
@@ -1585,37 +1880,54 @@ int cf_section_parse(CONF_SECTION *cs, void *base,
 		} else if (base) {
 			data = ((char *)base) + variables[i].offset;
 		} else {
-			DEBUG2("Internal sanity check 2 failed in cf_section_parse");
-			goto error;
+			ERROR("Internal sanity check 2 failed in cf_section_parse");
+			ret = -1;
+			goto finish;
 		}
 
 		/*
 		 *	Parse the pair we found, or a default value.
 		 */
 		ret = cf_item_parse(cs, variables[i].name, variables[i].type, data, variables[i].dflt);
-		if (ret < 0) {
-			/*
-			 *	Be nice, and print the name of the new config item.
-			 */
-			if ((ret == -2) && (variables[i + 1].offset == variables[i].offset) &&
+		switch (ret) {
+		case 1:		/* Used default */
+			ret = 0;
+			break;
+
+		case 0:		/* OK */
+			break;
+
+		case -1:	/* Parse error */
+			goto finish;
+
+		case -2:	/* Deprecated CONF ITEM */
+			if ((variables[i + 1].offset == variables[i].offset) &&
 			    (variables[i + 1].data == variables[i].data)) {
 				cf_log_err(&(cs->item), "Replace \"%s\" with \"%s\"", variables[i].name,
 					   variables[i + 1].name);
 			}
-
-			goto error;
+			goto finish;
 		}
 	} /* for all variables in the configuration section */
 
-	cf_log_info(cs, "%.*s}", cs->depth, parse_spaces);
+	/*
+	 *	Ensure we have a proper terminator, type so we catch
+	 *	missing terminators reliably
+	 */
+	rad_assert(variables[i].type == -1);
+
+	/*
+	 *	Warn about items in the configuration which weren't
+	 *	checked during parsing.
+	 */
+	if (rad_debug_lvl >= 3) cf_section_parse_warn(cs);
 
 	cs->base = base;
 
-	return 0;
-
- error:
 	cf_log_info(cs, "%.*s}", cs->depth, parse_spaces);
-	return -1;
+
+finish:
+	return ret;
 }
 
 
@@ -1635,6 +1947,7 @@ int cf_section_parse_pass2(CONF_SECTION *cs, void *base, CONF_PARSER const *vari
 	 */
 	for (i = 0; variables[i].name != NULL; i++) {
 		CONF_PAIR *cp;
+		void *data;
 
 		/*
 		 *	Handle subsections specially
@@ -1643,17 +1956,29 @@ int cf_section_parse_pass2(CONF_SECTION *cs, void *base, CONF_PARSER const *vari
 			CONF_SECTION *subcs;
 			subcs = cf_section_sub_find(cs, variables[i].name);
 
-			if (cf_section_parse_pass2(subcs, base,
+			if (cf_section_parse_pass2(subcs, (uint8_t *)base + variables[i].offset,
 						   (CONF_PARSER const *) variables[i].dflt) < 0) {
 				return -1;
 			}
 			continue;
 		} /* else it's a CONF_PAIR */
 
+		/*
+		 *	Figure out which data we need to fix.
+		 */
+		if (variables[i].data) {
+			data = variables[i].data; /* prefer this. */
+		} else if (base) {
+			data = ((char *)base) + variables[i].offset;
+		} else {
+			data = NULL;
+		}
+
 		cp = cf_pair_find(cs, variables[i].name);
+		xlat = NULL;
 
 	redo:
-		if (!cp || !cp->value) continue;
+		if (!cp || !cp->value || !data) continue;
 
 		if ((cp->rhs_type != T_DOUBLE_QUOTED_STRING) &&
 		    (cp->rhs_type != T_BARE_WORD)) continue;
@@ -1678,30 +2003,87 @@ int cf_section_parse_pass2(CONF_SECTION *cs, void *base, CONF_PARSER const *vari
 		}
 
 		/*
-		 *	xlat expansions should be parseable.
+		 *	Parse (and throw away) the xlat string.
+		 *
+		 *	FIXME: All of these should be converted from PW_TYPE_XLAT
+		 *	to PW_TYPE_TMPL.
 		 */
-		value = talloc_strdup(cs, cp->value); /* modified by xlat_tokenize */
-		xlat = NULL;
+		if ((variables[i].type & PW_TYPE_XLAT) != 0) {
+			/*
+			 *	xlat expansions should be parseable.
+			 */
+			value = talloc_strdup(cs, cp->value); /* modified by xlat_tokenize */
+			xlat = NULL;
 
-		slen = xlat_tokenize(cs, value, &xlat, &error);
-		if (slen < 0) {
-			char *spaces, *text;
+			slen = xlat_tokenize(cs, value, &xlat, &error);
+			if (slen < 0) {
+				char *spaces, *text;
 
-			fr_canonicalize_error(cs, &spaces, &text, slen, cp->value);
+			error:
+				fr_canonicalize_error(cs, &spaces, &text, slen, cp->value);
 
-			cf_log_err(&cp->item, "Failed parsing expanded string:");
-			cf_log_err(&cp->item, "%s", text);
-			cf_log_err(&cp->item, "%s^ %s", spaces, error);
+				cf_log_err(&cp->item, "Failed parsing expanded string:");
+				cf_log_err(&cp->item, "%s", text);
+				cf_log_err(&cp->item, "%s^ %s", spaces, error);
 
-			talloc_free(spaces);
-			talloc_free(text);
+				talloc_free(spaces);
+				talloc_free(text);
+				talloc_free(value);
+				talloc_free(xlat);
+				return -1;
+			}
+
 			talloc_free(value);
 			talloc_free(xlat);
-			return -1;
 		}
 
-		talloc_free(value);
-		talloc_free(xlat);
+		/*
+		 *	Convert the LITERAL template to the actual
+		 *	type.
+		 */
+		if ((variables[i].type & PW_TYPE_TMPL) != 0) {
+			vp_tmpl_t *vpt;
+
+			slen = tmpl_afrom_str(cs, &vpt, cp->value, talloc_array_length(cp->value) - 1,
+					      cp->rhs_type,
+					      REQUEST_CURRENT, PAIR_LIST_REQUEST, true);
+			if (slen < 0) {
+				error = fr_strerror();
+				goto error;
+			}
+
+			/*
+			 *	Sanity check
+			 *
+			 *	Don't add default - update with new types.
+			 */
+			switch (vpt->type) {
+			/*
+			 *	All attributes should have been defined by this point.
+			 */
+			case TMPL_TYPE_ATTR_UNDEFINED:
+				cf_log_err(&cp->item, "Unknown attribute '%s'", vpt->tmpl_unknown_name);
+				return -1;
+
+			case TMPL_TYPE_LITERAL:
+			case TMPL_TYPE_ATTR:
+			case TMPL_TYPE_LIST:
+			case TMPL_TYPE_DATA:
+			case TMPL_TYPE_EXEC:
+			case TMPL_TYPE_XLAT:
+			case TMPL_TYPE_XLAT_STRUCT:
+				break;
+
+			case TMPL_TYPE_UNKNOWN:
+			case TMPL_TYPE_REGEX:
+			case TMPL_TYPE_REGEX_STRUCT:
+			case TMPL_TYPE_NULL:
+				rad_assert(0);
+			}
+
+			talloc_free(*(vp_tmpl_t **)data);
+			*(vp_tmpl_t **)data = vpt;
+		}
 
 		/*
 		 *	If the "multi" flag is set, check all of them.
@@ -1830,7 +2212,7 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 			   CONF_SECTION *current)
 
 {
-	CONF_SECTION *this, *css, *nextcs;
+	CONF_SECTION *this, *css;
 	CONF_PAIR *cpn;
 	char const *ptr;
 	char const *value;
@@ -1841,9 +2223,9 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 	char buf4[8192];
 	FR_TOKEN t1 = T_INVALID, t2, t3;
 	bool has_spaces = false;
+	bool pass2;
 	char *cbuf = buf;
 	size_t len;
-	fr_cond_t *cond = NULL;
 
 	this = current;		/* add items here */
 
@@ -1852,7 +2234,7 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 	 */
 	for (;;) {
 		int at_eof;
-		nextcs = NULL;
+		css = NULL;
 
 		/*
 		 *	Get data, and remember if we are at EOF.
@@ -1928,6 +2310,8 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 		has_spaces = false;
 
 	get_more:
+		pass2 = false;
+
 		/*
 		 *	The parser is getting to be evil.
 		 */
@@ -1992,6 +2376,8 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 		       goto check_for_more;
 	       }
 
+	       if (t1 != T_BARE_WORD) goto skip_keywords;
+
 		/*
 		 *	Allow for $INCLUDE files
 		 *
@@ -2011,7 +2397,7 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 
 			if (buf2[0] == '$') relative = false;
 
-			value = cf_expand_variables(filename, lineno, this, buf4, sizeof(buf4), buf2);
+			value = cf_expand_variables(filename, lineno, this, buf4, sizeof(buf4), buf2, NULL);
 			if (!value) return -1;
 
 			if (!FR_DIR_IS_RELATIVE(value)) relative = false;
@@ -2174,6 +2560,7 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 			char const *error = NULL;
 			char *p;
 			CONF_SECTION *server;
+			fr_cond_t *cond = NULL;
 
 			/*
 			 *	if / elsif MUST be inside of a
@@ -2188,9 +2575,21 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 			}
 
 			/*
+			 *	Can only have "if" in 3 named sections.
+			 */
+			server = this->item.parent;
+			while (server &&
+			       (strcmp(server->name1, "server") != 0) &&
+			       (strcmp(server->name1, "policy") != 0) &&
+			       (strcmp(server->name1, "instantiate") != 0)) {
+				server = server->item.parent;
+				if (!server) goto invalid_location;
+			}
+
+			/*
 			 *	Skip (...) to find the {
 			 */
-			slen = fr_condition_tokenize(nextcs, cf_section_to_item(nextcs), ptr, &cond,
+			slen = fr_condition_tokenize(this, cf_section_to_item(this), ptr, &cond,
 						     &error, FR_COND_TWO_PASS);
 			memcpy(&p, &ptr, sizeof(p));
 
@@ -2224,7 +2623,7 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 				ptr = cf_expand_variables(filename, lineno,
 							  this,
 							  buf3, sizeof(buf3),
-							  ptr);
+							  ptr, NULL);
 				if (!ptr) {
 					ERROR("%s[%d]: Parse error expanding ${...} in condition",
 					      filename, *lineno);
@@ -2232,24 +2631,16 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 				}
 			} /* else leave it alone */
 
-			server = this->item.parent;
-			while ((strcmp(server->name1, "server") != 0) &&
-			       (strcmp(server->name1, "policy") != 0) &&
-			       (strcmp(server->name1, "instantiate") != 0)) {
-				server = server->item.parent;
-				if (!server) goto invalid_location;
-			}
-
-			nextcs = cf_section_alloc(this, buf1, ptr);
-			if (!nextcs) {
+			css = cf_section_alloc(this, buf1, ptr);
+			if (!css) {
 				ERROR("%s[%d]: Failed allocating memory for section",
 				      filename, *lineno);
 				return -1;
 			}
-			nextcs->item.filename = talloc_strdup(nextcs, filename);
-			nextcs->item.lineno = *lineno;
+			css->item.filename = filename;
+			css->item.lineno = *lineno;
 
-			slen = fr_condition_tokenize(nextcs, cf_section_to_item(nextcs), ptr, &cond,
+			slen = fr_condition_tokenize(css, cf_section_to_item(css), ptr, &cond,
 						     &error, FR_COND_TWO_PASS);
 			*p = '{'; /* put it back */
 
@@ -2257,7 +2648,7 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 			if (slen < 0) {
 				char *spaces, *text;
 
-				fr_canonicalize_error(nextcs, &spaces, &text, slen, ptr);
+				fr_canonicalize_error(this, &spaces, &text, slen, ptr);
 
 				ERROR("%s[%d]: Parse error in condition",
 				      filename, *lineno);
@@ -2266,12 +2657,12 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 
 				talloc_free(spaces);
 				talloc_free(text);
-				talloc_free(nextcs);
+				talloc_free(css);
 				return -1;
 			}
 
 			if ((size_t) slen >= (sizeof(buf2) - 1)) {
-				talloc_free(nextcs);
+				talloc_free(css);
 				ERROR("%s[%d]: Condition is too large after \"%s\"",
 				       filename, *lineno, buf1);
 				return -1;
@@ -2289,10 +2680,9 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 			memcpy(buf2, ptr, slen);
 			buf2[slen] = '\0';
 			ptr = p;
-			t2 = T_BARE_WORD;
 
 			if ((t3 = gettoken(&ptr, buf3, sizeof(buf3), true)) != T_LCBRACE) {
-				talloc_free(nextcs);
+				talloc_free(css);
 				ERROR("%s[%d]: Expected '{' %d",
 				      filename, *lineno, t3);
 				return -1;
@@ -2302,13 +2692,22 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 			 *	Swap the condition with trailing stuff for
 			 *	the final condition.
 			 */
-			memcpy(&p, &nextcs->name2, sizeof(nextcs->name2));
+			memcpy(&p, &css->name2, sizeof(css->name2));
 			talloc_free(p);
-			nextcs->name2 = talloc_typed_strdup(nextcs, buf2);
+			css->name2 = talloc_typed_strdup(css, buf2);
 
-			goto section_alloc;
+			cf_item_add(this, &(css->item));
+			cf_data_add_internal(css, "if", cond, NULL, false);
+
+			/*
+			 *	The current section is now the child section.
+			 */
+			this = css;
+			css = NULL;
+			goto check_for_more;
 		}
 
+	skip_keywords:
 		/*
 		 *	Grab the next token.
 		 */
@@ -2378,25 +2777,27 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 			}
 
 			/*
-			 *	These are not allowed.  Print a
-			 *	helpful error message.
-			 */
-			if ((t3 == T_BACK_QUOTED_STRING) &&
-			    (!this || (strcmp(this->name1, "update") != 0))) {
-				ERROR("%s[%d]: Syntax error: Invalid string `...` in assignment",
-				       filename, *lineno);
-				return -1;
-			}
-
-			/*
-			 *	Handle variable substitution via ${foo}
+			 *	Allow "foo" by itself, or "foo = bar"
 			 */
 			switch (t3) {
+				bool soft_fail;
+
 			case T_BARE_WORD:
 			case T_DOUBLE_QUOTED_STRING:
 			case T_BACK_QUOTED_STRING:
-				value = cf_expand_variables(filename, lineno, this, buf4, sizeof(buf4), buf3);
-				if (!value) return -1;
+				value = cf_expand_variables(filename, lineno, this, buf4, sizeof(buf4), buf3, &soft_fail);
+				if (!value) {
+					if (!soft_fail) return -1;
+
+					/*
+					 *	References an item which doesn't exist,
+					 *	or which is already marked up as being
+					 *	expanded in pass2.  Wait for pass2 to
+					 *	do the expansions.
+					 */
+					pass2 = true;
+					value = buf3;
+				}
 				break;
 
 			case T_EOL:
@@ -2415,8 +2816,9 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 		do_set:
 			cpn = cf_pair_alloc(this, buf1, value, t2, t1, t3);
 			if (!cpn) return -1;
-			cpn->item.filename = talloc_strdup(cpn, filename);
+			cpn->item.filename = filename;
 			cpn->item.lineno = *lineno;
+			cpn->pass2 = pass2;
 			cf_item_add(this, &(cpn->item));
 
 			/*
@@ -2467,28 +2869,17 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 			/* FALL-THROUGH */
 
 		case T_LCBRACE:
-		section_alloc:
-			if (!cond) {
-				css = cf_section_alloc(this, buf1,
-						       t2 == T_LCBRACE ? NULL : buf2);
-				if (!css) {
-					ERROR("%s[%d]: Failed allocating memory for section",
-					      filename, *lineno);
-					return -1;
-				}
-
-				css->item.filename = talloc_strdup(css, filename);
-				css->item.lineno = *lineno;
-				cf_item_add(this, &(css->item));
-
-			} else {
-				css = nextcs;
-				nextcs = NULL;
-
-				cf_item_add(this, &(css->item));
-				cf_data_add_internal(css, "if", cond, NULL, false);
-				cond = NULL; /* eaten by the above line */
+			css = cf_section_alloc(this, buf1,
+					       t2 == T_LCBRACE ? NULL : buf2);
+			if (!css) {
+				ERROR("%s[%d]: Failed allocating memory for section",
+				      filename, *lineno);
+				return -1;
 			}
+
+			css->item.filename = filename;
+			css->item.lineno = *lineno;
+			cf_item_add(this, &(css->item));
 
 			/*
 			 *	There may not be a name2
@@ -2542,78 +2933,29 @@ static int cf_section_read(char const *filename, int *lineno, FILE *fp,
 /*
  *	Include one config file in another.
  */
-int cf_file_include(CONF_SECTION *cs, char const *filename)
+static int cf_file_include(CONF_SECTION *cs, char const *filename_in)
 {
 	FILE		*fp;
 	int		lineno = 0;
-	struct stat	statbuf;
-	time_t		*mtime;
-	CONF_DATA	*cd;
+	char const	*filename;
+
+	/*
+	 *	So we only need to do this once.
+	 */
+	filename = talloc_strdup(cs, filename_in);
 
 	DEBUG2("including configuration file %s", filename);
 
-	fp = fopen(filename, "r");
-	if (!fp) {
-		ERROR("Unable to open file \"%s\": %s",
-		       filename, fr_syserror(errno));
-		return -1;
-	}
+	fp = cf_file_open(cs, filename);
+	if (!fp) return -1;
 
-	if (stat(filename, &statbuf) == 0) {
-#ifdef S_IWOTH
-		if ((statbuf.st_mode & S_IWOTH) != 0) {
-			fclose(fp);
-			ERROR("Configuration file %s is globally writable.  "
-			      "Refusing to start due to insecure configuration.", filename);
-			return -1;
-		}
-#endif
-
-#if 0 && defined(S_IROTH)
-		if (statbuf.st_mode & S_IROTH) != 0) {
-			fclose(fp);
-			ERROR("Configuration file %s is globally readable.  "
-			      "Refusing to start due to insecure configuration", filename);
-			return -1;
-		}
-#endif
-	}
-
-	if (cf_data_find_internal(cs, filename, PW_TYPE_FILE_INPUT)) {
-		fclose(fp);
-		ERROR("Cannot include the same file twice: \"%s\"", filename);
-
-		return -1;
-	}
-
-	/*
-	 *	Add the filename to the section
-	 */
-	mtime = talloc(cs, time_t);
-	*mtime = statbuf.st_mtime;
-
-	if (cf_data_add_internal(cs, filename, mtime, NULL, PW_TYPE_FILE_INPUT) < 0) {
-		fclose(fp);
-		ERROR("Internal error opening file \"%s\"",
-		       filename);
-		return -1;
-	}
-
-	cd = cf_data_find_internal(cs, filename, PW_TYPE_FILE_INPUT);
-	if (!cd) {
-		fclose(fp);
-		ERROR("Internal error opening file \"%s\"",
-		       filename);
-		return -1;
-	}
-
-	if (!cs->item.filename) cs->item.filename = talloc_strdup(cs, filename);
+	if (!cs->item.filename) cs->item.filename = filename;
 
 	/*
 	 *	Read the section.  It's OK to have EOF without a
 	 *	matching close brace.
 	 */
-	if (cf_section_read(cd->name, &lineno, fp, cs) < 0) {
+	if (cf_section_read(filename, &lineno, fp, cs) < 0) {
 		fclose(fp);
 		return -1;
 	}
@@ -2622,6 +2964,47 @@ int cf_file_include(CONF_SECTION *cs, char const *filename)
 	return 0;
 }
 
+
+/*
+ *	Do variable expansion in pass2.
+ *
+ *	This is a breadth-first expansion.  "deep
+ */
+static int cf_section_pass2(CONF_SECTION *cs)
+{
+	CONF_ITEM *ci;
+
+	for (ci = cs->children; ci; ci = ci->next) {
+		char const *value;
+		CONF_PAIR *cp;
+		char buffer[8192];
+
+		if (ci->type != CONF_ITEM_PAIR) continue;
+
+		cp = cf_item_to_pair(ci);
+		if (!cp->value || !cp->pass2) continue;
+
+		rad_assert((cp->rhs_type == T_BARE_WORD) ||
+			   (cp->rhs_type == T_DOUBLE_QUOTED_STRING) ||
+			   (cp->rhs_type == T_BACK_QUOTED_STRING));
+
+		value = cf_expand_variables(ci->filename, &ci->lineno, cs, buffer, sizeof(buffer), cp->value, NULL);
+		if (!value) return -1;
+
+		rad_const_free(cp->value);
+		cp->value = talloc_typed_strdup(cp, value);
+	}
+
+	for (ci = cs->children; ci; ci = ci->next) {
+		if (ci->type != CONF_ITEM_SECTION) continue;
+
+		if (cf_section_pass2(cf_item_to_section(ci)) < 0) return -1;
+	}
+
+	return 0;
+}
+
+
 /*
  *	Bootstrap a config file.
  */
@@ -2629,6 +3012,7 @@ int cf_file_read(CONF_SECTION *cs, char const *filename)
 {
 	char *p;
 	CONF_PAIR *cp;
+	rbtree_t *tree;
 
 	cp = cf_pair_alloc(cs, "confdir", filename, T_OP_SET, T_BARE_WORD, T_SINGLE_QUOTED_STRING);
 	if (!cp) return -1;
@@ -2636,11 +3020,22 @@ int cf_file_read(CONF_SECTION *cs, char const *filename)
 	p = strrchr(cp->value, FR_DIR_SEP);
 	if (p) *p = '\0';
 
-	cp->item.filename = "internal";
+	cp->item.filename = "<internal>";
 	cp->item.lineno = -1;
 	cf_item_add(cs, &(cp->item));
 
+	tree = rbtree_create(cs, filename_cmp, NULL, 0);
+	if (!tree) return -1;
+
+	cf_data_add_internal(cs, "filename", tree, NULL, 0);
+
 	if (cf_file_include(cs, filename) < 0) return -1;
+
+	/*
+	 *	Now that we've read the file, go back through it and
+	 *	expand the variables.
+	 */
+	if (cf_section_pass2(cs) < 0) return -1;
 
 	return 0;
 }
@@ -2740,12 +3135,12 @@ VALUE_PAIR *cf_pairtovp(CONF_PAIR *pair)
 	     (pair->rhs_type == T_BACK_QUOTED_STRING))) {
 		VALUE_PAIR *vp;
 
-		vp = pairmake(pair, NULL, pair->attr, NULL, pair->op);
+		vp = fr_pair_make(pair, NULL, pair->attr, NULL, pair->op);
 		if (!vp) {
 			return NULL;
 		}
 
-		if (pairmark_xlat(vp, pair->value) < 0) {
+		if (fr_pair_mark_xlat(vp, pair->value) < 0) {
 			talloc_free(vp);
 
 			return NULL;
@@ -2754,7 +3149,7 @@ VALUE_PAIR *cf_pairtovp(CONF_PAIR *pair)
 		return vp;
 	}
 
-	return pairmake(pair, NULL, pair->attr, pair->value, pair->op);
+	return fr_pair_make(pair, NULL, pair->attr, pair->value, pair->op);
 }
 
 /*
@@ -3292,7 +3687,7 @@ void cf_log_info(CONF_SECTION const *cs, char const *fmt, ...)
 	va_list ap;
 
 	va_start(ap, fmt);
-	if ((debug_flag > 1) && cs) vradlog(L_DBG, fmt, ap);
+	if ((rad_debug_lvl > 1) && cs) vradlog(L_DBG, fmt, ap);
 	va_end(ap);
 }
 
@@ -3305,7 +3700,7 @@ void cf_log_module(CONF_SECTION const *cs, char const *fmt, ...)
 	char buffer[256];
 
 	va_start(ap, fmt);
-	if (debug_flag > 1 && cs) {
+	if (rad_debug_lvl > 1 && cs) {
 		vsnprintf(buffer, sizeof(buffer), fmt, ap);
 
 		DEBUG("%.*s# %s", cs->depth, parse_spaces, buffer);

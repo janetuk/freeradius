@@ -33,10 +33,9 @@ dnl #
 dnl #  Custom hackery to discover version at configure time
 dnl #
 dnl #############################################################
-
-RADIUSD_MAJOR_VERSION=`cat VERSION | sed 's/\..*//'`
-RADIUSD_MINOR_VERSION=`cat VERSION | sed 's/^[[^\.]]*\.//' | sed 's/\..*$//'`
-RADIUSD_INCRM_VERSION=`cat VERSION | sed 's/^.*\..*\.//' | sed 's/[[\.-]].*$//'`
+RADIUSD_MAJOR_VERSION=`cat VERSION | cut -f1 -d.`
+RADIUSD_MINOR_VERSION=`cat VERSION | cut -f2 -d.`
+RADIUSD_INCRM_VERSION=`cat VERSION | cut -f3 -d. | sed 's/[[\.-]].*$//'`
 
 RADIUSD_VERSION=`echo | awk -v major="$RADIUSD_MAJOR_VERSION" \
 -v minor="$RADIUSD_MINOR_VERSION" \
@@ -167,8 +166,8 @@ dnl #  check for system bytesex
 dnl #  AC_DEFINES WORDS_BIGENDIAN
 dnl #
 AC_C_BIGENDIAN(
-  [AC_DEFINE(RADIUS_BIG_ENDIAN, 1, [Define if your processor stores words with the most significant byte first])],
-  [AC_DEFINE(RADIUS_LITTLE_ENDIAN, 1, [Define if your processor stores words with the least significant byte first])]
+  [AC_DEFINE(FR_BIG_ENDIAN, 1, [Define if your processor stores words with the most significant byte first])],
+  [AC_DEFINE(FR_LITTLE_ENDIAN, 1, [Define if your processor stores words with the least significant byte first])]
 )
 
 dnl #
@@ -711,25 +710,51 @@ if test "x$WITH_THREADS" = "xyes"; then
   dnl #  On Some systems, we need extra pre-processor flags, to get them to
   dnl #  to do the threading properly.
   dnl #
-  AC_CHECK_LIB(pthread, pthread_create,
-    [
-      CFLAGS="$CFLAGS -D_REENTRANT -D_POSIX_PTHREAD_SEMANTICS"
-      LIBS="-lpthread $LIBS"
-    ],
-    [
-      dnl #
-      dnl # -pthread is not a typo, it's a GCC option which sets additional flags required
-      dnl # for multithreading with the pthreads library.
-      dnl #
+  if test "x$WITH_THREADS" != "xno"; then
+    AC_CHECK_LIB(pthread, pthread_create,
+      [
+        HAVE_LPTHREAD='yes'
+        CFLAGS="$CFLAGS -D_REENTRANT -D_POSIX_PTHREAD_SEMANTICS"
+        LIBS="-lpthread $LIBS"
+
+        dnl #
+        dnl #  -pthread should add all required CPP definitions and linker
+        dnl #  arguments. But not all compilers support it, or some compilers
+        dnl #  only support it on certain platforms.
+        dnl #
+        AX_CC_PTHREAD_FLAG
+        if test "x$ax_cv_cc_pthread_flag" != 'xyes'; then
+          CFLAGS="$CFLAGS -pthread"
+        fi
+      ]
+    )
+
+    dnl #
+    dnl #  Check for libc_r which used to be the threading library used
+    dnl #  for FreeBSD. Internet says it may be deprecated, but if we
+    dnl #  can't find lpthread it's probably worth checking.
+    dnl #
+    if test "x$HAVE_LPTHREAD" != "xyes"; then
       AC_CHECK_LIB(c_r, pthread_create,
-        [ CFLAGS="$CFLAGS -pthread -D_THREAD_SAFE" ],
         [
-          WITH_THREADS="no"
-          fail=[-lpthread]
-        ]
+          CFLAGS="$CFLAGS -D_THREAD_SAFE"
+
+          dnl #
+          dnl #  -pthread should add all required CPP definitions and linker
+          dnl #  arguments. But not all compilers support it, or some compilers
+          dnl #  only support it on certain platforms.
+          dnl #
+          AX_CC_PTHREAD_FLAG
+          if test "x$ax_cv_cc_pthread_flag" != 'xyes'; then
+            LIBS="-lc_r $LIBS"
+          else
+            CFLAGS="$CFLAGS -pthread"
+          fi
+        ],
+        [ fail=[-lc_r or -lpthread] ]
       )
-    ]
-  )
+    fi
+  fi
 
   if test "x$WITH_THREADS" != "xyes"; then
     AC_MSG_WARN([silently not building with thread support.])
@@ -764,7 +789,7 @@ else
 fi
 
 dnl #
-dnl #  Check if we need -lsocket
+dnl #  Check if we have -ldl
 dnl #
 AC_CHECK_LIB(dl, dlopen)
 
@@ -1088,6 +1113,7 @@ if test "x$WITH_OPENSSL" = xyes; then
       openssl/md5.h \
       openssl/md4.h \
       openssl/sha.h \
+      openssl/ssl.h \
       openssl/ocsp.h \
       openssl/engine.h,
       [ OPENSSL_CPPFLAGS="$smart_include" ],
@@ -1440,7 +1466,8 @@ AC_CHECK_FUNCS( \
   openat \
   mkdirat \
   unlinkat \
-  bindat
+  bindat \
+  dladdr
 )
 
 AC_TYPE_SIGNAL
@@ -1557,7 +1584,7 @@ if test "x$developer" = "xyes"; then
   dnl #
   AX_CC_WEVERYTHING_FLAG
   if test "x$ax_cv_cc_weverything_flag" = "xyes"; then
-    devflags="$devflags -Weverything -Wformat=2 -Wno-padded -Wno-gnu-zero-variadic-macro-arguments -Wno-shorten-64-to-32 -Wno-sign-conversion -Wno-conversion -Wno-switch-enum -Wno-gnu-statement-expression -Wno-extended-offsetof -Wno-cast-align -Wno-documentation-unknown-command -Wno-covered-switch-default -Wno-packed -DWITH_VERIFY_PTR=1"
+    devflags="$devflags -W -Weverything -Wformat=2 -Wno-missing-field-initializers -Wno-date-time -Wno-padded -Wno-gnu-zero-variadic-macro-arguments -Wno-shorten-64-to-32 -Wno-sign-conversion -Wno-conversion -Wno-switch-enum -Wno-gnu-statement-expression -Wno-extended-offsetof -Wno-cast-align -Wno-documentation-unknown-command -Wno-covered-switch-default -Wno-packed -Wno-reserved-id-macro -DWITH_VERIFY_PTR=1"
   else
     if test "x$GCC" = "xyes"; then
       devflags="$devflags -Wshadow -Wpointer-arith -Wcast-qual -Wcast-align -Wwrite-strings -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations -Wnested-externs -W -Wredundant-decls -Wundef -Wformat-y2k -Wno-format-extra-args -Wno-format-zero-length -Wno-cast-align -Wformat-nonliteral -Wformat-security -Wformat=2 -DWITH_VERIFY_PTR=1"
@@ -1608,7 +1635,8 @@ dnl #
 FR_TLS
 FR_HAVE_BUILTIN_CHOOSE_EXPR
 FR_HAVE_BUILTIN_TYPES_COMPATIBLE_P
-FR_HAVE_BUILTIN_BSWAP_64
+FR_HAVE_BUILTIN_BSWAP64
+FR_HAVE_BOUNDED_ATTRIBUTE
 
 dnl #############################################################
 dnl #

@@ -72,7 +72,7 @@ int radius_compare_vps(UNUSED REQUEST *request, VALUE_PAIR *check, VALUE_PAIR *v
 #ifdef HAVE_REGEX
 	if ((check->op == T_OP_REG_EQ) || (check->op == T_OP_REG_NE)) {
 		ssize_t		slen;
-		regex_t		*preg;
+		regex_t		*preg = NULL;
 		regmatch_t	rxmatch[REQUEST_MAX_REGEX + 1];	/* +1 for %{0} (whole match) capture group */
 		size_t		nmatch = sizeof(rxmatch) / sizeof(regmatch_t);
 
@@ -95,6 +95,7 @@ int radius_compare_vps(UNUSED REQUEST *request, VALUE_PAIR *check, VALUE_PAIR *v
 			REDEBUG("Error stringifying operand for regular expression");
 
 		regex_error:
+			talloc_free(preg);
 			talloc_free(expr);
 			talloc_free(value);
 			return -2;
@@ -110,14 +111,17 @@ int radius_compare_vps(UNUSED REQUEST *request, VALUE_PAIR *check, VALUE_PAIR *v
 			goto regex_error;
 		}
 
-		ret = regex_exec(preg, value_p, talloc_array_length(value_p) - 1, rxmatch, &nmatch);
-		if (ret < 0) {
+		slen = regex_exec(preg, value_p, talloc_array_length(value_p) - 1, rxmatch, &nmatch);
+		if (slen < 0) {
 			RERROR("%s", fr_strerror());
 
-			return -2;
+			goto regex_error;
 		}
 
 		if (check->op == T_OP_REG_EQ) {
+			/*
+			 *	Add in %{0}. %{1}, etc.
+			 */
 			regex_sub_to_request(request, &preg, value_p, talloc_array_length(value_p) - 1,
 					     rxmatch, nmatch);
 			ret = (slen == 1) ? 0 : -1;
@@ -326,6 +330,49 @@ static bool otherattr(DICT_ATTR const *attribute, DICT_ATTR const **from)
 
 /** Register a function as compare function.
  *
+ * @param name the attribute comparison to register
+ * @param from the attribute we want to compare with. Normally this is the same as attribute.
+ *  If null call the comparison function on every attributes in the request if first_only is false
+ * @param first_only will decide if we loop over the request attributes or stop on the first one
+ * @param func comparison function
+ * @param instance argument to comparison function
+ * @return 0
+ */
+int paircompare_register_byname(char const *name, DICT_ATTR const *from,
+				bool first_only, RAD_COMPARE_FUNC func, void *instance)
+{
+	ATTR_FLAGS flags;
+	DICT_ATTR const *da;
+
+	memset(&flags, 0, sizeof(flags));
+	flags.compare = 1;
+
+	da = dict_attrbyname(name);
+	if (da) {
+		if (!da->flags.compare) {
+			fr_strerror_printf("Attribute '%s' already exists.", name);
+			return -1;
+		}
+	} else if (from) {
+		if (dict_addattr(name, -1, 0, from->type, flags) < 0) {
+			fr_strerror_printf("Failed creating attribute '%s'", name);
+			return -1;
+		}
+
+		da = dict_attrbyname(name);
+		if (!da) {
+			fr_strerror_printf("Failed finding attribute '%s'", name);
+			return -1;
+		}
+
+		DEBUG("Creating attribute %s", name);
+	}
+
+	return paircompare_register(da, from, first_only, func, instance);
+}
+
+/** Register a function as compare function.
+ *
  * @param attribute to register comparison function for.
  * @param from the attribute we want to compare with. Normally this is the same as attribute.
  *  If null call the comparison function on every attributes in the request if first_only is false
@@ -471,7 +518,7 @@ int paircompare(REQUEST *request, VALUE_PAIR *req_list, VALUE_PAIR *check,
 				WARN("Are you sure you don't mean Cleartext-Password?");
 				WARN("See \"man rlm_pap\" for more information");
 			}
-			if (pairfind(req_list, PW_USER_PASSWORD, 0, TAG_ANY) == NULL) {
+			if (fr_pair_find_by_num(req_list, PW_USER_PASSWORD, 0, TAG_ANY) == NULL) {
 				continue;
 			}
 			break;
@@ -515,7 +562,6 @@ int paircompare(REQUEST *request, VALUE_PAIR *req_list, VALUE_PAIR *check,
 		if (check_item->op == T_OP_CMP_FALSE) {
 			return -1;
 		}
-
 
 		/*
 		 *	We've got to xlat the string before doing
@@ -584,7 +630,7 @@ int paircompare(REQUEST *request, VALUE_PAIR *req_list, VALUE_PAIR *check,
 	return result;
 }
 
-/** Expands an attribute marked with pairmark_xlat
+/** Expands an attribute marked with fr_pair_mark_xlat
  *
  * Writes the new value to the vp.
  *
@@ -616,11 +662,11 @@ int radius_xlat_do(REQUEST *request, VALUE_PAIR *vp)
 	 *	then we just want to copy the new value in unmolested.
 	 */
 	if ((vp->op == T_OP_REG_EQ) || (vp->op == T_OP_REG_NE)) {
-		pairstrsteal(vp, expanded);
+		fr_pair_value_strsteal(vp, expanded);
 		return 0;
 	}
 
-	if (pairparsevalue(vp, expanded, -1) < 0){
+	if (fr_pair_value_from_str(vp, expanded, -1) < 0){
 		talloc_free(expanded);
 		return -2;
 	}
@@ -642,19 +688,19 @@ int radius_xlat_do(REQUEST *request, VALUE_PAIR *vp)
  * @param[in] vendor number.
  * @return a new VLAUE_PAIR or causes server to exit on error.
  */
-VALUE_PAIR *radius_paircreate(TALLOC_CTX *ctx, VALUE_PAIR **vps,
+VALUE_PAIR *radius_pair_create(TALLOC_CTX *ctx, VALUE_PAIR **vps,
 			      unsigned int attribute, unsigned int vendor)
 {
 	VALUE_PAIR *vp;
 
-	vp = paircreate(ctx, attribute, vendor);
+	vp = fr_pair_afrom_num(ctx, attribute, vendor);
 	if (!vp) {
 		ERROR("No memory!");
 		rad_assert("No memory" == NULL);
 		fr_exit_now(1);
 	}
 
-	if (vps) pairadd(vps, vp);
+	if (vps) fr_pair_add(vps, vp);
 
 	return vp;
 }
@@ -665,7 +711,7 @@ VALUE_PAIR *radius_paircreate(TALLOC_CTX *ctx, VALUE_PAIR **vps,
  */
 void debug_pair(VALUE_PAIR *vp)
 {
-	if (!vp || !debug_flag || !fr_log_fp) return;
+	if (!vp || !rad_debug_lvl || !fr_log_fp) return;
 
 	vp_print(fr_log_fp, vp);
 }
@@ -754,7 +800,7 @@ void rdebug_proto_pair_list(log_lvl_t level, REQUEST *request, VALUE_PAIR *vp)
 int radius_get_vp(VALUE_PAIR **out, REQUEST *request, char const *name)
 {
 	int rcode;
-	value_pair_tmpl_t vpt;
+	vp_tmpl_t vpt;
 
 	*out = NULL;
 
@@ -780,7 +826,7 @@ int radius_get_vp(VALUE_PAIR **out, REQUEST *request, char const *name)
 int radius_copy_vp(TALLOC_CTX *ctx, VALUE_PAIR **out, REQUEST *request, char const *name)
 {
 	int rcode;
-	value_pair_tmpl_t vpt;
+	vp_tmpl_t vpt;
 
 	*out = NULL;
 
@@ -810,7 +856,7 @@ void vmodule_failure_msg(REQUEST *request, char const *fmt, va_list ap)
 	VALUE_PAIR *vp;
 	va_list aq;
 
-	if (!fmt || !request->packet) {
+	if (!fmt || !request || !request->packet) {
 		return;
 	}
 
@@ -827,11 +873,11 @@ void vmodule_failure_msg(REQUEST *request, char const *fmt, va_list ap)
 	p = talloc_vasprintf(request, fmt, aq);
 	va_end(aq);
 
-	MEM(vp = pairmake_packet("Module-Failure-Message", NULL, T_OP_ADD));
+	MEM(vp = pair_make_request("Module-Failure-Message", NULL, T_OP_ADD));
 	if (request->module && (request->module[0] != '\0')) {
-		pairsprintf(vp, "%s: %s", request->module, p);
+		fr_pair_value_sprintf(vp, "%s: %s", request->module, p);
 	} else {
-		pairsprintf(vp, "%s", p);
+		fr_pair_value_sprintf(vp, "%s", p);
 	}
 	talloc_free(p);
 }

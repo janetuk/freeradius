@@ -21,14 +21,16 @@ extern "C" {
 /*
  * Export the minimum amount of information about these structs
  */
-typedef struct conf_item CONF_ITEM;
-typedef struct conf_pair CONF_PAIR;
-typedef struct conf_part CONF_SECTION;
-typedef struct conf_data CONF_DATA;
+typedef struct conf_item CONF_ITEM;	//!< Generic configuration element, extended to become
+					///< a #CONF_PAIR, a #CONF_SECTION or #CONF_DATA.
+typedef struct conf_pair CONF_PAIR;	//!< #CONF_ITEM with an attribute, an operator and a value.
+typedef struct conf_part CONF_SECTION;	//!< #CONF_ITEM used to group multiple #CONF_PAIR and #CONF_SECTION, together.
+typedef struct conf_data CONF_DATA;	//!< #CONF_ITEM used to associate arbitrary data
+					///< with a #CONF_PAIR or #CONF_SECTION.
 
 
-typedef void conf_type_mismatch;
-typedef void conf_type_invalid;
+typedef void conf_type_mismatch;	//!< Dummy type used to indicate PW_TYPE_*/C type mismatch.
+typedef void conf_type_invalid;		//!< Dummy type used to indicate invalid PW_TYPE_*.
 
 #if defined(HAVE_BUILTIN_CHOOSE_EXPR) && defined(HAVE_BUILTIN_TYPES_COMPATIBLE_P)
 /*
@@ -37,19 +39,29 @@ typedef void conf_type_invalid;
  */
 typedef struct timeval _timeval_t;
 
-/*
- * Validation macro to check the type of the pointer or offset passed in
- * matches the type of the configuration item.
+/** Check the type #_t matches the destination data type
+ *
+ * Validation macro to check the type of the pointer or offset #_p passed in
+ * matches the type #_t of the configuration item.
+ *
+ * Uses various magic builtin precompilation functions, so will likely only
+ * work with recent versions of clang and gcc.
+ *
+ * @note The warnings/errors emitted are usually awful.
+ *
+ * @param _t a #PW_TYPE value with optional PW_TYPE_* flags.
+ * @param _ct data type of global or struct field, obtained with ``__typeof__``.
+ * @param _p Pointer or offset.
  */
 #  define FR_CONF_TYPE_CHECK(_t, _ct, _p) \
 	__builtin_choose_expr((_t & PW_TYPE_TMPL),\
-		__builtin_choose_expr(__builtin_types_compatible_p(value_pair_tmpl_t **, _ct), _p, (conf_type_mismatch) 0),\
+		__builtin_choose_expr(__builtin_types_compatible_p(vp_tmpl_t **, _ct), _p, (conf_type_mismatch) 0),\
 	__builtin_choose_expr((((_t) & 0xff) == PW_TYPE_STRING),\
 		__builtin_choose_expr(__builtin_types_compatible_p(char const **, _ct), _p, (conf_type_mismatch) 0),\
 	__builtin_choose_expr((((_t) & 0xff) == PW_TYPE_BOOLEAN),\
 		__builtin_choose_expr(__builtin_types_compatible_p(bool *, _ct), _p, (conf_type_mismatch) 0),\
 	__builtin_choose_expr((((_t) & 0xff) == PW_TYPE_SUBSECTION),\
-		NULL,\
+		_p,\
 	__builtin_choose_expr((((_t) & 0xff) == PW_TYPE_INTEGER),\
 		__builtin_choose_expr(__builtin_types_compatible_p(uint32_t *, _ct), _p, (conf_type_mismatch) 0),\
 	__builtin_choose_expr((((_t) & 0xff) == PW_TYPE_IPV4_ADDR),\
@@ -96,6 +108,8 @@ typedef struct timeval _timeval_t;
 #  define FR_ITEM_POINTER(_t, _p)	_t, _p
 #endif
 
+#define FR_CONF_DEPRECATED(_t, _p, _f) (_t) | PW_TYPE_DEPRECATED, 0, NULL
+
 /*
  *  Instead of putting the information into a configuration structure,
  *  the configuration file routines MAY just parse it directly into
@@ -103,29 +117,29 @@ typedef struct timeval _timeval_t;
  */
 #define PW_TYPE_SUBSECTION	102
 
-/*
- * Configuration type flags, these modify the processing of config
- * items.
+/** @name #CONF_PARSER type flags
+ *
+ * These flags should be or'd with another PW_TYPE_* value to create validation
+ * rules for the #cf_item_parse function.
+ *
+ * @note File PW_TYPE_FILE_* types have a base type of string, so they're validated
+ *	 correctly by the config parser.
+ * @{
  */
-#define PW_TYPE_DEPRECATED	(1 << 10)	//!< CONF_PAIR is deprecated, the server will refuse to start
-						//!< if it finds a CONFIG_ITEM with this flag.
-#define PW_TYPE_REQUIRED	(1 << 11)	//!< CONF_PAIR is required, server will not start without this
-						//!< config item.
-#define PW_TYPE_ATTRIBUTE	(1 << 12)	//!< CONF_PAIR value must exist in the dictionary as an attribute.
-#define PW_TYPE_SECRET		(1 << 13)	//!< don't print it when debug_flag==2.
+#define PW_TYPE_DEPRECATED	(1 << 10) //!< If a matching #CONF_PAIR is found, error out with a deprecated message.
+#define PW_TYPE_REQUIRED	(1 << 11) //!< Error out if no matching #CONF_PAIR is found, and no dflt value is set.
+#define PW_TYPE_ATTRIBUTE	(1 << 12) //!< Value must resolve to attribute in dict (deprecated, use #PW_TYPE_TMPL).
+#define PW_TYPE_SECRET		(1 << 13) //!< Only print value if debug level >= 3.
 
-/*
- * File i/o types have a base type of string, so they're validate
- * correctly by the config parser.
- */
-#define PW_TYPE_FILE_INPUT	((1 << 14) | PW_TYPE_STRING)
-#define PW_TYPE_FILE_OUTPUT	((1 << 15) | PW_TYPE_STRING)
+#define PW_TYPE_FILE_INPUT	((1 << 14) | PW_TYPE_STRING) //!< File matching value must exist, and must be readable.
+#define PW_TYPE_FILE_OUTPUT	((1 << 15) | PW_TYPE_STRING) //!< File matching value must exist, and must be writeable.
 
-#define PW_TYPE_XLAT		(1 << 16)	//!< string will be dynamically expanded.
-#define PW_TYPE_TMPL		(1 << 17)	//!< CONF_PAIR should be parsed as a template.
+#define PW_TYPE_XLAT		(1 << 16) //!< string will be dynamically expanded.
+#define PW_TYPE_TMPL		(1 << 17) //!< CONF_PAIR should be parsed as a template.
 
-#define PW_TYPE_MULTI		(1 << 18)	//!< CONF_PAIR can have multiple copies.
-#define PW_TYPE_NOT_EMPTY	(1 << 19)	//!< CONF_PAIR is required to have a non zero length value.
+#define PW_TYPE_MULTI		(1 << 18) //!< CONF_PAIR can have multiple copies.
+#define PW_TYPE_NOT_EMPTY	(1 << 19) //!< CONF_PAIR is required to have a non zero length value.
+/* @} **/
 
 #define FR_INTEGER_COND_CHECK(_name, _var, _cond, _new)\
 do {\
@@ -148,13 +162,58 @@ do {\
 	}\
 } while (0)
 
+#define FR_TIMEVAL_TO_MS(_x) (((_x)->tv_usec * 1000) + ((_x)->tv_sec / 1000))
+extern bool 			check_config;
+
+/** Defines a #CONF_PAIR to C data type mapping
+ *
+ * Is typically used to define mappings between module sections, and module instance structs.
+ * May also be used to set global configuration options.
+ *
+ * Offset/data values should be set using #FR_CONF_OFFSET or #FR_CONF_POINTER.
+ *
+ * Example with #FR_CONF_OFFSET :
+ @code{.c}
+   static CONF_PARSER module_config[] = {
+   	{ "example", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_NOT_EMPTY, example_instance_t, example), "default_value" },
+   	CONF_PARSER_TERMINATOR
+   }
+ @endcode
+ *
+ * Example with #FR_CONF_POINTER :
+ @code{.c}
+   static CONF_PARSER global_config[] = {
+   	{ "example", FR_CONF_POINTER(PW_TYPE_STRING | PW_TYPE_NOT_EMPTY, &my_global), "default_value" },
+   	CONF_PARSER_TERMINATOR
+   }
+ @endcode
+ *
+ * @see FR_CONF_OFFSET
+ * @see FR_CONF_POINTER
+ * @see cf_section_parse
+ * @see cf_item_parse
+ */
 typedef struct CONF_PARSER {
-	char const	*name;
-	int		type;			//!< PW_TYPE_STRING, etc.
-	size_t		offset;			//!< Relative pointer within "base".
-	void		*data;			//!< Absolute pointer if base is NULL.
+	char const	*name;			//!< Name of the #CONF_ITEM to parse.
+	int		type;			//!< A #PW_TYPE value, may be or'd with one or more PW_TYPE_* flags.
+						//!< @see cf_item_parse.
+
+	size_t		offset;			//!< Relative offset of field or structure to write the parsed value to.
+						//!< When #type is set to #PW_TYPE_SUBSECTION, may be used to specify
+						//!< a base offset to add to all offsets contained within the
+						//!< subsection.
+						//!< @note Must be used exclusively to #data.
+
+	void		*data;			//!< Pointer to a static variable to write the parsed value to.
+						//!< @note Must be used exclusively to #offset.
+
 	const void	*dflt;			//!< Default as it would appear in radiusd.conf.
+						//!< When #type is set to #PW_TYPE_SUBSECTION, should be a pointer
+						//!< to the start of another array of #CONF_PARSER structs, forming
+						//!< the subsection.
 } CONF_PARSER;
+
+#define CONF_PARSER_TERMINATOR	{ NULL, -1, 0, NULL, NULL }
 
 CONF_PAIR	*cf_pair_alloc(CONF_SECTION *parent, char const *attr, char const *value,
 			       FR_TOKEN op, FR_TOKEN lhs_type, FR_TOKEN rhs_type);
@@ -172,7 +231,6 @@ int		cf_section_parse_pass2(CONF_SECTION *, void *base, CONF_PARSER const *varia
 const CONF_PARSER *cf_section_parse_table(CONF_SECTION *cs);
 int		cf_file_read(CONF_SECTION *cs, char const *file);
 void		cf_file_free(CONF_SECTION *cs);
-int		cf_file_include(CONF_SECTION *cs, char const *file);
 
 CONF_PAIR	*cf_pair_find(CONF_SECTION const *, char const *name);
 CONF_PAIR	*cf_pair_find_next(CONF_SECTION const *, CONF_PAIR const *, char const *name);
@@ -229,6 +287,12 @@ void cf_item_add(CONF_SECTION *cs, CONF_ITEM *ci);
 CONF_ITEM *cf_reference_item(CONF_SECTION const *parentcs,
 			     CONF_SECTION *outercs,
 			     char const *ptr);
+
+#define CF_FILE_NONE   (0)
+#define CF_FILE_ERROR  (1)
+#define CF_FILE_CONFIG (1 << 2)
+#define CF_FILE_MODULE (1 << 3)
+int cf_file_changed(CONF_SECTION *cs, rb_walker_t callback);
 
 extern CONF_SECTION *root_config;
 extern bool cf_new_escape;

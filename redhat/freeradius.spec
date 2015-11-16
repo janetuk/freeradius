@@ -1,19 +1,18 @@
 %bcond_with rlm_yubikey
 #%bcond_with experimental_modules
 
+%{!?_with_rlm_cache_memcached: %global _without_rlm_cache_memcached --without-rlm_cache_memcached}
 %{!?_with_rlm_eap_pwd: %global _without_rlm_eap_pwd --without-rlm_eap_pwd}
 %{!?_with_rlm_eap_tnc: %global _without_rlm_eap_tnc --without-rlm_eap_tnc}
 %{!?_with_rlm_yubikey: %global _without_rlm_yubikey --without-rlm_yubikey}
 
 # experimental modules
 %bcond_with rlm_idn
-%bcond_with rlm_redis
 %bcond_with rlm_ruby
 %bcond_with rlm_sql_freetds
 %bcond_with rlm_sql_oracle
 %{?_with_rlm_idn: %global _with_experimental_modules --with-experimental-modules}
 %{?_with_rlm_opendirectory: %global _with_experimental_modules --with-experimental-modules}
-%{?_with_rlm_redis: %global _with_experimental_modules --with-experimental-modules}
 %{?_with_rlm_ruby: %global _with_experimental_modules --with-experimental-modules}
 %{?_with_rlm_securid: %global _with_experimental_modules --with-experimental-modules}
 %{?_with_rlm_sql_freetds: %global _with_experimental_modules --with-experimental-modules}
@@ -22,8 +21,6 @@
 %if %{?_with_experimental_modules:1}%{!?_with_experimental_modules:0}
 %{!?_with_rlm_idn: %global _without_rlm_idn --without-rlm_idn}
 %{!?_with_rlm_opendirectory: %global _without_rlm_opendirectory --without-rlm_opendirectory}
-%{!?_with_rlm_redis: %global _without_rlm_redis --without-rlm_redis}
-%{!?_with_rlm_redis: %global _without_rlm_rediswho --without-rlm_rediswho}
 %{!?_with_rlm_ruby: %global _without_rlm_ruby --without-rlm_ruby}
 %{!?_with_rlm_securid: %global _without_rlm_securid --without-rlm_securid}
 %{!?_with_rlm_sql_freetds: %global _without_rlm_sql_freetds --without-rlm_sql_freetds}
@@ -32,7 +29,7 @@
 
 Summary: High-performance and highly configurable free RADIUS server
 Name: freeradius
-Version: 3.0.7
+Version: 3.0.10
 Release: 2%{?dist}
 License: GPLv2+ and LGPLv2+
 Group: System Environment/Daemons
@@ -42,6 +39,7 @@ Source0: ftp://ftp.freeradius.org/pub/radius/freeradius-server-%{version}.tar.bz
 Source100: freeradius-radiusd-init
 Source102: freeradius-logrotate
 Source103: freeradius-pam-conf
+Source104: radiusd.service
 
 Obsoletes: freeradius-devel
 Obsoletes: freeradius-libs
@@ -100,6 +98,18 @@ done when adding or deleting new users.
 # CentOS defines debug package by default. Only define it if not already defined
 %if 0%{!?_enable_debug_packages:1}
 %debug_package
+%endif
+
+%if %{?_with_rlm_cache_memcached:1}%{?!_with_rlm_cache_memcached:0}
+%package memcached
+Summary: Memcached support for freeRADIUS
+Group: System Environment/Daemons
+Requires: %{name} = %{version}-%{release}
+Requires: libmemcached
+BuildRequires: libmemcached-devel
+
+%description memcached
+Adds support for rlm_memcached as a cache driver.
 %endif
 
 %package config
@@ -247,7 +257,6 @@ This plugin provides Oracle support for the FreeRADIUS server project.
 %endif
 %endif
 
-%if %{?_with_rlm_redis:1}%{!?_with_rlm_redis:0}
 %package redis
 Summary: Redis support for FreeRADIUS
 Group: System Environment/Daemons
@@ -257,7 +266,6 @@ BuildRequires: hiredis-devel
 
 %description redis
 This plugin provides Redis support for the FreeRADIUS server project.
-%endif
 
 %package rest
 Summary: REST support for FreeRADIUS
@@ -346,11 +354,10 @@ export CFLAGS="$RPM_OPT_FLAGS -fpic"
         %{?_without_rlm_securid} \
         %{?_with_rlm_sql_freetds} \
         %{?_without_rlm_sql_freetds} \
-        %{?_with_rlm_redis} \
-        %{?_without_rlm_redis} \
-        %{?_without_rlm_rediswho} \
         %{?_with_rlm_ruby} \
-        %{?_without_rlm_ruby}
+        %{?_without_rlm_ruby} \
+        %{?_with_rlm_cache_memcached} \
+        %{?_without_rlm_cache_memcached} \
 #        --with-modules="rlm_wimax" \
 
 %if "%{_lib}" == "lib64"
@@ -375,7 +382,14 @@ perl -i -pe 's/^#group =.*$/group = radiusd/' $RADDB/radiusd.conf
 mkdir -p $RPM_BUILD_ROOT/var/log/radius/radacct
 touch $RPM_BUILD_ROOT/var/log/radius/{radutmp,radius.log}
 
+# For systemd based systems, that define _unitdir, install the radiusd unit
+%if %{?_unitdir:1}%{!?_unitdir:0}
+install -D -m 755 %{SOURCE104} $RPM_BUILD_ROOT/%{_unitdir}/radiusd.service
+# For SystemV install the init script
+%else
 install -D -m 755 %{SOURCE100} $RPM_BUILD_ROOT/%{initddir}/radiusd
+%endif
+
 install -D -m 644 %{SOURCE102} $RPM_BUILD_ROOT/%{_sysconfdir}/logrotate.d/radiusd
 install -D -m 644 %{SOURCE103} $RPM_BUILD_ROOT/%{_sysconfdir}/pam.d/radiusd
 
@@ -480,7 +494,13 @@ fi
 %doc %{docdir}/
 %config(noreplace) %{_sysconfdir}/pam.d/radiusd
 %config(noreplace) %{_sysconfdir}/logrotate.d/radiusd
+
+%if %{?_unitdir:1}%{!?_unitdir:0}
+%{_unitdir}/radiusd.service
+%else
 %{initddir}/radiusd
+%endif
+
 %dir %attr(755,radiusd,radiusd) /var/lib/radiusd
 %dir %attr(755,radiusd,radiusd) /var/run/radiusd/
 # binaries
@@ -574,6 +594,7 @@ fi
 %{_libdir}/freeradius/rlm_soh.so
 %{_libdir}/freeradius/rlm_sometimes.so
 %{_libdir}/freeradius/rlm_sql.so
+%{_libdir}/freeradius/rlm_sqlhpwippool.so
 %{_libdir}/freeradius/rlm_sql_null.so
 %{_libdir}/freeradius/rlm_sql_sqlite.so
 %{_libdir}/freeradius/rlm_sqlcounter.so
@@ -586,7 +607,6 @@ fi
 %if %{?_with_experimental_modules:1}%{!?_with_experimental_modules:0}
 %{_libdir}/freeradius/rlm_example.so
 %{_libdir}/freeradius/rlm_smsotp.so
-%{_libdir}/freeradius/rlm_sqlhpwippool.so
 %endif
 
 %files config
@@ -708,6 +728,12 @@ fi
 %doc %{_mandir}/man8/radsqlrelay.8.gz
 %doc %{_mandir}/man8/rlm_ippool_tool.8.gz
 
+%if %{?_with_rlm_cache_memcached:1}%{!?_with_rlm_cache_memcached:0}
+%files memcached
+%defattr(-,root,root)
+%{_libdir}/freeradius/rlm_cache_memcached.so
+%endif
+
 %files krb5
 %defattr(-,root,root)
 %{_libdir}/freeradius/rlm_krb5.so
@@ -740,12 +766,10 @@ fi
 %defattr(-,root,root)
 %{_libdir}/freeradius/rlm_sql_unixodbc.so
 
-%if %{?_with_rlm_redis:1}%{!?_with_rlm_redis:0}
 %files redis
 %defattr(-,root,root)
 %{_libdir}/freeradius/rlm_redis.so
 %{_libdir}/freeradius/rlm_rediswho.so
-%endif
 
 %files rest
 %defattr(-,root,root)

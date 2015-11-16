@@ -1,12 +1,8 @@
 /*
- * client.c	Read clients into memory.
- *
- * Version:     $Id$
- *
- *   This program is free software; you can redistribute it and/or modify
+ *   This program is is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or
- *   (at your option) any later version.
+ *   the Free Software Foundation; either version 2 of the License, or (at
+ *   your option) any later version.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -16,12 +12,18 @@
  *   You should have received a copy of the GNU General Public License
  *   along with this program; if not, write to the Free Software
  *   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
- *
- * Copyright 2000,2006  The FreeRADIUS server project
- * Copyright 2000  Miquel van Smoorenburg <miquels@cistron.nl>
- * Copyright 2000  Alan DeKok <aland@ox.org>
  */
 
+/**
+ * $Id$
+ * @file main/client.c
+ * @brief Manage clients allowed to communicate with the server.
+ *
+ * @copyright 2015 Arran Cudbard-Bell <a.cudbardb@freeradius.org>
+ * @copyright 2000,2006 The FreeRADIUS server project
+ * @copyright 2000 Alan DeKok <aland@ox.org>
+ * @copyright 2000 Miquel van Smoorenburg <miquels@cistron.nl>
+ */
 RCSID("$Id$")
 
 #include <freeradius-devel/radiusd.h>
@@ -69,7 +71,7 @@ void client_free(RADCLIENT *client)
 		time_t now;
 
 		if (!deleted_clients) {
-			deleted_clients = fr_fifo_create(1024, (void (*)(void *))client_free);
+			deleted_clients = fr_fifo_create(NULL, 1024, (void (*)(void *))client_free);
 			if (!deleted_clients) return; /* MEMLEAK */
 		}
 
@@ -87,6 +89,8 @@ void client_free(RADCLIENT *client)
 		 *	from the queue and delete it.
 		 */
 		client = fr_fifo_peek(deleted_clients);
+		rad_assert(client != NULL);
+
 		if ((client->created + 120) >= now) return;
 
 		client = fr_fifo_pop(deleted_clients);
@@ -136,7 +140,7 @@ static int client_num_cmp(void const *one, void const *two)
 /*
  *	Free a RADCLIENT list.
  */
-void clients_free(RADCLIENT_LIST *clients)
+void client_list_free(RADCLIENT_LIST *clients)
 {
 	int i;
 
@@ -169,7 +173,7 @@ void clients_free(RADCLIENT_LIST *clients)
 /*
  *	Return a new, initialized, set of clients.
  */
-RADCLIENT_LIST *clients_init(CONF_SECTION *cs)
+RADCLIENT_LIST *client_list_init(CONF_SECTION *cs)
 {
 	RADCLIENT_LIST *clients = talloc_zero(cs, RADCLIENT_LIST);
 
@@ -229,6 +233,7 @@ bool client_add(RADCLIENT_LIST *clients, RADCLIENT *client)
 	if (!clients) {
 		if (client->server != NULL) {
 			CONF_SECTION *cs;
+			CONF_SECTION *subcs;
 
 			cs = cf_section_sub_find_name2(main_config.config, "server", client->server);
 			if (!cs) {
@@ -237,30 +242,38 @@ bool client_add(RADCLIENT_LIST *clients, RADCLIENT *client)
 			}
 
 			/*
+			 *	If this server has no "listen" section, add the clients
+			 *	to the global client list.
+			 */
+			subcs = cf_section_sub_find(cs, "listen");
+			if (!subcs) goto global_clients;
+
+			/*
 			 *	If the client list already exists, use that.
 			 *	Otherwise, create a new client list.
 			 */
 			clients = cf_data_find(cs, "clients");
 			if (!clients) {
-				clients = clients_init(cs);
+				clients = client_list_init(cs);
 				if (!clients) {
 					ERROR("Out of memory");
 					return false;
 				}
 
-				if (cf_data_add(cs, "clients", clients, (void (*)(void *)) clients_free) < 0) {
+				if (cf_data_add(cs, "clients", clients, (void (*)(void *)) client_list_free) < 0) {
 					ERROR("Failed to associate clients with virtual server %s", client->server);
-					clients_free(clients);
+					client_list_free(clients);
 					return false;
 				}
 			}
 
 		} else {
+		global_clients:
 			/*
 			 *	Initialize the global list, if not done already.
 			 */
 			if (!root_clients) {
-				root_clients = clients_init(NULL);
+				root_clients = client_list_init(NULL);
 				if (!root_clients) return false;
 			}
 			clients = root_clients;
@@ -463,6 +476,7 @@ RADCLIENT *client_find_old(fr_ipaddr_t const *ipaddr)
 }
 
 static fr_ipaddr_t cl_ipaddr;
+static uint32_t cl_netmask;
 static char const *cl_srcipaddr = NULL;
 #ifdef WITH_TCP
 static char const *hs_proto = NULL;
@@ -476,7 +490,7 @@ static CONF_PARSER limit_config[] = {
 
 	{ "idle_timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER, RADCLIENT, limit.idle_timeout), "30" },
 
-	{ NULL, -1, 0, NULL, NULL }		/* end the list */
+	CONF_PARSER_TERMINATOR
 };
 #endif
 
@@ -485,6 +499,8 @@ static const CONF_PARSER client_config[] = {
 	{ "ipv4addr", FR_CONF_POINTER(PW_TYPE_IPV4_PREFIX, &cl_ipaddr), NULL },
 	{ "ipv6addr", FR_CONF_POINTER(PW_TYPE_IPV6_PREFIX, &cl_ipaddr), NULL },
 
+	{ "netmask", FR_CONF_POINTER(PW_TYPE_INTEGER, &cl_netmask), NULL },
+
 	{ "src_ipaddr", FR_CONF_POINTER(PW_TYPE_STRING, &cl_srcipaddr), NULL },
 
 	{ "require_message_authenticator",  FR_CONF_OFFSET(PW_TYPE_BOOLEAN, RADCLIENT, message_authenticator), "no" },
@@ -492,7 +508,6 @@ static const CONF_PARSER client_config[] = {
 	{ "secret", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_SECRET, RADCLIENT, secret), NULL },
 	{ "shortname", FR_CONF_OFFSET(PW_TYPE_STRING, RADCLIENT, shortname), NULL },
 
-	{ "nastype", FR_CONF_OFFSET(PW_TYPE_DEPRECATED | PW_TYPE_STRING, RADCLIENT, nas_type), NULL },
 	{ "nas_type", FR_CONF_OFFSET(PW_TYPE_STRING, RADCLIENT, nas_type), NULL },
 
 	{ "login", FR_CONF_OFFSET(PW_TYPE_STRING, RADCLIENT, login), NULL },
@@ -511,24 +526,22 @@ static const CONF_PARSER client_config[] = {
 	{ "rate_limit", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, RADCLIENT, rate_limit), NULL },
 #endif
 
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 
-/*
- *	Create the linked list of clients from the new configuration
- *	type.  This way we don't have to change too much in the other
- *	source-files.
+/** Create the linked list of clients from the new configuration type
+ *
  */
 #ifdef WITH_TLS
-RADCLIENT_LIST *clients_parse_section(CONF_SECTION *section, bool tls_required)
+RADCLIENT_LIST *client_list_parse_section(CONF_SECTION *section, bool tls_required)
 #else
-RADCLIENT_LIST *clients_parse_section(CONF_SECTION *section, UNUSED bool tls_required)
+RADCLIENT_LIST *client_list_parse_section(CONF_SECTION *section, UNUSED bool tls_required)
 #endif
 {
 	bool		global = false, in_server = false;
 	CONF_SECTION	*cs;
-	RADCLIENT	*c;
-	RADCLIENT_LIST	*clients;
+	RADCLIENT	*c = NULL;
+	RADCLIENT_LIST	*clients = NULL;
 
 	/*
 	 *	Be forgiving.  If there's already a clients, return
@@ -537,29 +550,21 @@ RADCLIENT_LIST *clients_parse_section(CONF_SECTION *section, UNUSED bool tls_req
 	clients = cf_data_find(section, "clients");
 	if (clients) return clients;
 
-	clients = clients_init(section);
+	clients = client_list_init(section);
 	if (!clients) return NULL;
 
 	if (cf_top_section(section) == section) global = true;
 
 	if (strcmp("server", cf_section_name1(section)) == 0) in_server = true;
 
-	/*
-	 *	Associate the clients structure with the section.
-	 */
-	if (cf_data_add(section, "clients", clients, NULL) < 0) {
-		cf_log_err_cs(section,
-			   "Failed to associate clients with section %s",
-		       cf_section_name1(section));
-		clients_free(clients);
-		return NULL;
-	}
-
 	for (cs = cf_subsection_find_next(section, NULL, "client");
-	     cs != NULL;
+	     cs;
 	     cs = cf_subsection_find_next(section, cs, "client")) {
 		c = client_afrom_cs(cs, cs, in_server, false);
 		if (!c) {
+		error:
+			client_free(c);
+			client_list_free(clients);
 			return NULL;
 		}
 
@@ -570,9 +575,7 @@ RADCLIENT_LIST *clients_parse_section(CONF_SECTION *section, UNUSED bool tls_req
 		 */
 		if (tls_required != c->tls_required) {
 			cf_log_err_cs(cs, "Client does not have the same TLS configuration as the listener");
-			client_free(c);
-			clients_free(clients);
-			return NULL;
+			goto error;
 		}
 #endif
 
@@ -584,12 +587,12 @@ RADCLIENT_LIST *clients_parse_section(CONF_SECTION *section, UNUSED bool tls_req
 #ifdef WITH_DYNAMIC_CLIENTS
 #ifdef HAVE_DIRENT_H
 		if (c->client_server) {
-			char const *value;
-			CONF_PAIR *cp;
+			char const	*value;
+			CONF_PAIR	*cp;
 			DIR		*dir;
 			struct dirent	*dp;
-			struct stat stat_buf;
-			char buf2[2048];
+			struct stat	stat_buf;
+			char		buf2[2048];
 
 			/*
 			 *	Find the directory where individual
@@ -600,10 +603,8 @@ RADCLIENT_LIST *clients_parse_section(CONF_SECTION *section, UNUSED bool tls_req
 
 			value = cf_pair_value(cp);
 			if (!value) {
-				cf_log_err_cs(cs,
-					   "The \"directory\" entry must not be empty");
-				client_free(c);
-				return NULL;
+				cf_log_err_cs(cs, "The \"directory\" entry must not be empty");
+				goto error;
 			}
 
 			DEBUG("including dynamic clients in %s", value);
@@ -611,8 +612,7 @@ RADCLIENT_LIST *clients_parse_section(CONF_SECTION *section, UNUSED bool tls_req
 			dir = opendir(value);
 			if (!dir) {
 				cf_log_err_cs(cs, "Error reading directory %s: %s", value, fr_syserror(errno));
-				client_free(c);
-				return NULL;
+				goto error;
 			}
 
 			/*
@@ -632,33 +632,27 @@ RADCLIENT_LIST *clients_parse_section(CONF_SECTION *section, UNUSED bool tls_req
 					    isdigit((int)*p) ||
 					    (*p == ':') ||
 					    (*p == '.')) continue;
-						break;
+					break;
 				}
 				if (*p != '\0') continue;
 
-				snprintf(buf2, sizeof(buf2), "%s/%s",
-					 value, dp->d_name);
+				snprintf(buf2, sizeof(buf2), "%s/%s", value, dp->d_name);
 
-				if ((stat(buf2, &stat_buf) != 0) ||
-				    S_ISDIR(stat_buf.st_mode)) continue;
+				if ((stat(buf2, &stat_buf) != 0) || S_ISDIR(stat_buf.st_mode)) continue;
 
 				dc = client_read(buf2, in_server, true);
 				if (!dc) {
-					cf_log_err_cs(cs,
-						   "Failed reading client file \"%s\"", buf2);
-					client_free(c);
+					cf_log_err_cs(cs, "Failed reading client file \"%s\"", buf2);
 					closedir(dir);
-					return NULL;
+					goto error;
 				}
 
 				/*
 				 *	Validate, and add to the list.
 				 */
 				if (!client_add_dynamic(clients, c, dc)) {
-
-					client_free(c);
 					closedir(dir);
-					return NULL;
+					goto error;
 				}
 			} /* loop over the directory */
 			closedir(dir);
@@ -668,13 +662,19 @@ RADCLIENT_LIST *clients_parse_section(CONF_SECTION *section, UNUSED bool tls_req
 	add_client:
 #endif /* WITH_DYNAMIC_CLIENTS */
 		if (!client_add(clients, c)) {
-			cf_log_err_cs(cs,
-				   "Failed to add client %s",
-				   cf_section_name2(cs));
-			client_free(c);
-			return NULL;
+			cf_log_err_cs(cs, "Failed to add client %s", cf_section_name2(cs));
+			goto error;
 		}
 
+	}
+
+	/*
+	 *	Associate the clients structure with the section.
+	 */
+	if (cf_data_add(section, "clients", clients, NULL) < 0) {
+		cf_log_err_cs(section, "Failed to associate clients with section %s", cf_section_name1(section));
+		client_list_free(clients);
+		return NULL;
 	}
 
 	/*
@@ -682,9 +682,7 @@ RADCLIENT_LIST *clients_parse_section(CONF_SECTION *section, UNUSED bool tls_req
 	 *	The old one is still referenced from the original
 	 *	configuration, and will be freed when that is freed.
 	 */
-	if (global) {
-		root_clients = clients;
-	}
+	if (global) root_clients = clients;
 
 	return clients;
 }
@@ -708,7 +706,7 @@ static const CONF_PARSER dynamic_config[] = {
 	{ "FreeRADIUS-Client-NAS-Type",  FR_CONF_OFFSET(PW_TYPE_STRING, RADCLIENT, nas_type), NULL },
 	{ "FreeRADIUS-Client-Virtual-Server",  FR_CONF_OFFSET(PW_TYPE_STRING, RADCLIENT, server), NULL },
 
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 
 /** Add a dynamic client
@@ -763,13 +761,102 @@ error:
 	return false;
 }
 
+/** Create a client CONF_SECTION using a mapping section to map values from a result set to client attributes
+ *
+ * If we hit a CONF_SECTION we recurse and process its CONF_PAIRS too.
+ *
+ * @note Caller should free CONF_SECTION passed in as out, on error.
+ *	 Contents of that section will be in an undefined state.
+ *
+ * @param[in,out] out Section to perform mapping on. Either the root of the client config, or a parent section
+ *	(when this function is called recursively).
+ *	Should be alloced with cf_section_alloc, or if there's a separate template section, the
+ *	result of calling cf_section_dup on that section.
+ * @param[in] map section.
+ * @param[in] func to call to retrieve CONF_PAIR values. Must return a talloced buffer containing the value.
+ * @param[in] data to pass to func, usually a result pointer.
+ * @return 0 on success else -1 on error.
+ */
+int client_map_section(CONF_SECTION *out, CONF_SECTION const *map, client_value_cb_t func, void *data)
+{
+	CONF_ITEM const *ci;
+
+	for (ci = cf_item_find_next(map, NULL);
+	     ci != NULL;
+	     ci = cf_item_find_next(map, ci)) {
+	     	CONF_PAIR const *cp;
+	     	CONF_PAIR *old;
+	     	char *value;
+		char const *attr;
+
+		/*
+		 *	Recursively process map subsection
+		 */
+		if (cf_item_is_section(ci)) {
+			CONF_SECTION *cs, *cc;
+
+			cs = cf_item_to_section(ci);
+			/*
+			 *	Use pre-existing section or alloc a new one
+			 */
+			cc = cf_section_sub_find_name2(out, cf_section_name1(cs), cf_section_name2(cs));
+			if (!cc) {
+				cc = cf_section_alloc(out, cf_section_name1(cs), cf_section_name2(cs));
+				cf_section_add(out, cc);
+				if (!cc) return -1;
+			}
+
+			if (client_map_section(cc, cs, func, data) < 0) return -1;
+			continue;
+		}
+
+		cp = cf_item_to_pair(ci);
+		attr = cf_pair_attr(cp);
+
+		/*
+		 *	The callback can return 0 (success) and not provide a value
+		 *	in which case we skip the mapping pair.
+		 *
+		 *	Or return -1 in which case we error out.
+		 */
+		if (func(&value, cp, data) < 0) {
+			cf_log_err_cs(out, "Failed performing mapping \"%s\" = \"%s\"", attr, cf_pair_value(cp));
+			return -1;
+		}
+		if (!value) continue;
+
+		/*
+		 *	Replace an existing CONF_PAIR
+		 */
+		old = cf_pair_find(out, attr);
+		if (old) {
+			cf_pair_replace(out, old, value);
+			talloc_free(value);
+			continue;
+		}
+
+		/*
+		 *	...or add a new CONF_PAIR
+		 */
+		cp = cf_pair_alloc(out, attr, value, T_OP_SET, T_BARE_WORD, T_SINGLE_QUOTED_STRING);
+		if (!cp) {
+			cf_log_err_cs(out, "Failed allocing pair \"%s\" = \"%s\"", attr, value);
+			talloc_free(value);
+			return -1;
+		}
+		talloc_free(value);
+		cf_item_add(out, cf_pair_to_item(cp));
+	}
+
+	return 0;
+}
 
 /** Allocate a new client from a config section
  *
  * @param ctx to allocate new clients in.
  * @param cs to process as a client.
  * @param in_server Whether the client should belong to a specific virtual server.
- * @param with_coa If true and coa_server or coa_pool aren't specified automatically
+ * @param with_coa If true and coa_server or coa_pool aren't specified automatically,
  *	create a coa home_server section and add it to the client CONF_SECTION.
  * @return new RADCLIENT struct.
  */
@@ -791,6 +878,8 @@ RADCLIENT *client_afrom_cs(TALLOC_CTX *ctx, CONF_SECTION *cs, bool in_server, bo
 	c->cs = cs;
 
 	memset(&cl_ipaddr, 0, sizeof(cl_ipaddr));
+	cl_netmask = 255;
+
 	if (cf_section_parse(cs, c, client_config) < 0) {
 		cf_log_err_cs(cs, "Error parsing client section");
 	error:
@@ -809,6 +898,20 @@ RADCLIENT *client_afrom_cs(TALLOC_CTX *ctx, CONF_SECTION *cs, bool in_server, bo
 	if (in_server && c->server) {
 		cf_log_err_cs(cs, "Clients inside of an server section cannot point to a server");
 		goto error;
+	}
+
+	/*
+	 *	Allow the old method to specify "netmask".  Just using "1.2.3.4" means it's a /32.
+	 */
+	if (cl_netmask != 255) {
+		if ((cl_ipaddr.prefix != cl_netmask) &&
+		    (((cl_ipaddr.af == AF_INET) && cl_ipaddr.prefix != 32) ||
+		     ((cl_ipaddr.af == AF_INET6) && cl_ipaddr.prefix != 128))) {
+			cf_log_err_cs(cs, "Clients cannot use 'ipaddr/mask' and 'netmask' at the same time.");
+			goto error;
+		}
+
+		cl_ipaddr.prefix = cl_netmask;
 	}
 
 	/*
@@ -837,9 +940,24 @@ RADCLIENT *client_afrom_cs(TALLOC_CTX *ctx, CONF_SECTION *cs, bool in_server, bo
 	 *	No "ipaddr" or "ipv6addr", use old-style "client <ipaddr> {" syntax.
 	 */
 	} else {
-		cf_log_err_cs(cs, "No 'ipaddr' or 'ipv4addr' or 'ipv6addr' configuration "
-			      "directive found in client %s", name2);
-		goto error;
+		WARN("No 'ipaddr' or 'ipv4addr' or 'ipv6addr' field found in client %s. "
+		     "Please fix your configuration", name2);
+		WARN("Support for old-style clients will be removed in a future release");
+
+#ifdef WITH_TCP
+		if (cf_pair_find(cs, "proto") != NULL) {
+			cf_log_err_cs(cs, "Cannot use 'proto' inside of old-style client definition");
+			goto error;
+		}
+#endif
+		if (fr_pton(&c->ipaddr, name2, -1, AF_UNSPEC, true) < 0) {
+			cf_log_err_cs(cs, "Failed parsing client name \"%s\" as ip address or hostname: %s", name2,
+				      fr_strerror());
+			goto error;
+		}
+
+		c->longname = talloc_typed_strdup(c, name2);
+		if (!c->shortname) c->shortname = talloc_typed_strdup(c, c->longname);
 	}
 
 	c->proto = IPPROTO_UDP;
@@ -1002,7 +1120,7 @@ RADCLIENT *client_afrom_cs(TALLOC_CTX *ctx, CONF_SECTION *cs, bool in_server, bo
 			 *	realm_config_t without a mutex, by one of the
 			 *	workers, would be bad.
 			 */
-			home = home_server_afrom_cs(c, NULL, server);
+			home = home_server_afrom_cs(NULL, NULL, server);
 			if (!home) {
 				talloc_free(server);
 				goto error;
@@ -1031,7 +1149,9 @@ done_coa:
 	return c;
 }
 
-/** Add a client from a result set (LDAP, SQL, et al)
+/** Add a client from a result set (SQL)
+ *
+ * @todo This function should die. SQL should use client_afrom_cs.
  *
  * @param ctx Talloc context.
  * @param identifier Client IP Address / IPv4 subnet / IPv6 subnet / FQDN.
@@ -1053,7 +1173,7 @@ RADCLIENT *client_afrom_query(TALLOC_CTX *ctx, char const *identifier, char cons
 
 	c = talloc_zero(ctx, RADCLIENT);
 
-	if (fr_pton(&c->ipaddr, identifier, -1, true) < 0) {
+	if (fr_pton(&c->ipaddr, identifier, -1, AF_UNSPEC, true) < 0) {
 		ERROR("%s", fr_strerror());
 		talloc_free(c);
 
@@ -1086,22 +1206,27 @@ RADCLIENT *client_afrom_query(TALLOC_CTX *ctx, char const *identifier, char cons
  */
 RADCLIENT *client_afrom_request(RADCLIENT_LIST *clients, REQUEST *request)
 {
-	int i, *pi;
-	char **p;
-	RADCLIENT *c;
-	char buffer[128];
+	static int	cnt;
+	int		i, *pi;
+	char		**p;
+	RADCLIENT	*c;
+	CONF_PAIR	*cp = NULL;
+	char		buffer[128];
 
-	vp_cursor_t cursor;
-	VALUE_PAIR *vp = NULL;
+	vp_cursor_t	cursor;
+	VALUE_PAIR	*vp = NULL;
 
 	if (!clients || !request) return NULL;
 
+	snprintf(buffer, sizeof(buffer), "dynamic%i", cnt++);
+
 	c = talloc_zero(clients, RADCLIENT);
-	c->cs = request->client->cs;
+	c->cs = cf_section_alloc(NULL, "client", buffer);
+	talloc_steal(c, c->cs);
 	c->ipaddr.af = AF_UNSPEC;
 	c->src_ipaddr.af = AF_UNSPEC;
 
-	fr_cursor_init(&cursor, &request->config_items);
+	fr_cursor_init(&cursor, &request->config);
 
 	RDEBUG2("Converting control list to client fields");
 	RINDENT();
@@ -1138,21 +1263,22 @@ RADCLIENT *client_afrom_request(RADCLIENT_LIST *clients, REQUEST *request)
 		/*
 		 *	Freed at the same time as the vp.
 		 */
-		if (RDEBUG_ENABLED2) strvalue = vp_aprints_value(vp, vp, '\'');
+		strvalue = vp_aprints_value(vp, vp, '\'');
 
 		switch (dynamic_config[i].type) {
 		case PW_TYPE_IPV4_ADDR:
 			if (da->attr == PW_FREERADIUS_CLIENT_IP_ADDRESS) {
-				RDEBUG2("ipaddr = %s", strvalue);
 				c->ipaddr.af = AF_INET;
 				c->ipaddr.ipaddr.ip4addr.s_addr = vp->vp_ipaddr;
 				c->ipaddr.prefix = 32;
+				cp = cf_pair_alloc(c->cs, "ipv4addr", strvalue, T_OP_SET, T_BARE_WORD, T_BARE_WORD);
 			} else if (da->attr == PW_FREERADIUS_CLIENT_SRC_IP_ADDRESS) {
 #ifdef WITH_UDPFROMTO
 				RDEBUG2("src_ipaddr = %s", strvalue);
 				c->src_ipaddr.af = AF_INET;
 				c->src_ipaddr.ipaddr.ip4addr.s_addr = vp->vp_ipaddr;
 				c->src_ipaddr.prefix = 32;
+				cp = cf_pair_alloc(c->cs, "src_ipaddr", strvalue, T_OP_SET, T_BARE_WORD, T_BARE_WORD);
 #else
 				RWARN("Server not built with udpfromto, ignoring FreeRADIUS-Client-Src-IP-Address");
 #endif
@@ -1162,16 +1288,16 @@ RADCLIENT *client_afrom_request(RADCLIENT_LIST *clients, REQUEST *request)
 
 		case PW_TYPE_IPV6_ADDR:
 			if (da->attr == PW_FREERADIUS_CLIENT_IPV6_ADDRESS) {
-				RDEBUG2("ipaddr = %s", strvalue);
 				c->ipaddr.af = AF_INET6;
 				c->ipaddr.ipaddr.ip6addr = vp->vp_ipv6addr;
 				c->ipaddr.prefix = 128;
+				cp = cf_pair_alloc(c->cs, "ipv6addr", strvalue, T_OP_SET, T_BARE_WORD, T_BARE_WORD);
 			} else if (da->attr == PW_FREERADIUS_CLIENT_SRC_IPV6_ADDRESS) {
 #ifdef WITH_UDPFROMTO
-				RDEBUG2("src_ipaddr = %s", strvalue);
 				c->src_ipaddr.af = AF_INET6;
 				c->src_ipaddr.ipaddr.ip6addr = vp->vp_ipv6addr;
 				c->src_ipaddr.prefix = 128;
+				cp = cf_pair_alloc(c->cs, "src_addr", strvalue, T_OP_SET, T_BARE_WORD, T_BARE_WORD);
 #else
 				RWARN("Server not built with udpfromto, ignoring FreeRADIUS-Client-Src-IPv6-Address");
 #endif
@@ -1181,59 +1307,95 @@ RADCLIENT *client_afrom_request(RADCLIENT_LIST *clients, REQUEST *request)
 
 		case PW_TYPE_IPV4_PREFIX:
 			if (da->attr == PW_FREERADIUS_CLIENT_IP_PREFIX) {
-				RDEBUG2("ipaddr = %s", strvalue);
 				c->ipaddr.af = AF_INET;
 				memcpy(&c->ipaddr.ipaddr.ip4addr, &vp->vp_ipv4prefix[2],
 				       sizeof(c->ipaddr.ipaddr.ip4addr.s_addr));
 				fr_ipaddr_mask(&c->ipaddr, (vp->vp_ipv4prefix[1] & 0x3f));
+				cp = cf_pair_alloc(c->cs, "ipv4addr", strvalue, T_OP_SET, T_BARE_WORD, T_BARE_WORD);
 			}
 
 			break;
 
 		case PW_TYPE_IPV6_PREFIX:
 			if (da->attr == PW_FREERADIUS_CLIENT_IPV6_PREFIX) {
-				RDEBUG2("ipaddr = %s", strvalue);
 				c->ipaddr.af = AF_INET6;
-				memcpy(&c->ipaddr.ipaddr.ip6addr, &vp->vp_ipv6prefix[2], sizeof(c->ipaddr.ipaddr.ip6addr));
+				memcpy(&c->ipaddr.ipaddr.ip6addr, &vp->vp_ipv6prefix[2],
+				       sizeof(c->ipaddr.ipaddr.ip6addr));
 				fr_ipaddr_mask(&c->ipaddr, vp->vp_ipv6prefix[1]);
+				cp = cf_pair_alloc(c->cs, "ipv6addr", strvalue, T_OP_SET, T_BARE_WORD, T_BARE_WORD);
 			}
 
 			break;
 
 		case PW_TYPE_STRING:
 		{
-			CONF_PARSER const *cp;
+			CONF_PARSER const *parse;
 
+			/*
+			 *	Cache pointer to CONF_PAIR buffer in RADCLIENT struct
+			 */
 			p = (char **) ((char *) c + dynamic_config[i].offset);
-			if (*p) talloc_free(*p);
-			if (vp->vp_strvalue[0]) {
-				*p = talloc_typed_strdup(c->cs, vp->vp_strvalue);
-			} else {
-				*p = NULL;
-			}
+			if (*p) TALLOC_FREE(*p);
+			if (!vp->vp_strvalue[0]) break;
 
-			if (RDEBUG_ENABLED2) for (cp = client_config; cp->name; cp++) {
-				if (cp->offset == dynamic_config[i].offset) RDEBUG2("%s = '%s'", cp->name, strvalue);
+			/*
+			 *	We could reuse the CONF_PAIR buff, this just keeps things
+			 *	consistent between client_afrom_cs, and client_afrom_query.
+			 */
+			*p = talloc_strdup(c, strvalue);
+
+			/*
+			 *	This is fairly nasty... In order to figure out the CONF_PAIR
+			 *	name associated with a field, find offsets that match between
+			 *	the dynamic_config CONF_PARSER table, and the client_config
+			 *	CONF_PARSER table.
+			 *
+			 *	This is so that things that expect to find CONF_PAIRs in the
+			 *	client CONF_SECTION for fields like 'nas_type' can.
+			 */
+			for (parse = client_config; parse->name; parse++) {
+				if (parse->offset == dynamic_config[i].offset) break;
 			}
+			rad_assert(parse);
+
+			cp = cf_pair_alloc(c->cs, parse->name, strvalue, T_OP_SET, T_BARE_WORD, T_SINGLE_QUOTED_STRING);
 		}
 			break;
 
 		case PW_TYPE_BOOLEAN:
 		{
-			CONF_PARSER const *cp;
+			CONF_PARSER const *parse;
 
 			pi = (int *) ((bool *) ((char *) c + dynamic_config[i].offset));
 			*pi = vp->vp_integer;
 
-			if (RDEBUG_ENABLED2) for (cp = client_config; cp->name; cp++) {
-				if (cp->offset == dynamic_config[i].offset) RDEBUG2("%s = %s", cp->name, strvalue);
+			/*
+			 *	Same nastiness as above.
+			 */
+			for (parse = client_config; parse->name; parse++) {
+				if (parse->offset == dynamic_config[i].offset) break;
 			}
+			rad_assert(parse);
+
+			cp = cf_pair_alloc(c->cs, parse->name, strvalue, T_OP_SET, T_BARE_WORD, T_BARE_WORD);
 		}
 			break;
 
 		default:
 			goto error;
 		}
+
+		if (!cp) {
+			RERROR("Error creating equivalent conf pair for %s", vp->da->name);
+			goto error;
+		}
+
+		if (cf_pair_attr_type(cp) == T_SINGLE_QUOTED_STRING) {
+			RDEBUG2("%s = '%s'", cf_pair_attr(cp), cf_pair_value(cp));
+		} else {
+			RDEBUG2("%s = %s", cf_pair_attr(cp), cf_pair_value(cp));
+		}
+		cf_pair_add(c->cs, cp);
 
 		talloc_free(vp);
 	}
@@ -1242,8 +1404,6 @@ RADCLIENT *client_afrom_request(RADCLIENT_LIST *clients, REQUEST *request)
 	vp = fr_cursor_remove(&cursor);
 	if (vp) {
 		do {
-			CONF_PAIR *cp;
-			CONF_ITEM *ci;
 			char *value;
 
 			value = vp_aprints_value(vp, vp, '\'');
@@ -1252,11 +1412,16 @@ RADCLIENT *client_afrom_request(RADCLIENT_LIST *clients, REQUEST *request)
 				goto error;
 			}
 
-			RDEBUG2("%s = '%s'", vp->da->name, value);
-
-			cp = cf_pair_alloc(c->cs, vp->da->name, value, T_OP_SET, T_BARE_WORD, T_SINGLE_QUOTED_STRING);
-			ci = cf_pair_to_item(cp);
-			cf_item_add(c->cs, ci);
+			if (vp->da->type == PW_TYPE_STRING) {
+				RDEBUG2("%s = '%s'", vp->da->name, value);
+				cp = cf_pair_alloc(c->cs, vp->da->name, value, T_OP_SET,
+						   T_BARE_WORD, T_SINGLE_QUOTED_STRING);
+			} else {
+				RDEBUG2("%s = %s", vp->da->name, value);
+				cp = cf_pair_alloc(c->cs, vp->da->name, value, T_OP_SET,
+						   T_BARE_WORD, T_BARE_WORD);
+			}
+			cf_pair_add(c->cs, cp);
 
 			talloc_free(vp);
 		} while ((vp = fr_cursor_remove(&cursor)));

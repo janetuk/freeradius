@@ -54,13 +54,11 @@ RCSID("$Id$")
 /*
  *  Global variables.
  */
-char const *progname = NULL;
-char const *radacct_dir = NULL;
-char const *radlog_dir = NULL;
-char const *radlib_dir = NULL;
-bool log_stripped_names;
-log_lvl_t debug_flag = 0;
-bool check_config = false;
+char const	*progname = NULL;
+char const	*radacct_dir = NULL;
+char const	*radlog_dir = NULL;
+char const	*radlib_dir = NULL;
+bool		log_stripped_names;
 
 char const *radiusd_version = "FreeRADIUS Version " RADIUSD_VERSION_STRING
 #ifdef RADIUSD_VERSION_COMMIT
@@ -93,10 +91,10 @@ int main(int argc, char *argv[])
 	int status;
 	int argval;
 	bool spawn_flag = true;
-	bool write_pid = false;
 	bool display_version = false;
 	int flag = 0;
 	int from_child[2] = {-1, -1};
+	fr_state_t *state = NULL;
 
 	/*
 	 *  We probably don't want to free the talloc autofree context
@@ -124,7 +122,7 @@ int main(int argc, char *argv[])
 	}
 #endif
 
-	debug_flag = 0;
+	rad_debug_lvl = 0;
 	set_radius_dir(autofree, RADIUS_DIR);
 
 	/*
@@ -159,7 +157,7 @@ int main(int argc, char *argv[])
 				break;
 
 			case 'D':
-				main_config.dictionary_dir = talloc_typed_strdup(NULL, optarg);
+				main_config.dictionary_dir = talloc_typed_strdup(autofree, optarg);
 				break;
 
 			case 'f':
@@ -223,7 +221,7 @@ int main(int argc, char *argv[])
 
 			case 'P':
 				/* Force the PID to be written, even in -f mode */
-				write_pid = true;
+				main_config.write_pid = true;
 				break;
 
 			case 's':	/* Single process mode */
@@ -242,7 +240,7 @@ int main(int argc, char *argv[])
 			case 'X':
 				spawn_flag = false;
 				main_config.daemonize = false;
-				debug_flag += 2;
+				rad_debug_lvl += 2;
 				main_config.log_auth = true;
 				main_config.log_auth_badpass = true;
 				main_config.log_auth_goodpass = true;
@@ -253,7 +251,7 @@ int main(int argc, char *argv[])
 				break;
 
 			case 'x':
-				debug_flag++;
+				rad_debug_lvl++;
 				break;
 
 			default:
@@ -306,7 +304,7 @@ int main(int argc, char *argv[])
 	 */
 	if (display_version) {
 		/* Don't print timestamps */
-		debug_flag += 2;
+		rad_debug_lvl += 2;
 		fr_log_fp = stdout;
 		default_log.dst = L_DST_STDOUT;
 		default_log.fd = STDOUT_FILENO;
@@ -316,7 +314,7 @@ int main(int argc, char *argv[])
 		exit(EXIT_SUCCESS);
 	}
 
-	if (debug_flag) version_print();
+	if (rad_debug_lvl) version_print();
 
 	/*
 	 *  Under linux CAP_SYS_PTRACE is usually only available before setuid/setguid,
@@ -331,6 +329,11 @@ int main(int argc, char *argv[])
 #ifdef HAVE_OPENSSL_CRYPTO_H
 	tls_global_init();
 #endif
+
+	/*
+	 *  Write the PID always if we're running as a daemon.
+	 */
+	if (main_config.daemonize) main_config.write_pid = true;
 
 	/*
 	 *  Read the configuration files, BEFORE doing anything else.
@@ -349,16 +352,21 @@ int main(int argc, char *argv[])
 	if (tls_global_version_check(main_config.allow_vulnerable_openssl) < 0) exit(EXIT_FAILURE);
 #endif
 
+	fr_talloc_fault_setup();
+
 	/*
 	 *  Set the panic action (if required)
 	 */
-	if (main_config.panic_action &&
-#ifndef NDEBUG
-	    !getenv("PANIC_ACTION") &&
-#endif
-	    (fr_fault_setup(main_config.panic_action, argv[0]) < 0)) {
-		fr_perror("radiusd");
-		exit(EXIT_FAILURE);
+	{
+		char const *panic_action = NULL;
+
+		panic_action = getenv("PANIC_ACTION");
+		if (!panic_action) panic_action = main_config.panic_action;
+
+		if (panic_action && (fr_fault_setup(panic_action, argv[0]) < 0)) {
+			fr_perror("radiusd");
+			exit(EXIT_FAILURE);
+		}
 	}
 
 #ifndef __MINGW32__
@@ -492,7 +500,7 @@ int main(int argc, char *argv[])
 	 *  immediately.  Use SIGTERM to shut down the server cleanly in
 	 *  that case.
 	 */
-	if (main_config.debug_memory || (debug_flag == 0)) {
+	if (main_config.debug_memory || (rad_debug_lvl == 0)) {
 		if ((fr_set_signal(SIGINT, sig_fatal) < 0)
 #ifdef SIGQUIT
 		|| (fr_set_signal(SIGQUIT, sig_fatal) < 0)
@@ -520,14 +528,9 @@ int main(int argc, char *argv[])
 #endif
 
 	/*
-	 *  Write the PID always if we're running as a daemon.
-	 */
-	if (main_config.daemonize) write_pid = true;
-
-	/*
 	 *  Write the PID after we've forked, so that we write the correct one.
 	 */
-	if (write_pid) {
+	if (main_config.write_pid) {
 		FILE *fp;
 
 		fp = fopen(main_config.pid_file, "w");
@@ -568,7 +571,7 @@ int main(int argc, char *argv[])
 	/*
 	 *  Initialise the state rbtree (used to link multiple rounds of challenges).
 	 */
-	fr_state_init();
+	state = fr_state_init(NULL);
 
 	/*
 	 *  Process requests until HUP or exit.
@@ -622,7 +625,7 @@ cleanup:
 
 	xlat_free();		/* modules may have xlat's */
 
-	fr_state_delete();
+	fr_state_delete(state);
 
 	/*
 	 *  Free the configuration items.
@@ -667,15 +670,15 @@ static void NEVER_RETURNS usage(int status)
 	fprintf(output, "  -h            Print this help message.\n");
 	fprintf(output, "  -i <ipaddr>   Listen on ipaddr ONLY.\n");
 	fprintf(output, "  -l <log_file> Logging output will be written to this file.\n");
-	fprintf(output, "  -m            On SIGINT or SIGQUIT exit cleanly instead of immediately.\n");
+	fprintf(output, "  -m            On SIGINT or SIGQUIT clean up all used memory instead of just exiting.\n");
 	fprintf(output, "  -n <name>     Read raddb/name.conf instead of raddb/radiusd.conf.\n");
 	fprintf(output, "  -p <port>     Listen on port ONLY.\n");
 	fprintf(output, "  -P            Always write out PID, even with -f.\n");
-	fprintf(output, "  -s            Do not spawn child processes to handle requests.\n");
+	fprintf(output, "  -s            Do not spawn child processes to handle requests (same as -ft).\n");
 	fprintf(output, "  -t            Disable threads.\n");
 	fprintf(output, "  -v            Print server version information.\n");
-	fprintf(output, "  -X            Turn on full debugging.\n");
-	fprintf(output, "  -x            Turn on additional debugging. (-xx gives more debugging).\n");
+	fprintf(output, "  -X            Turn on full debugging (similar to -tfxxl stdout).\n");
+	fprintf(output, "  -x            Turn on additional debugging (-xx gives more debugging).\n");
 	exit(status);
 }
 

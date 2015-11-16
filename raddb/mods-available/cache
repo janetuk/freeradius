@@ -30,29 +30,28 @@ cache {
 	#                          a cluster of RADIUS servers.
 #	driver = "rlm_cache_rbtree"
 
-#
-#	Some drivers accept specific options, to set them a
-#	config section with the the name as the driver should be added
-#	to the cache instance.
-#
-#	Driver specific options are:
-#
+	#
+	#  Some drivers accept specific options, to set them a
+	#  config section with the the name as the driver should be added
+	#  to the cache instance.
+	#
+	#  Driver specific options are:
+	#
 #	memcached {
 #		# Memcached configuration options, as documented here:
 #		#    http://docs.libmemcached.org/libmemcached_configuration.html#memcached
 #		options = "--SERVER=localhost"
 #
 #		pool {
-#			start = 5
-#			min = 4
+#			start = ${thread[pool].start_servers}
+#			min = ${thread[pool].min_spare_servers}
 #			max = ${thread[pool].max_servers}
-#			spare = 3
+#			spare = ${thread[pool].max_spare_servers}
 #			uses = 0
 #			lifetime = 0
 #			idle_timeout = 60
 #		}
 #	}
-
 
 	#  The key used to index the cache.  It is dynamically expanded
 	#  at run time.
@@ -91,8 +90,12 @@ cache {
 	#  represents the cache entry. see man unlang for more information
 	#  on update blocks.
 	#
+	#  Note: Only request, reply, control and session-state lists
+	#  are available in cache entries. Attempting to store attributes
+	#  in other lists will raise an error during config validation.
+	#
 	update {
-		# [outer.]<list>:<attribute> <op> <value>
+		# <list>:<attribute> <op> <value>
 
 		# Cache all instances of Reply-Message in the reply list
 		reply:Reply-Message += &reply:Reply-Message

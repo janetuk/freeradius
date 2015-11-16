@@ -67,7 +67,7 @@ static int replicate_packet(UNUSED void *instance, REQUEST *request, pair_lists_
 	 *	Send as many packets as necessary to different
 	 *	destinations.
 	 */
-	fr_cursor_init(&cursor, &request->config_items);
+	fr_cursor_init(&cursor, &request->config);
 	while ((vp = fr_cursor_next_by_num(&cursor, PW_REPLICATE_TO_REALM, 0, TAG_ANY))) {
 		realm = realm_find2(vp->vp_strvalue);
 		if (!realm) {
@@ -98,7 +98,7 @@ static int replicate_packet(UNUSED void *instance, REQUEST *request, pair_lists_
 #ifdef WITH_COA
 		case PW_CODE_COA_REQUEST:
 		case PW_CODE_DISCONNECT_REQUEST:
-			pool = realm->acct_pool;
+			pool = realm->coa_pool;
 			break;
 #endif
 		}
@@ -146,7 +146,7 @@ static int replicate_packet(UNUSED void *instance, REQUEST *request, pair_lists_
 			 *	attributes.
 			 */
 			if (*vps) {
-				packet->vps = paircopy(packet, *vps);
+				packet->vps = fr_pair_list_copy(packet, *vps);
 				if (!packet->vps) {
 					rcode = RLM_MODULE_FAIL;
 					goto done;
@@ -158,10 +158,10 @@ static int replicate_packet(UNUSED void *instance, REQUEST *request, pair_lists_
 			 *	it doesn't exist.
 			 */
 			if ((code == PW_CODE_ACCESS_REQUEST) &&
-			    (pairfind(request->packet->vps, PW_CHAP_PASSWORD, 0, TAG_ANY) != NULL) &&
-			    (pairfind(request->packet->vps, PW_CHAP_CHALLENGE, 0, TAG_ANY) == NULL)) {
+			    (fr_pair_find_by_num(request->packet->vps, PW_CHAP_PASSWORD, 0, TAG_ANY) != NULL) &&
+			    (fr_pair_find_by_num(request->packet->vps, PW_CHAP_CHALLENGE, 0, TAG_ANY) == NULL)) {
 				uint8_t *p;
-				vp = radius_paircreate(packet, &packet->vps, PW_CHAP_CHALLENGE, 0);
+				vp = radius_pair_create(packet, &packet->vps, PW_CHAP_CHALLENGE, 0);
 				vp->length = AUTH_VECTOR_LEN;
 				vp->vp_octets = p = talloc_array(vp, uint8_t, vp->length);
 				memcpy(p, request->packet->vector, AUTH_VECTOR_LEN);
@@ -174,8 +174,7 @@ static int replicate_packet(UNUSED void *instance, REQUEST *request, pair_lists_
 			}
 
 			packet->id++;
-			talloc_free(packet->data);
-			packet->data = NULL;
+			TALLOC_FREE(packet->data);
 			packet->data_len = 0;
 		}
 
@@ -225,6 +224,11 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	return replicate_packet(instance, request, PAIR_LIST_REQUEST, request->packet->code);
 }
 
+static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *request)
+{
+	return replicate_packet(instance, request, PAIR_LIST_REQUEST, request->packet->code);
+}
+
 static rlm_rcode_t CC_HINT(nonnull) mod_preaccounting(void *instance, REQUEST *request)
 {
 	return replicate_packet(instance, request, PAIR_LIST_REQUEST, request->packet->code);
@@ -255,29 +259,18 @@ static rlm_rcode_t CC_HINT(nonnull) mod_recv_coa(void *instance, REQUEST *reques
  */
 extern module_t rlm_replicate;
 module_t rlm_replicate = {
-	RLM_MODULE_INIT,
-	"replicate",
-	RLM_TYPE_THREAD_SAFE,		/* type */
-	0,
-	NULL,				/* CONF_PARSER */
-	NULL,				/* instantiation */
-	NULL,				/* detach */
-	{
-		NULL,			/* authentication */
-		mod_authorize,		/* authorization */
-		mod_preaccounting,	/* preaccounting */
-		NULL,			/* accounting */
-		NULL,			/* checksimul */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "replicate",
+	.type		= RLM_TYPE_THREAD_SAFE,
+	.methods = {
+		[MOD_AUTHORIZE]		= mod_authorize,
+		[MOD_ACCOUNTING]	= mod_accounting,
+		[MOD_PREACCT]		= mod_preaccounting,
 #ifdef WITH_PROXY
-		mod_pre_proxy,		/* pre-proxy */
-		NULL,			/* post-proxy */
-#else
-		NULL, NULL,
+		[MOD_PRE_PROXY]		= mod_pre_proxy,
 #endif
-		NULL			/* post-auth */
 #ifdef WITH_COA
-		, mod_recv_coa,		/* coa-request */
-		NULL
+		[MOD_RECV_COA]		= mod_recv_coa
 #endif
 	},
 };

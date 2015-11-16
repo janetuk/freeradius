@@ -5,8 +5,7 @@
  *
  *   This library is free software; you can redistribute it and/or
  *   modify it under the terms of the GNU Lesser General Public
- *   the Free Software Foundation; either version 2 of the License, or (at
- *   your option) any later version. either
+ *   License as published by the Free Software Foundation; either
  *   version 2.1 of the License, or (at your option) any later version.
  *
  *   This library is distributed in the hope that it will be useful,
@@ -27,30 +26,35 @@ RCSID("$Id$")
 
 #include	<ctype.h>
 
-/*
- *	Checks for utf-8, taken from:
+/** Checks for utf-8, taken from http://www.w3.org/International/questions/qa-forms-utf-8
  *
- *  http://www.w3.org/International/questions/qa-forms-utf-8
- *
- *	Note that we don't care about the length of the input string,
- *	because '\0' is an invalid UTF-8 character.
+ * @param str input string.
+ * @param inlen length of input string.  May be -1 if str is \0 terminated.
  */
-int fr_utf8_char(uint8_t const *str)
+int fr_utf8_char(uint8_t const *str, ssize_t inlen)
 {
+	if (inlen == 0) return 0;
+
+	if (inlen < 0) inlen = 4;	/* longest char */
+
 	if (*str < 0x20) return 0;
 
-	if (*str <= 0x7e) return 1; /* 1 */
+	if (*str <= 0x7e) return 1;	/* 1 */
 
 	if (*str <= 0xc1) return 0;
 
-	if ((str[0] >= 0xc2) &&	/* 2 */
+	if (inlen < 2) return 0;
+
+	if ((str[0] >= 0xc2) &&		/* 2 */
 	    (str[0] <= 0xdf) &&
 	    (str[1] >= 0x80) &&
 	    (str[1] <= 0xbf)) {
 		return 2;
 	}
 
-	if ((str[0] == 0xe0) &&	/* 3 */
+	if (inlen < 3) return 0;
+
+	if ((str[0] == 0xe0) &&		/* 3 */
 	    (str[1] >= 0xa0) &&
 	    (str[1] <= 0xbf) &&
 	    (str[2] >= 0x80) &&
@@ -58,7 +62,7 @@ int fr_utf8_char(uint8_t const *str)
 		return 3;
 	}
 
-	if ((str[0] >= 0xe1) &&	/* 4a */
+	if ((str[0] >= 0xe1) &&		/* 4a */
 	    (str[0] <= 0xec) &&
 	    (str[1] >= 0x80) &&
 	    (str[1] <= 0xbf) &&
@@ -67,7 +71,7 @@ int fr_utf8_char(uint8_t const *str)
 		return 3;
 	}
 
-	if ((str[0] >= 0xee) &&	/* 4b */
+	if ((str[0] >= 0xee) &&		/* 4b */
 	    (str[0] <= 0xef) &&
 	    (str[1] >= 0x80) &&
 	    (str[1] <= 0xbf) &&
@@ -76,7 +80,7 @@ int fr_utf8_char(uint8_t const *str)
 		return 3;
 	}
 
-	if ((str[0] == 0xed) &&	/* 5 */
+	if ((str[0] == 0xed) &&		/* 5 */
 	    (str[1] >= 0x80) &&
 	    (str[1] <= 0x9f) &&
 	    (str[2] >= 0x80) &&
@@ -84,7 +88,9 @@ int fr_utf8_char(uint8_t const *str)
 		return 3;
 	}
 
-	if ((str[0] == 0xf0) &&	/* 6 */
+	if (inlen < 4) return 0;
+
+	if ((str[0] == 0xf0) &&		/* 6 */
 	    (str[1] >= 0x90) &&
 	    (str[1] <= 0xbf) &&
 	    (str[2] >= 0x80) &&
@@ -94,7 +100,7 @@ int fr_utf8_char(uint8_t const *str)
 		return 4;
 	}
 
-	if ((str[0] >= 0xf1) &&	/* 6 */
+	if ((str[0] >= 0xf1) &&		/* 6 */
 	    (str[1] <= 0xf3) &&
 	    (str[1] >= 0x80) &&
 	    (str[1] <= 0xbf) &&
@@ -106,7 +112,7 @@ int fr_utf8_char(uint8_t const *str)
 	}
 
 
-	if ((str[0] == 0xf4) &&	/* 7 */
+	if ((str[0] == 0xf4) &&		/* 7 */
 	    (str[1] >= 0x80) &&
 	    (str[1] <= 0x8f) &&
 	    (str[2] >= 0x80) &&
@@ -133,14 +139,14 @@ char const *fr_utf8_strchr(int *chr_len, char const *str, char const *chr)
 {
 	int cchr;
 
-	cchr = fr_utf8_char((uint8_t const *)chr);
+	cchr = fr_utf8_char((uint8_t const *)chr, -1);
 	if (cchr == 0) cchr = 1;
 	if (chr_len) *chr_len = cchr;
 
 	while (*str) {
 		int schr;
 
-		schr = fr_utf8_char((uint8_t const *) str);
+		schr = fr_utf8_char((uint8_t const *) str, -1);
 		if (schr == 0) schr = 1;
 		if (schr != cchr) goto next;
 
@@ -160,52 +166,35 @@ char const *fr_utf8_strchr(int *chr_len, char const *str, char const *chr)
  * @note Will always \0 terminate unless outlen == 0.
  *
  * @param[in] in string to escape.
- * @param[in] inlen length of string to escape (lets us deal with embedded NULLs)
+ * @param[in] inlen length of string to escape (lets us deal with embedded NULs)
  * @param[out] out where to write the escaped string.
  * @param[out] outlen the length of the buffer pointed to by out.
  * @param[in] quote the quotation character
- * @return the number of bytes written to the out buffer, or a number >= outlen if truncation has occurred.
+ * @return the number of bytes it WOULD HAVE written to the buffer, not including the trailing NUL
  */
 size_t fr_prints(char *out, size_t outlen, char const *in, ssize_t inlen, char quote)
 {
 	uint8_t const	*p = (uint8_t const *) in;
-	int		utf8 = 0;
-	size_t		freespace = outlen;
-
-	/*
-	 *	IF YOU MODIFY THIS FUNCTION, YOU MUST MAKE
-	 *	EQUIVALENT MODIFICATIONS TO fr_prints_len
-	 */
-
-	/* Can't '\0' terminate */
-	if (freespace == 0) return inlen;
+	size_t		utf8;
+	size_t		used;
+	size_t		freespace;
 
 	/* No input, so no output... */
 	if (!in) {
-	no_input:
-		*out = '\0';
+		if (out && outlen) *out = '\0';
 		return 0;
 	}
 
 	/* Figure out the length of the input string */
 	if (inlen < 0) inlen = strlen(in);
 
-	/* Not enough space to hold one char */
-	if (freespace < 2) {
-		/* And there's input data... */
-		if (inlen > 0) {
-			*out = '\0';
-			return inlen;
-		}
-
-		goto no_input;
-	}
-
 	/*
 	 *	No quotation character, just use memcpy, ensuring we
 	 *	don't overflow the output buffer.
 	 */
 	if (!quote) {
+		if (!out) return inlen;
+
 		if ((size_t)inlen >= outlen) {
 			memcpy(out, in, outlen - 1);
 			out[outlen - 1] = '\0';
@@ -213,8 +202,19 @@ size_t fr_prints(char *out, size_t outlen, char const *in, ssize_t inlen, char q
 			memcpy(out, in, inlen);
 			out[inlen] = '\0';
 		}
+
 		return inlen;
 	}
+
+	/*
+	 *	Check the output buffer and length.  Zero both of them
+	 *	out if either are zero.
+	 */
+	freespace = outlen;
+	if (freespace == 0) out = NULL;
+	if (!out) freespace = 0;
+
+	used = 0;
 
 	while (inlen > 0) {
 		int sp = 0;
@@ -230,40 +230,28 @@ size_t fr_prints(char *out, size_t outlen, char const *in, ssize_t inlen, char q
 		}
 
 		/*
-		 *	Escape the quotation character, if we have one.
+		 *	Always escape the quotation character.
 		 */
 		if (*p == quote) {
 			sp = quote;
+			goto do_escape;
+		}
 
-		} else switch (*p) {
-		case '\\':
-			/*
-			 *	If the next character is a quote, we
-			 *	need to escape the backslash.
-			 */
-			if (p[1] == quote) {
+		/*
+		 *	Escape the backslash ONLY for single quoted strings.
+		 */
+		if (quote == '\'') {
+			if (*p == '\\') {
 				sp = '\\';
-
-			/*
-			 *	Ensure that "\r" isn't
-			 *	interpreted as '\r', but
-			 *	instead as "\\r"
-			 */
-			} else switch (p[1]) {
-			case 'r':
-			case 't':
-			case 'n':
-			case '\\':
-				sp = '\\';
-				break;
-
-			default:
-				sp = '\0';
-				break;
-
 			}
-			break;
+			goto do_escape;
+		}
 
+		/*
+		 *	Try to convert 0x0a --> \r, etc.
+		 *	Backslashes get handled specially.
+		 */
+		switch (*p) {
 		case '\r':
 			sp = 'r';
 			break;
@@ -276,47 +264,93 @@ size_t fr_prints(char *out, size_t outlen, char const *in, ssize_t inlen, char q
 			sp = 't';
 			break;
 
+		case '\\':
+			sp = '\\';
+			break;
+
 		default:
 			sp = '\0';
 			break;
-		}
+		} /* escape the character at *p */
 
+	do_escape:
 		if (sp) {
-			if (freespace < 3) break; /* \ + <c> + \0 */
-			*out++ = '\\';
-			*out++ = sp;
-			freespace -= 2;
+			if ((freespace > 0) && (freespace <= 2)) {
+				if (out) out[used] = '\0';
+				out = NULL;
+				freespace = 0;
+
+			} else if (freespace > 2) { /* room for char AND trailing zero */
+				if (out) {
+					out[used] = '\\';
+					out[used + 1] = sp;
+				}
+				freespace -= 2;
+			}
+
+			used += 2;
 			p++;
 			inlen--;
 			continue;
 		}
 
-		utf8 = fr_utf8_char(p);
+		/*
+		 *	All strings are UTF-8 clean.
+		 */
+		utf8 = fr_utf8_char(p, inlen);
+
+		/*
+		 *	If we have an invalid UTF-8 character, it gets
+		 *	copied over as a 1-byte character for single
+		 *	quoted strings.  Which means that the output
+		 *	isn't strictly UTF-8, but oh well...
+		 *
+		 *	For double quoted strints, the invalid
+		 *	characters get escaped as octal encodings.
+		 */
 		if (utf8 == 0) {
-			if (freespace < 5) break; /* \ + <o><o><o> + \0 */
-			snprintf(out, freespace, "\\%03o", *p);
-			out += 4;
-			freespace -= 4;
-			p++;
-			inlen--;
-			continue;
+			if (quote == '\'') {
+				utf8 = 1;
+
+			} else {
+				if ((freespace > 0) && (freespace <= 4)) {
+					if (out) out[used] = '\0';
+					out = NULL;
+					freespace = 0;
+
+				} else if (freespace > 4) { /* room for char AND trailing zero */
+					if (out) snprintf(out + used, freespace, "\\%03o", *p);
+					freespace -= 4;
+				}
+
+				used += 4;
+				p++;
+				inlen--;
+				continue;
+			}
 		}
 
-		do {
-			if (freespace < 2) goto finish; /* <c> + \0 */
-			*out++ = *p++;
-			freespace--;
-			inlen--;
-		} while (--utf8 > 0);
+		if ((freespace > 0) && (freespace <= utf8)) {
+			if (out) out[used] = '\0';
+			out = NULL;
+			freespace = 0;
+
+		} else if (freespace > utf8) { /* room for char AND trailing zero */
+			memcpy(out + used, p, utf8);
+			freespace -= utf8;
+		}
+
+		used += utf8;
+		p += utf8;
+		inlen -= utf8;
 	}
 
-finish:
-	*out = '\0';
+	/*
+	 *	Ensure that the output buffer is always zero terminated.
+	 */
+	if (out && freespace) out[used] = '\0';
 
-	/* Indicate truncation occurred */
-	if (inlen > 0) return outlen + inlen;
-
-	return outlen - freespace;
+	return used;
 }
 
 /** Find the length of the buffer required to fully escape a string with fr_prints
@@ -328,100 +362,11 @@ finish:
  * @param in string to calculate the escaped length for.
  * @param inlen length of the input string, if < 0 strlen will be used to check the length.
  * @param[in] quote the quotation character.
- * @return the size of buffer required to hold the escaped string including the NULL byte.
+ * @return the size of buffer required to hold the escaped string including the NUL byte.
  */
 size_t fr_prints_len(char const *in, ssize_t inlen, char quote)
 {
-	uint8_t const	*p = (uint8_t const *) in;
-	size_t		outlen = 1;	/* Need one byte for \0 */
-	int		utf8 = 0;
-
-	if (!in) return outlen;
-
-	if (inlen < 0) inlen = strlen(in);
-
-	if (!quote) return inlen + 1;
-
-	while (inlen > 0) {
-		int sp = 0;
-
-		/*
-		 *	Hack: never print trailing zero. Some clients send pings
-		 *	with an off-by-one length (confused with strings in C).
-		 */
-		if ((inlen == 1) && (*p == '\0')) {
-			inlen--;
-			break;
-		}
-
-		if (quote && (*p == quote)) {
-			sp = quote;
-		} else switch (*p) {
-		case '\\':
-			/*
-			 *	If the next character is a quote, we
-			 *	need to escape the backslash.
-			 */
-			if (quote && (p[1] == quote)) {
-				sp = '\\';
-			/*
-			 *	Ensure that "\r" isn't
-			 *	interpreted as '\r', but
-			 *	instead as "\\r"
-			 */
-			} else switch (p[1]) {
-			case 'r':
-			case 't':
-			case 'n':
-			case '\\':
-				sp = '\\';
-				break;
-
-			default:
-				sp = '\0';
-				break;
-
-			}
-			break;
-
-		case '\r':
-			sp = 'r';
-			break;
-
-		case '\n':
-			sp = 'n';
-			break;
-
-		case '\t':
-			sp = 't';
-			break;
-
-		default:
-			sp = '\0';
-			break;
-		}
-
-		if (sp) {
-			outlen += 2;
-			p++;
-			inlen--;
-			continue;
-		}
-
-		utf8 = fr_utf8_char(p);
-		if (utf8 == 0) {
-			outlen += 4;
-			p++;
-			inlen--;
-			continue;
-		}
-
-		outlen += utf8;
-		p += utf8;
-		inlen -= utf8;
-	}
-
-	return outlen;
+	return fr_prints(NULL, 0, in, inlen, quote) + 1;
 }
 
 /** Escape string that may contain binary data, and write it to a new buffer
@@ -447,6 +392,7 @@ char *fr_aprints(TALLOC_CTX *ctx, char const *in, ssize_t inlen, char quote)
 
 	out = talloc_array(ctx, char, len);
 	ret = fr_prints(out, len, in, inlen, quote);
+
 	/*
 	 *	This is a fatal error, but fr_assert is the strongest
 	 *	assert we're allowed to use in library functions.
@@ -457,238 +403,6 @@ char *fr_aprints(TALLOC_CTX *ctx, char const *in, ssize_t inlen, char quote)
 	}
 
 	return out;
-}
-
-/** Print the value of an attribute to a string
- *
- * @note return value should be checked with is_truncated.
- * @note Will always \0 terminate unless outlen == 0.
- *
- * @param out Where to write the printed version of the attribute value.
- * @param outlen Length of the output buffer.
- * @param type of data being printed.
- * @param enumv Enumerated string values for integer types.
- * @param data to print.
- * @param inlen Length of data.
- * @param quote char to escape in string output.
- * @return  the number of bytes written to the out buffer, or a number >= outlen if truncation has occurred.
- */
-size_t vp_data_prints_value(char *out, size_t outlen,
-			    PW_TYPE type, DICT_ATTR const *enumv, value_data_t const *data,
-			    ssize_t inlen, char quote)
-{
-	DICT_VALUE	*v;
-	char		buf[1024];	/* Interim buffer to use with poorly behaved printing functions */
-	char const	*a = NULL;
-	time_t		t;
-	struct tm	s_tm;
-	unsigned int	i;
-
-	size_t		len = 0, freespace = outlen;
-
-	if (!data) return 0;
-	if (outlen == 0) return inlen;
-
-	*out = '\0';
-
-	switch (type) {
-	case PW_TYPE_STRING:
-
-		/*
-		 *	Ensure that WE add the quotation marks around the string.
-		 */
-		if (quote) {
-			if (freespace < 3) return inlen + 2;
-
-			*out++ = quote;
-			freespace--;
-
-			len = fr_prints(out, freespace, data->strvalue, inlen, quote);
-			/* always terminate the quoted string with another quote */
-			if (len >= (freespace - 1)) {
-				out[outlen - 2] = (char) quote;
-				out[outlen - 1] = '\0';
-				return len + 2;
-			}
-			out += len;
-			freespace -= len;
-
-			*out++ = (char) quote;
-			freespace--;
-			*out = '\0';
-
-			return len + 2;
-		}
-
-		return fr_prints(out, outlen, data->strvalue, inlen, quote);
-
-	case PW_TYPE_INTEGER:
-		i = data->integer;
-		goto print_int;
-
-	case PW_TYPE_SHORT:
-		i = data->ushort;
-		goto print_int;
-
-	case PW_TYPE_BYTE:
-		i = data->byte;
-
-print_int:
-		/* Normal, non-tagged attribute */
-		if (enumv && (v = dict_valbyattr(enumv->attr, enumv->vendor, i)) != NULL) {
-			a = v->name;
-			len = strlen(a);
-		} else {
-			/* should never be truncated */
-			len = snprintf(buf, sizeof(buf), "%u", i);
-			a = buf;
-		}
-		break;
-
-	case PW_TYPE_INTEGER64:
-		return snprintf(out, outlen, "%" PRIu64, data->integer64);
-
-	case PW_TYPE_DATE:
-		t = data->date;
-		if (quote > 0) {
-			len = strftime(buf, sizeof(buf) - 1, "%%%b %e %Y %H:%M:%S %Z%%", localtime_r(&t, &s_tm));
-			buf[0] = (char) quote;
-			buf[len - 1] = (char) quote;
-			buf[len] = '\0';
-		} else {
-			len = strftime(buf, sizeof(buf), "%b %e %Y %H:%M:%S %Z", localtime_r(&t, &s_tm));
-		}
-		a = buf;
-		break;
-
-	case PW_TYPE_SIGNED: /* Damned code for 1 WiMAX attribute */
-		len = snprintf(buf, sizeof(buf), "%d", data->sinteger);
-		a = buf;
-		break;
-
-	case PW_TYPE_IPV4_ADDR:
-		a = inet_ntop(AF_INET, &(data->ipaddr), buf, sizeof(buf));
-		len = strlen(buf);
-		break;
-
-	case PW_TYPE_ABINARY:
-#ifdef WITH_ASCEND_BINARY
-		print_abinary(buf, sizeof(buf), (uint8_t const *) data->filter, len, quote);
-		a = buf;
-		len = strlen(buf);
-		break;
-#else
-	/* FALL THROUGH */
-#endif
-	case PW_TYPE_OCTETS:
-	case PW_TYPE_TLV:
-	{
-		size_t max;
-
-		/* Return the number of bytes we would have written */
-		len = (inlen * 2) + 2;
-		if (freespace <= 1) {
-			return len;
-		}
-
-		*out++ = '0';
-		freespace--;
-
-		if (freespace <= 1) {
-			*out = '\0';
-			return len;
-		}
-		*out++ = 'x';
-		freespace--;
-
-		if (freespace <= 2) {
-			*out = '\0';
-			return len;
-		}
-
-		/* Get maximum number of bytes we can encode given freespace */
-		max = ((freespace % 2) ? freespace - 1 : freespace - 2) / 2;
-		fr_bin2hex(out, data->octets, ((size_t)inlen > max) ? max : (size_t)inlen);
-	}
-		return len;
-
-	case PW_TYPE_IFID:
-		a = ifid_ntoa(buf, sizeof(buf), data->ifid);
-		len = strlen(buf);
-		break;
-
-	case PW_TYPE_IPV6_ADDR:
-		a = inet_ntop(AF_INET6, &data->ipv6addr, buf, sizeof(buf));
-		len = strlen(buf);
-		break;
-
-	case PW_TYPE_IPV6_PREFIX:
-	{
-		struct in6_addr addr;
-
-		/*
-		 *	Alignment issues.
-		 */
-		memcpy(&addr, &(data->ipv6prefix[2]), sizeof(addr));
-
-		a = inet_ntop(AF_INET6, &addr, buf, sizeof(buf));
-		if (a) {
-			char *p = buf;
-
-			len = strlen(buf);
-			p += len;
-			len += snprintf(p, sizeof(buf) - len, "/%u", (unsigned int) data->ipv6prefix[1]);
-		}
-	}
-		break;
-
-	case PW_TYPE_IPV4_PREFIX:
-	{
-		struct in_addr addr;
-
-		/*
-		 *	Alignment issues.
-		 */
-		memcpy(&addr, &(data->ipv4prefix[2]), sizeof(addr));
-
-		a = inet_ntop(AF_INET, &addr, buf, sizeof(buf));
-		if (a) {
-			char *p = buf;
-
-			len = strlen(buf);
-			p += len;
-			len += snprintf(p, sizeof(buf) - len, "/%u", (unsigned int) (data->ipv4prefix[1] & 0x3f));
-		}
-	}
-		break;
-
-	case PW_TYPE_ETHERNET:
-		return snprintf(out, outlen, "%02x:%02x:%02x:%02x:%02x:%02x",
-				data->ether[0], data->ether[1],
-				data->ether[2], data->ether[3],
-				data->ether[4], data->ether[5]);
-
-	/*
-	 *	Don't add default here
-	 */
-	case PW_TYPE_INVALID:
-	case PW_TYPE_COMBO_IP_ADDR:
-	case PW_TYPE_COMBO_IP_PREFIX:
-	case PW_TYPE_EXTENDED:
-	case PW_TYPE_LONG_EXTENDED:
-	case PW_TYPE_EVS:
-	case PW_TYPE_VSA:
-	case PW_TYPE_TIMEVAL:
-	case PW_TYPE_BOOLEAN:
-	case PW_TYPE_MAX:
-		fr_assert(0);
-		*out = '\0';
-		return 0;
-	}
-
-	if (a) strlcpy(out, a, outlen);
-
-	return len;	/* Return the number of bytes we would of written (for truncation detection) */
 }
 
 /** Print the value of an attribute to a string
@@ -704,176 +418,11 @@ size_t vp_prints_value(char *out, size_t outlen, VALUE_PAIR const *vp, char quot
 {
 	VERIFY_VP(vp);
 
-	return vp_data_prints_value(out, outlen, vp->da->type, vp->da, &vp->data, vp->vp_length, quote);
-}
-
-
-/** Print one attribute value to a string
- *
- */
-char *vp_data_aprints_value(TALLOC_CTX *ctx,
-			    PW_TYPE type, DICT_ATTR const *enumv, value_data_t const *data,
-			    size_t inlen, char quote)
-{
-	char *p = NULL;
-	unsigned int i;
-
-	switch (type) {
-	case PW_TYPE_STRING:
-	{
-		size_t len, ret;
-
-		if (!quote) {
-			p = talloc_memdup(ctx, data->strvalue, inlen + 1);
-			if (!p) return NULL;
-			talloc_set_type(p, char);
-			return p;
-		}
-
-		/* Gets us the size of the buffer we need to alloc */
-		len = fr_prints_len(data->strvalue, inlen, quote);
-		p = talloc_array(ctx, char, len);
-		if (!p) return NULL;
-
-		ret = fr_prints(p, len, data->strvalue, inlen, quote);
-		if (!fr_assert(ret == (len - 1))) {
-			talloc_free(p);
-			return NULL;
-		}
-		break;
+	if (vp->type == VT_XLAT) {
+		return snprintf(out, outlen, "%c%s%c", quote, vp->value.xlat, quote);
 	}
 
-	case PW_TYPE_INTEGER:
-		i = data->integer;
-		goto print_int;
-
-	case PW_TYPE_SHORT:
-		i = data->ushort;
-		goto print_int;
-
-	case PW_TYPE_BYTE:
-		i = data->byte;
-
-	print_int:
-	{
-		DICT_VALUE const *dv;
-
-		if (enumv && (dv = dict_valbyattr(enumv->attr, enumv->vendor, i))) {
-			p = talloc_typed_strdup(ctx, dv->name);
-		} else {
-			p = talloc_typed_asprintf(ctx, "%u", i);
-		}
-	}
-		break;
-
-	case PW_TYPE_SIGNED:
-		p = talloc_typed_asprintf(ctx, "%d", data->sinteger);
-		break;
-
-	case PW_TYPE_INTEGER64:
-		p = talloc_typed_asprintf(ctx, "%" PRIu64 , data->integer64);
-		break;
-
-	case PW_TYPE_ETHERNET:
-		p = talloc_typed_asprintf(ctx, "%02x:%02x:%02x:%02x:%02x:%02x",
-					  data->ether[0], data->ether[1],
-					  data->ether[2], data->ether[3],
-					  data->ether[4], data->ether[5]);
-		break;
-
-	case PW_TYPE_ABINARY:
-#ifdef WITH_ASCEND_BINARY
-		p = talloc_array(ctx, char, 128);
-		if (!p) return NULL;
-		print_abinary(p, 128, (uint8_t *) &data->filter, inlen, 0);
-		break;
-#else
-		  /* FALL THROUGH */
-#endif
-
-	case PW_TYPE_OCTETS:
-		p = talloc_array(ctx, char, 2 + 1 + inlen * 2);
-		if (!p) return NULL;
-		p[0] = '0';
-		p[1] = 'x';
-
-		fr_bin2hex(p + 2, data->octets, inlen);
-		break;
-
-	case PW_TYPE_DATE:
-	{
-		time_t t;
-		struct tm s_tm;
-
-		t = data->date;
-
-		p = talloc_array(ctx, char, 64);
-		strftime(p, 64, "%b %e %Y %H:%M:%S %Z",
-			 localtime_r(&t, &s_tm));
-		break;
-	}
-
-	/*
-	 *	We need to use the proper inet_ntop functions for IP
-	 *	addresses, else the output might not match output of
-	 *	other functions, which makes testing difficult.
-	 *
-	 *	An example is tunnelled ipv4 in ipv6 addresses.
-	 */
-	case PW_TYPE_IPV4_ADDR:
-	case PW_TYPE_IPV4_PREFIX:
-	{
-		char buff[INET_ADDRSTRLEN  + 4]; // + /prefix
-
-		buff[0] = '\0';
-		vp_data_prints_value(buff, sizeof(buff), type, enumv, data, inlen, '\0');
-
-		p = talloc_typed_strdup(ctx, buff);
-	}
-	break;
-
-	case PW_TYPE_IPV6_ADDR:
-	case PW_TYPE_IPV6_PREFIX:
-	{
-		char buff[INET6_ADDRSTRLEN + 4]; // + /prefix
-
-		buff[0] = '\0';
-		vp_data_prints_value(buff, sizeof(buff), type, enumv, data, inlen, '\0');
-
-		p = talloc_typed_strdup(ctx, buff);
-	}
-	break;
-
-	case PW_TYPE_IFID:
-		p = talloc_typed_asprintf(ctx, "%x:%x:%x:%x",
-					  (data->ifid[0] << 8) | data->ifid[1],
-					  (data->ifid[2] << 8) | data->ifid[3],
-					  (data->ifid[4] << 8) | data->ifid[5],
-					  (data->ifid[6] << 8) | data->ifid[7]);
-		break;
-
-	case PW_TYPE_BOOLEAN:
-		p = talloc_typed_strdup(ctx, data->byte ? "yes" : "no");
-		break;
-
-	/*
-	 *	Don't add default here
-	 */
-	case PW_TYPE_INVALID:
-	case PW_TYPE_COMBO_IP_ADDR:
-	case PW_TYPE_COMBO_IP_PREFIX:
-	case PW_TYPE_TLV:
-	case PW_TYPE_EXTENDED:
-	case PW_TYPE_LONG_EXTENDED:
-	case PW_TYPE_EVS:
-	case PW_TYPE_VSA:
-	case PW_TYPE_TIMEVAL:
-	case PW_TYPE_MAX:
-		fr_assert(0);
-		return NULL;
-	}
-
-	return p;
+	return value_data_prints(out, outlen, vp->da->type, vp->da, &vp->data, vp->vp_length, quote);
 }
 
 /** Print one attribute value to a string
@@ -887,7 +436,7 @@ char *vp_aprints_value(TALLOC_CTX *ctx, VALUE_PAIR const *vp, char quote)
 {
 	VERIFY_VP(vp);
 
-	return vp_data_aprints_value(ctx, vp->da->type, vp->da, &vp->data, vp->vp_length, quote);
+	return value_data_aprints(ctx, vp->da->type, vp->da, &vp->data, vp->vp_length, quote);
 }
 
 char *vp_aprints_type(TALLOC_CTX *ctx, PW_TYPE type)
@@ -1131,7 +680,7 @@ size_t vp_prints(char *out, size_t outlen, VALUE_PAIR const *vp)
 	out += len;
 	freespace -= len;
 
-	len = vp_prints_value(out, freespace, vp, '\'');
+	len = vp_prints_value(out, freespace, vp, '"');
 	if (is_truncated(len, freespace)) return (outlen - freespace) + len;
 	freespace -= len;
 
@@ -1178,11 +727,15 @@ void vp_print(FILE *fp, VALUE_PAIR const *vp)
 /** Print a list of attributes and enumv
  *
  * @param fp to output to.
- * @param vp to print.
+ * @param const_vp to print.
  */
-void vp_printlist(FILE *fp, VALUE_PAIR const *vp)
+void vp_printlist(FILE *fp, VALUE_PAIR const *const_vp)
 {
+	VALUE_PAIR *vp;
 	vp_cursor_t cursor;
+
+	memcpy(&vp, &const_vp, sizeof(vp)); /* const work-arounds */
+
 	for (vp = fr_cursor_init(&cursor, &vp); vp; vp = fr_cursor_next(&cursor)) {
 		vp_print(fp, vp);
 	}
@@ -1236,5 +789,3 @@ char *vp_aprints(TALLOC_CTX *ctx, VALUE_PAIR const *vp, char quote)
 
 	return str;
 }
-
-

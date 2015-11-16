@@ -1,8 +1,4 @@
 /*
- * log.c	Logging module.
- *
- * Version:	$Id$
- *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
  *   the Free Software Foundation; either version 2 of the License, or
@@ -16,13 +12,19 @@
  *   You should have received a copy of the GNU General Public License
  *   along with this program; if not, write to the Free Software
  *   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
- *
- * Copyright 2001,2006  The FreeRADIUS server project
- * Copyright 2000  Miquel van Smoorenburg <miquels@cistron.nl>
- * Copyright 2000  Alan DeKok <aland@ox.org>
- * Copyright 2001  Chad Miller <cmiller@surfsouth.com>
  */
 
+/**
+ * $Id$
+ *
+ * @brief Logging functions used by the server core.
+ * @file main/log.c
+ *
+ * @copyright 2000,2006  The FreeRADIUS server project
+ * @copyright 2000  Miquel van Smoorenburg <miquels@cistron.nl>
+ * @copyright 2000  Alan DeKok <aland@ox.org>
+ * @copyright 2001  Chad Miller <cmiller@surfsouth.com>
+ */
 RCSID("$Id$")
 
 #include <freeradius-devel/radiusd.h>
@@ -44,10 +46,10 @@ RCSID("$Id$")
 #include <pthread.h>
 #endif
 
-static bool rate_limit = true;
+log_lvl_t	rad_debug_lvl = 0;		//!< Global debugging level
+static bool	rate_limit = true;		//!< Whether repeated log entries should be rate limited
 
-/*
- * Logging facility names
+/** Maps log categories to message prefixes
  */
 static const FR_NAME_NUMBER levels[] = {
 	{ ": Debug: ",		L_DBG		},
@@ -64,11 +66,24 @@ static const FR_NAME_NUMBER levels[] = {
 	{ NULL, 0 }
 };
 
-#define VTC_RED		"\x1b[31m"
-#define VTC_YELLOW      "\x1b[33m"
-#define VTC_BOLD	"\x1b[1m"
-#define VTC_RESET	"\x1b[0m"
+/** @name VT100 escape sequences
+ *
+ * These sequences may be written to VT100 terminals to change the
+ * colour and style of the text.
+ *
+ @code{.c}
+   fprintf(stdout, VTC_RED "This text will be coloured red" VTC_RESET);
+ @endcode
+ * @{
+ */
+#define VTC_RED		"\x1b[31m"	//!< Colour following text red.
+#define VTC_YELLOW      "\x1b[33m"	//!< Colour following text yellow.
+#define VTC_BOLD	"\x1b[1m"	//!< Embolden following text.
+#define VTC_RESET	"\x1b[0m"	//!< Reset terminal text to default style/colour.
+/** @} */
 
+/** Maps log categories to VT100 style/colour escape sequences
+ */
 static const FR_NAME_NUMBER colours[] = {
 	{ "",			L_DBG		},
 	{ VTC_BOLD,		L_AUTH		},
@@ -84,10 +99,15 @@ static const FR_NAME_NUMBER colours[] = {
 	{ NULL, 0 }
 };
 
-/*
- *	Syslog facility table.
+/** Syslog facility table
+ *
+ * Maps syslog facility keywords, to the syslog facility macros defined
+ * in the system's syslog.h.
+ *
+ * @note Not all facilities are supported by every operating system.
+ *       If a facility is unavailable it will not appear in the table.
  */
-const FR_NAME_NUMBER syslog_str2fac[] = {
+const FR_NAME_NUMBER syslog_facility_table[] = {
 #ifdef LOG_KERN
 	{ "kern",		LOG_KERN	},
 #endif
@@ -148,6 +168,40 @@ const FR_NAME_NUMBER syslog_str2fac[] = {
 	{ NULL,			-1		}
 };
 
+/** Syslog severity table
+ *
+ * Maps syslog severity keywords, to the syslog severity macros defined
+ * in the system's syslog.h file.
+ *
+ */
+const FR_NAME_NUMBER syslog_severity_table[] = {
+#ifdef LOG_EMERG
+	{ "emergency",		LOG_EMERG	},
+#endif
+#ifdef LOG_ALERT
+	{ "alert",		LOG_ALERT	},
+#endif
+#ifdef LOG_CRIT
+	{ "critical",		LOG_CRIT	},
+#endif
+#ifdef LOG_ERR
+	{ "error",		LOG_ERR		},
+#endif
+#ifdef LOG_WARNING
+	{ "warning",		LOG_WARNING	},
+#endif
+#ifdef LOG_NOTICE
+	{ "notice",		LOG_NOTICE	},
+#endif
+#ifdef LOG_INFO
+	{ "info",		LOG_INFO	},
+#endif
+#ifdef LOG_DEBUG
+	{ "debug",		LOG_DEBUG	},
+#endif
+	{ NULL,			-1		}
+};
+
 const FR_NAME_NUMBER log_str2dst[] = {
 	{ "null",		L_DST_NULL	},
 	{ "files",		L_DST_FILES	},
@@ -172,7 +226,7 @@ static int stdout_fd = -1;	//!< The original unmolested stdout file descriptor
 
 static char const spaces[] = "                                                                                                                        ";
 
-/** On fault, reset STDOUT and STDERR to something useful.
+/** On fault, reset STDOUT and STDERR to something useful
  *
  * @return 0
  */
@@ -191,18 +245,6 @@ static int _restore_std(UNUSED int sig)
 	}
 
 	return 0;
-}
-
-/** Pass debug logging through to vradlog
- *
- */
-static void CC_HINT(format (printf, 1, 2)) _radlog_info(char const *msg, ...)
-{
-	va_list ap;
-
-	va_start(ap, msg);
-	vradlog(L_INFO, msg, ap);
-	va_end(ap);
 }
 
 /** Initialise file descriptors based on logging destination
@@ -257,7 +299,7 @@ int radlog_init(fr_log_t *log, bool daemonize)
 		 *	If we're debugging, allow STDERR to go to
 		 *	STDOUT too, for executed programs,
 		 */
-		if (debug_flag) {
+		if (rad_debug_lvl) {
 			dup2(STDOUT_FILENO, STDERR_FILENO);
 		} else {
 			dup2(devnull, STDERR_FILENO);
@@ -271,7 +313,7 @@ int radlog_init(fr_log_t *log, bool daemonize)
 		 *	If we're debugging, allow STDOUT to go to
 		 *	STDERR too, for executed programs,
 		 */
-		if (debug_flag) {
+		if (rad_debug_lvl) {
 			dup2(STDERR_FILENO, STDOUT_FILENO);
 		} else {
 			dup2(devnull, STDOUT_FILENO);
@@ -286,7 +328,7 @@ int radlog_init(fr_log_t *log, bool daemonize)
 		dup2(devnull, STDOUT_FILENO);
 		dup2(devnull, STDERR_FILENO);
 
-	} else if (debug_flag) {
+	} else if (rad_debug_lvl) {
 		/*
 		 *	If we're debugging, allow STDOUT and STDERR to
 		 *	go to the log file.
@@ -308,21 +350,18 @@ int radlog_init(fr_log_t *log, bool daemonize)
 
 	close(devnull);
 
-	/*
-	 *	This handles setting up all the talloc logging
-	 *	and callbacks too.
-	 */
-	fr_fault_set_log_fn(_radlog_info);
 	fr_fault_set_log_fd(log->fd);
 
 	return 0;
 }
 
-/*
- *	Log the message to the logfile. Include the severity and
- *	a time stamp.
+/** Send a server log message to its destination
+ *
+ * @param type of log message.
+ * @param msg with printf style substitution tokens.
+ * @param ap Substitution arguments.
  */
-int vradlog(log_type_t type, char const *fmt, va_list ap)
+int vradlog(log_type_t type, char const *msg, va_list ap)
 {
 	unsigned char *p;
 	char buffer[10240];	/* The largest config item size, then extra for prefixes and suffixes */
@@ -362,7 +401,7 @@ int vradlog(log_type_t type, char const *fmt, va_list ap)
 	 *	of debugging.
 	 */
 	if (default_log.dst != L_DST_SYSLOG) {
-		if ((debug_flag != 1) && (debug_flag != 2)) {
+		if ((rad_debug_lvl != 1) && (rad_debug_lvl != 2)) {
 			time_t timeval;
 
 			timeval = time(NULL);
@@ -388,7 +427,7 @@ int vradlog(log_type_t type, char const *fmt, va_list ap)
 	}
 
 	if (len < sizeof(buffer)) {
-		len += vsnprintf(buffer + len, sizeof(buffer) - len - 1, fmt, ap);
+		len += vsnprintf(buffer + len, sizeof(buffer) - len - 1, msg, ap);
 	}
 
 	/*
@@ -407,7 +446,7 @@ int vradlog(log_type_t type, char const *fmt, va_list ap)
 			continue;
 
 		default:
-			clen = fr_utf8_char(p);
+			clen = fr_utf8_char(p, -1);
 			if (!clen) {
 				*p = '?';
 				continue;
@@ -435,21 +474,27 @@ int vradlog(log_type_t type, char const *fmt, va_list ap)
 	case L_DST_SYSLOG:
 		switch (type) {
 		case L_DBG:
-		case L_WARN:
 		case L_DBG_WARN:
 		case L_DBG_ERR:
 		case L_DBG_ERR_REQ:
 		case L_DBG_WARN_REQ:
 			type = LOG_DEBUG;
 			break;
+
 		case L_AUTH:
 		case L_PROXY:
 		case L_ACCT:
 			type = LOG_NOTICE;
 			break;
+
 		case L_INFO:
 			type = LOG_INFO;
 			break;
+
+		case L_WARN:
+			type = LOG_WARNING;
+			break;
+
 		case L_ERR:
 			type = LOG_ERR;
 			break;
@@ -471,6 +516,12 @@ int vradlog(log_type_t type, char const *fmt, va_list ap)
 	return 0;
 }
 
+/** Send a server log message to its destination
+ *
+ * @param type of log message.
+ * @param msg with printf style substitution tokens.
+ * @param ... Substitution arguments.
+ */
 int radlog(log_type_t type, char const *msg, ...)
 {
 	va_list ap;
@@ -481,7 +532,7 @@ int radlog(log_type_t type, char const *msg, ...)
 	/*
 	 *	Non-debug message, or debugging is enabled.  Log it.
 	 */
-	if (((type & L_DBG) == 0) || (debug_flag > 0)) {
+	if (((type & L_DBG) == 0) || (rad_debug_lvl > 0)) {
 		r = vradlog(type, msg, ap);
 	}
 	va_end(ap);
@@ -489,10 +540,14 @@ int radlog(log_type_t type, char const *msg, ...)
 	return r;
 }
 
-/*
- *	Always log.
+/** Send a server log message to its destination without evaluating its debug level
+ *
+ * @param type of log message.
+ * @param msg with printf style substitution tokens.
+ * @param ... Substitution arguments.
  */
-static int CC_HINT(format (printf, 2, 3)) radlog_always(log_type_t type, char const *msg, ...)
+static int radlog_always(log_type_t type, char const *msg, ...) CC_HINT(format (printf, 2, 3));
+static int radlog_always(log_type_t type, char const *msg, ...)
 {
 	va_list ap;
 	int r;
@@ -504,20 +559,35 @@ static int CC_HINT(format (printf, 2, 3)) radlog_always(log_type_t type, char co
 	return r;
 }
 
+/** Whether a server debug message should be logged
+ *
+ * @param type of message.
+ * @param lvl of debugging this message should be logged at.
+ * @return true if message should be logged, else false.
+ */
 inline bool debug_enabled(log_type_t type, log_lvl_t lvl)
 {
-	if ((type & L_DBG) && (lvl <= debug_flag)) return true;
+	if ((type & L_DBG) && (lvl <= rad_debug_lvl)) return true;
 
 	return false;
 }
 
+/** Whether rate limiting is enabled
+ */
 bool rate_limit_enabled(void)
 {
-	if (rate_limit || (debug_flag < 1)) return true;
+	if (rate_limit || (rad_debug_lvl < 1)) return true;
 
 	return false;
 }
 
+/** Whether a request specific debug message should be logged
+ *
+ * @param type of message.
+ * @param lvl of debugging this message should be logged at.
+ * @param request The current request.
+ * @return true if message should be logged, else false.
+ */
 inline bool radlog_debug_enabled(log_type_t type, log_lvl_t lvl, REQUEST *request)
 {
 	/*
@@ -531,14 +601,22 @@ inline bool radlog_debug_enabled(log_type_t type, log_lvl_t lvl, REQUEST *reques
 	 *	then don't log the message.
 	 */
 	if ((type & L_DBG) &&
-	    ((request && request->log.func && (lvl <= request->log.lvl)) ||
-	     ((debug_flag != 0) && (lvl <= debug_flag)))) {
+	    ((request->log.func && (lvl <= request->log.lvl)) ||
+	     ((rad_debug_lvl != 0) && (lvl <= rad_debug_lvl)))) {
 		return true;
 	}
 
 	return false;
 }
 
+/** Send a log message to its destination, possibly including fields from the request
+ *
+ * @param type of log message, #L_ERR, #L_WARN, #L_INFO, #L_DBG.
+ * @param lvl Minimum required server or request level to output this message.
+ * @param request The current request.
+ * @param msg with printf style substitution tokens.
+ * @param ap Substitution arguments.
+ */
 void vradlog_request(log_type_t type, log_lvl_t lvl, REQUEST *request, char const *msg, va_list ap)
 {
 	size_t len = 0;
@@ -571,8 +649,9 @@ void vradlog_request(log_type_t type, log_lvl_t lvl, REQUEST *request, char cons
 		filename = default_log.debug_file;
 		if (!filename)
 #endif
-
-		filename = default_log.file;
+		{
+			filename = default_log.file;
+		}
 	}
 
 	if (filename) {
@@ -584,13 +663,13 @@ void vradlog_request(log_type_t type, log_lvl_t lvl, REQUEST *request, char cons
 		 *	This is SLOW!  Doing it for every log message
 		 *	in every request is NOT recommended!
 		 */
-
-		 /* FIXME: escape chars! */
-		if (radius_xlat(buffer, sizeof(buffer), request, filename, NULL, NULL) < 0) {
-			return;
-		}
+		if (radius_xlat(buffer, sizeof(buffer), request, filename, rad_filename_escape, NULL) < 0) return;
 		request->log.func = rl;
 
+		/*
+		 *	Ensure the directory structure exists, for
+		 *	where we're going to write the log file.
+		 */
 		p = strrchr(buffer, FR_DIR_SEP);
 		if (p) {
 			*p = '\0';
@@ -617,6 +696,9 @@ void vradlog_request(log_type_t type, log_lvl_t lvl, REQUEST *request, char cons
 	vsnprintf(buffer + len, sizeof(buffer) - len, msg, aq);
 	va_end(aq);
 
+	/*
+	 *	Make sure the indent isn't set to something crazy
+	 */
 	indent = request->log.indent > sizeof(spaces) ?
 		 sizeof(spaces) :
 		 request->log.indent;
@@ -691,9 +773,10 @@ void vradlog_request(log_type_t type, log_lvl_t lvl, REQUEST *request, char cons
  * @see radlog_request_error for more details.
  *
  * @param type the log category.
- * @param lvl of debugging this message should be displayed at.
+ * @param lvl of debugging this message should be logged at.
  * @param request The current request.
- * @param msg format string.
+ * @param msg with printf style substitution tokens.
+ * @param ... Substitution arguments.
  */
 void radlog_request(log_type_t type, log_lvl_t lvl, REQUEST *request, char const *msg, ...)
 {
@@ -720,9 +803,10 @@ void radlog_request(log_type_t type, log_lvl_t lvl, REQUEST *request, char const
  * consistent behaviour.
  *
  * @param type the log category.
- * @param lvl of debugging this message should be displayed at.
+ * @param lvl of debugging this message should be logged at.
  * @param request The current request.
- * @param msg format string.
+ * @param msg with printf style substitution tokens.
+ * @param ... Substitution arguments.
  */
 void radlog_request_error(log_type_t type, log_lvl_t lvl, REQUEST *request, char const *msg, ...)
 {
@@ -737,17 +821,17 @@ void radlog_request_error(log_type_t type, log_lvl_t lvl, REQUEST *request, char
 	va_end(ap);
 }
 
-/** Parse error, write out string we were parsing, and a message indicating the error
+/** Write the string being parsed, and a marker showing where the parse error occurred
  *
  * @param type the log category.
- * @param lvl of debugging this message should be displayed at.
+ * @param lvl of debugging this message should be logged at.
  * @param request The current request.
- * @param fmt string we were parsing.
+ * @param msg string we were parsing.
  * @param idx The position of the marker relative to the string.
  * @param error What the parse error was.
  */
 void radlog_request_marker(log_type_t type, log_lvl_t lvl, REQUEST *request,
-			   char const *fmt, size_t idx, char const *error)
+			   char const *msg, size_t idx, char const *error)
 {
 	char const *prefix = "";
 	uint8_t indent;
@@ -757,7 +841,7 @@ void radlog_request_marker(log_type_t type, log_lvl_t lvl, REQUEST *request,
 	if (idx >= sizeof(spaces)) {
 		size_t offset = (idx - (sizeof(spaces) - 1)) + (sizeof(spaces) * 0.75);
 		idx -= offset;
-		fmt += offset;
+		msg += offset;
 
 		prefix = "... ";
 	}
@@ -768,7 +852,7 @@ void radlog_request_marker(log_type_t type, log_lvl_t lvl, REQUEST *request,
 	indent = request->log.indent;
 	request->log.indent = 0;
 
-	radlog_request(type, lvl, request, "%s%s", prefix, fmt);
+	radlog_request(type, lvl, request, "%s%s", prefix, msg);
 	radlog_request(type, lvl, request, "%s%.*s^ %s", prefix, (int) idx, spaces, error);
 
 	request->log.indent = indent;
@@ -780,16 +864,16 @@ void radlog_request_marker(log_type_t type, log_lvl_t lvl, REQUEST *request,
  * @note talloc_free must be called on the buffer returned in spaces and text
  *
  * Used to produce error messages such as this:
-@verbatim
-I'm a string with a parser # error
-                           ^ Unexpected character in string
-@endverbatim
+ @verbatim
+  I'm a string with a parser # error
+                             ^ Unexpected character in string
+ @endverbatim
  *
  * With code resembling this:
-@verbatim
-ERROR("%s", parsed_str);
-ERROR("%s^ %s", space, text);
-@endverbatim
+ @code{.c}
+   ERROR("%s", parsed_str);
+   ERROR("%s^ %s", space, text);
+ @endcode
  *
  * @todo merge with above function (radlog_request_marker)
  *

@@ -63,9 +63,9 @@ static char const *radsniff_version = "radsniff version " RADIUSD_VERSION_STRING
 ", built on " __DATE__ " at " __TIME__;
 
 static int rs_useful_codes[] = {
-	PW_CODE_ACCESS_REQUEST,		//!< RFC2865 - Authentication request
-	PW_CODE_ACCESS_ACCEPT,		//!< RFC2865 - Access-Accept
-	PW_CODE_ACCESS_REJECT,		//!< RFC2865 - Access-Reject
+	PW_CODE_ACCESS_REQUEST,			//!< RFC2865 - Authentication request
+	PW_CODE_ACCESS_ACCEPT,			//!< RFC2865 - Access-Accept
+	PW_CODE_ACCESS_REJECT,			//!< RFC2865 - Access-Reject
 	PW_CODE_ACCOUNTING_REQUEST,		//!< RFC2866 - Accounting-Request
 	PW_CODE_ACCOUNTING_RESPONSE,		//!< RFC2866 - Accounting-Response
 	PW_CODE_ACCESS_CHALLENGE,		//!< RFC2865 - Access-Challenge
@@ -216,13 +216,6 @@ static void rs_time_print(char *out, size_t len, struct timeval const *t)
 	}
 }
 
-static void rs_packet_print_null(UNUSED uint64_t count, UNUSED rs_status_t status, UNUSED fr_pcap_t *handle,
-				 UNUSED RADIUS_PACKET *packet, UNUSED struct timeval *elapsed,
-				 UNUSED struct timeval *latency, UNUSED bool response, UNUSED bool body)
-{
-	return;
-}
-
 static size_t rs_prints_csv(char *out, size_t outlen, char const *in, size_t inlen)
 {
 	char const	*start = out;
@@ -368,7 +361,7 @@ static void rs_packet_print_csv(uint64_t count, rs_status_t status, fr_pcap_t *h
 		VALUE_PAIR *vp;
 
 		for (i = 0; i < conf->list_da_num; i++) {
-			vp = pair_find_by_da(packet->vps, conf->list_da[i], TAG_ANY);
+			vp = fr_pair_find_by_da(packet->vps, conf->list_da[i], TAG_ANY);
 			if (vp && (vp->vp_length > 0)) {
 				if (conf->list_da[i]->type == PW_TYPE_STRING) {
 					*p++ = '"';
@@ -483,15 +476,15 @@ static void rs_packet_print_fancy(uint64_t count, rs_status_t status, fr_pcap_t 
 		/*
 		 *	Print out verbose HEX output
 		 */
-		if (conf->print_packet && (fr_debug_flag > 3)) {
+		if (conf->print_packet && (fr_debug_lvl > 3)) {
 			rad_print_hex(packet);
 		}
 
-		if (conf->print_packet && (fr_debug_flag > 1)) {
+		if (conf->print_packet && (fr_debug_lvl > 1)) {
 			char vector[(AUTH_VECTOR_LEN * 2) + 1];
 
 			if (packet->vps) {
-				pairsort(&packet->vps, attrtagcmp);
+				fr_pair_list_sort(&packet->vps, fr_pair_cmp_by_da_tag);
 				vp_printlist(fr_log_fp, packet->vps);
 			}
 
@@ -499,6 +492,16 @@ static void rs_packet_print_fancy(uint64_t count, rs_status_t status, fr_pcap_t 
 			INFO("\tAuthenticator-Field = 0x%s", vector);
 		}
 	}
+}
+
+static inline void rs_packet_print(rs_request_t *request, uint64_t count, rs_status_t status, fr_pcap_t *handle,
+				   RADIUS_PACKET *packet, struct timeval *elapsed, struct timeval *latency,
+				   bool response, bool body)
+{
+	if (!conf->logger) return;
+
+	if (request) request->logged = true;
+	conf->logger(count, status, handle, packet, elapsed, latency, response, body);
 }
 
 static void rs_stats_print(rs_latency_t *stats, PW_CODE code)
@@ -699,7 +702,7 @@ static void rs_stats_process(void *ctx)
 	for (i = 0; i < rs_codes_len; i++) {
 		rs_stats_process_latency(&stats->exchange[rs_useful_codes[i]]);
 		rs_stats_process_counters(&stats->exchange[rs_useful_codes[i]]);
-		if (fr_debug_flag > 0) {
+		if (fr_debug_lvl > 0) {
 			rs_stats_print(&stats->exchange[rs_useful_codes[i]], rs_useful_codes[i]);
 		}
 	}
@@ -779,9 +782,9 @@ static int rs_get_pairs(TALLOC_CTX *ctx, VALUE_PAIR **out, VALUE_PAIR *vps, DICT
 		}
 
 		do {
-			copy = paircopyvp(ctx, match);
+			copy = fr_pair_copy(ctx, match);
 			if (!copy) {
-				pairfree(out);
+				fr_pair_list_free(out);
 				return -1;
 			}
 			fr_cursor_insert(&out_cursor, copy);
@@ -854,18 +857,19 @@ static void rs_packet_cleanup(rs_request_t *request)
 	 */
 	if (!request->silent_cleanup) {
 		if (!request->linked) {
-			RS_ASSERT(request && request->stats_req);
+			if (!request->stats_req) return;
+
 			request->stats_req->interval.lost_total++;
 
 			if (conf->event_flags & RS_LOST) {
 				/* @fixme We should use flags in the request to indicate whether it's been dumped
 				 * to a PCAP file or logged yet, this simplifies the body logging logic */
-				conf->logger(request->id, RS_LOST, request->in, packet, NULL, NULL, false,
-					     conf->filter_response_vps || !(conf->event_flags & RS_NORMAL));
+				rs_packet_print(request, request->id, RS_LOST, request->in, packet, NULL, NULL, false,
+					        conf->filter_response_vps || !(conf->event_flags & RS_NORMAL));
 			}
 		}
 
-		if (request->in->type == PCAP_INTERFACE_IN) {
+		if ((request->in->type == PCAP_INTERFACE_IN) && request->logged) {
 			RDEBUG("Cleaning up request packet ID %i", request->expect->id);
 		}
 	}
@@ -914,7 +918,7 @@ static inline int rs_response_to_pcap(rs_event_t *event, rs_request_t *request, 
 	 *	If we're filtering by response then the requests then the capture buffer
 	 *	associated with the request should contain buffered request packets.
 	 */
-	if (conf->filter_response) {
+	if (conf->filter_response && request) {
 		rs_capture_t *start;
 
 		/*
@@ -1038,7 +1042,7 @@ static void rs_packet_process(uint64_t count, rs_event_t *event, struct pcap_pkt
 		rs_time_print(timestr, sizeof(timestr), &header->ts);
 	}
 
-	len = fr_link_layer_offset(data, header->caplen, event->in->link_type);
+	len = fr_link_layer_offset(data, header->caplen, event->in->link_layer);
 	if (len < 0) {
 		REDEBUG("Failed determining link layer header offset");
 		return;
@@ -1151,7 +1155,7 @@ static void rs_packet_process(uint64_t count, rs_event_t *event, struct pcap_pkt
 	if (!rad_packet_ok(current, 0, &reason)) {
 		REDEBUG("%s", fr_strerror());
 		if (conf->event_flags & RS_ERROR) {
-			conf->logger(count, RS_ERROR, event->in, current, &elapsed, NULL, false, false);
+			rs_packet_print(NULL, count, RS_ERROR, event->in, current, &elapsed, NULL, false, false);
 		}
 		rad_free(&current);
 
@@ -1214,8 +1218,8 @@ static void rs_packet_process(uint64_t count, rs_event_t *event, struct pcap_pkt
 			 *	Now verify the packet passes the attribute filter
 			 */
 			if (conf->filter_response_vps) {
-				pairsort(&current->vps, attrtagcmp);
-				if (!pairvalidate_relaxed(NULL, conf->filter_response_vps, current->vps)) {
+				fr_pair_list_sort(&current->vps, fr_pair_cmp_by_da_tag);
+				if (!fr_pair_validate_relaxed(NULL, conf->filter_response_vps, current->vps)) {
 					goto drop_response;
 				}
 			}
@@ -1313,7 +1317,7 @@ static void rs_packet_process(uint64_t count, rs_event_t *event, struct pcap_pkt
 				return;
 			}
 
-			pairsort(&current->vps, attrtagcmp);
+			fr_pair_list_sort(&current->vps, fr_pair_cmp_by_da_tag);
 		}
 
 		/*
@@ -1385,7 +1389,7 @@ static void rs_packet_process(uint64_t count, rs_event_t *event, struct pcap_pkt
 		 *	Now verify the packet passes the attribute filter
 		 */
 		if (conf->filter_request_vps) {
-			if (!pairvalidate_relaxed(NULL, conf->filter_request_vps, current->vps)) {
+			if (!fr_pair_validate_relaxed(NULL, conf->filter_request_vps, current->vps)) {
 				goto drop_request;
 			}
 		}
@@ -1439,7 +1443,7 @@ static void rs_packet_process(uint64_t count, rs_event_t *event, struct pcap_pkt
 				for (vp = fr_cursor_init(&cursor, &search.link_vps);
 				     vp;
 				     vp = fr_cursor_next(&cursor)) {
-					pairsteal(original, search.link_vps);
+					fr_pair_steal(original, search.link_vps);
 				}
 				original->link_vps = search.link_vps;
 
@@ -1524,13 +1528,15 @@ static void rs_packet_process(uint64_t count, rs_event_t *event, struct pcap_pkt
 		if (conf->filter_response && RIDEBUG_ENABLED() && (conf->event_flags & RS_NORMAL)) {
 			rs_time_print(timestr, sizeof(timestr), &original->packet->timestamp);
 			rs_tv_sub(&original->packet->timestamp, &start_pcap, &elapsed);
-			conf->logger(original->id, RS_NORMAL, original->in, original->packet, &elapsed, NULL, false, true);
+			rs_packet_print(original, original->id, RS_NORMAL, original->in,
+					original->packet, &elapsed, NULL, false, true);
 			rs_tv_sub(&header->ts, &start_pcap, &elapsed);
 			rs_time_print(timestr, sizeof(timestr), &header->ts);
 		}
 
 		if (conf->event_flags & status) {
-			conf->logger(count, status, event->in, current, &elapsed, &latency, response, true);
+			rs_packet_print(original, count, status, event->in, current,
+					&elapsed, &latency, response, true);
 		}
 	/*
 	 *	It's the original request
@@ -1538,8 +1544,8 @@ static void rs_packet_process(uint64_t count, rs_event_t *event, struct pcap_pkt
 	 *	If were filtering on responses we can only indicate we received it on response, or timeout.
 	 */
 	} else if (!conf->filter_response && (conf->event_flags & status)) {
-		conf->logger(original ? original->id : count, status, event->in,
-			     current, &elapsed, NULL, response, true);
+		rs_packet_print(original, original ? original->id : count, status, event->in,
+				current, &elapsed, NULL, response, true);
 	}
 
 	fflush(fr_log_fp);
@@ -1664,7 +1670,7 @@ static int rs_rtx_cmp(rs_request_t const *a, rs_request_t const *b)
 	rcode = fr_ipaddr_cmp(&a->expect->dst_ipaddr, &b->expect->dst_ipaddr);
 	if (rcode != 0) return rcode;
 
-	return pairlistcmp(a->link_vps, b->link_vps);
+	return fr_pair_list_cmp(a->link_vps, b->link_vps);
 }
 
 static int rs_build_dict_list(DICT_ATTR const **out, size_t len, char *list)
@@ -1708,7 +1714,7 @@ static int rs_build_filter(VALUE_PAIR **out, char const *filter)
 	VALUE_PAIR *vp;
 	FR_TOKEN code;
 
-	code = userparse(conf, filter, out);
+	code = fr_pair_list_afrom_str(conf, filter, out);
 	if (code == T_INVALID) {
 		ERROR("Invalid RADIUS filter \"%s\" (%s)", filter, fr_strerror());
 		return -1;
@@ -1723,7 +1729,7 @@ static int rs_build_filter(VALUE_PAIR **out, char const *filter)
 	     vp;
 	     vp = fr_cursor_next(&cursor)) {
 		/*
-		 *	xlat expansion isn't support here
+		 *	xlat expansion isn't supported here
 		 */
 		if (vp->type == VT_XLAT) {
 			vp->type = VT_DATA;
@@ -1735,7 +1741,7 @@ static int rs_build_filter(VALUE_PAIR **out, char const *filter)
 	/*
 	 *	This allows efficient list comparisons later
 	 */
-	pairsort(out, attrtagcmp);
+	fr_pair_list_sort(out, fr_pair_cmp_by_da_tag);
 
 	return 0;
 }
@@ -1933,7 +1939,7 @@ int main(int argc, char *argv[])
 
 	rs_stats_t stats;
 
-	fr_debug_flag = 1;
+	fr_debug_lvl = 1;
 	fr_log_fp = stdout;
 
 	/*
@@ -1971,7 +1977,7 @@ int main(int argc, char *argv[])
 	conf->stats.prefix = RS_DEFAULT_PREFIX;
 #endif
 	conf->radius_secret = RS_DEFAULT_SECRET;
-	conf->logger = rs_packet_print_null;
+	conf->logger = NULL;
 
 #ifdef HAVE_COLLECTDC_H
 	conf->stats.prefix = RS_DEFAULT_PREFIX;
@@ -2047,9 +2053,7 @@ int main(int argc, char *argv[])
 
 		case 'i':
 			*in_head = fr_pcap_init(conf, optarg, PCAP_INTERFACE_IN);
-			if (!*in_head) {
-				goto finish;
-			}
+			if (!*in_head) goto finish;
 			in_head = &(*in_head)->next;
 			conf->from_dev = true;
 			break;
@@ -2085,8 +2089,8 @@ int main(int argc, char *argv[])
 			break;
 
 		case 'q':
-			if (fr_debug_flag > 0) {
-				fr_debug_flag--;
+			if (fr_debug_lvl > 0) {
+				fr_debug_lvl--;
 			}
 			break;
 
@@ -2126,7 +2130,7 @@ int main(int argc, char *argv[])
 
 		case 'x':
 		case 'X':
-			fr_debug_flag++;
+			fr_debug_lvl++;
 			break;
 
 		case 'W':
@@ -2238,7 +2242,7 @@ int main(int argc, char *argv[])
 
 	if (conf->list_attributes) {
 		conf->logger = rs_packet_print_csv;
-	} else if (fr_debug_flag > 0) {
+	} else if (fr_debug_lvl > 0) {
 		conf->logger = rs_packet_print_fancy;
 	}
 
@@ -2376,8 +2380,23 @@ int main(int argc, char *argv[])
 		for (dev_p = all_devices;
 		     dev_p;
 		     dev_p = dev_p->next) {
+			int link_layer;
+
 			/* Don't use the any devices, it's horribly broken */
 			if (!strcmp(dev_p->name, "any")) continue;
+
+			link_layer = fr_pcap_if_link_layer(errbuf, dev_p);
+			if (link_layer < 0) {
+				DEBUG2("Skipping %s: %s", dev_p->name, errbuf);
+				continue;
+			}
+
+			if (!fr_link_layer_supported(link_layer)) {
+				DEBUG2("Skipping %s: datalink type %s not supported",
+				       dev_p->name, pcap_datalink_val_to_name(link_layer));
+				continue;
+			}
+
 			*in_head = fr_pcap_init(conf, dev_p->name, PCAP_INTERFACE_IN);
 			in_head = &(*in_head)->next;
 		}
@@ -2389,7 +2408,7 @@ int main(int argc, char *argv[])
 	/*
 	 *	Print captures values which will be used
 	 */
-	if (fr_debug_flag > 2) {
+	if (fr_debug_lvl > 2) {
 		DEBUG2("Sniffing with options:");
 		if (conf->from_dev)	{
 			char *buff = fr_pcap_device_names(conf, in, ' ');
@@ -2472,6 +2491,12 @@ int main(int argc, char *argv[])
 				goto finish;
 			}
 
+			if (!fr_link_layer_supported(in_p->link_layer)) {
+				ERROR("Failed opening pcap handle (%s): Datalink type %s not supported",
+				      in_p->name, pcap_datalink_val_to_name(in_p->link_layer));
+				goto finish;
+			}
+
 			if (conf->pcap_filter) {
 				if (fr_pcap_apply_filter(in_p, conf->pcap_filter) < 0) {
 					ERROR("Failed applying filter");
@@ -2498,24 +2523,24 @@ int main(int argc, char *argv[])
 	 *	Open our output interface (if we have one);
 	 */
 	if (out) {
-		out->link_type = -1;	/* Infer output link type from input */
+		out->link_layer = -1;	/* Infer output link type from input */
 
 		for (in_p = in;
 		     in_p;
 		     in_p = in_p->next) {
-			if (out->link_type < 0) {
-				out->link_type = in_p->link_type;
+			if (out->link_layer < 0) {
+				out->link_layer = in_p->link_layer;
 				continue;
 			}
 
-			if (out->link_type != in_p->link_type) {
+			if (out->link_layer != in_p->link_layer) {
 				ERROR("Asked to write to output file, but inputs do not have the same link type");
 				ret = 64;
 				goto finish;
 			}
 		}
 
-		RS_ASSERT(out->link_type >= 0);
+		RS_ASSERT(out->link_layer >= 0);
 
 		if (fr_pcap_open(out) < 0) {
 			ERROR("Failed opening pcap output (%s): %s", out->name, fr_strerror());

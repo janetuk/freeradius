@@ -1,12 +1,11 @@
 /*
- * valuepair.c	Functions to handle value_data_t
+ * value.c	Functions to handle value_data_t
  *
  * Version:	$Id$
  *
  *   This library is free software; you can redistribute it and/or
  *   modify it under the terms of the GNU Lesser General Public
- *   the Free Software Foundation; either version 2 of the License, or (at
- *   your option) any later version. either
+ *   License as published by the Free Software Foundation; either
  *   version 2.1 of the License, or (at your option) any later version.
  *
  *   This library is distributed in the hope that it will be useful,
@@ -443,19 +442,18 @@ ssize_t value_data_from_str(TALLOC_CTX *ctx, value_data_t *dst,
 	switch (*src_type) {
 	case PW_TYPE_STRING:
 	{
-		char		*p;
+		char		*p, *buff;
 		char const	*q;
 		int		x;
 
-		dst->strvalue = p = talloc_memdup(ctx, src, len + 1);
-		p[len] = '\0';
-		talloc_set_type(p, char);
+		buff = p = talloc_bstrndup(ctx, src, len);
 
 		/*
 		 *	No de-quoting.  Just copy the string.
 		 */
 		if (!quote) {
 			ret = len;
+			dst->strvalue = buff;
 			goto finish;
 		}
 
@@ -467,14 +465,23 @@ ssize_t value_data_from_str(TALLOC_CTX *ctx, value_data_t *dst,
 		if (quote == '\'') {
 			q = p;
 
-			/*
-			 *	Escape ONLY the quotation character.
-			 *	Everything else is left as-is.
-			 */
-			while (q < (dst->strvalue + len)) {
+			while (q < (buff + len)) {
+				/*
+				 *	The quotation character is escaped.
+				 */
 				if ((q[0] == '\\') &&
-				    (q[1] == '\'')) {
-					*(p++) = '\'';
+				    (q[1] == quote)) {
+					*(p++) = quote;
+					q += 2;
+					continue;
+				}
+
+				/*
+				 *	Two backslashes get mangled to one.
+				 */
+				if ((q[0] == '\\') &&
+				    (q[1] == '\\')) {
+					*(p++) = '\\';
 					q += 2;
 					continue;
 				}
@@ -486,8 +493,10 @@ ssize_t value_data_from_str(TALLOC_CTX *ctx, value_data_t *dst,
 			}
 
 			*p = '\0';
-			ret = p - dst->strvalue;
-			dst->ptr = talloc_realloc(ctx, dst->ptr, char, ret + 1);
+			ret = p - buff;
+
+			/* Shrink the buffer to the correct size */
+			dst->strvalue = talloc_realloc(ctx, buff, char, ret + 1);
 			goto finish;
 		}
 
@@ -496,11 +505,12 @@ ssize_t value_data_from_str(TALLOC_CTX *ctx, value_data_t *dst,
 		 *	escaping.
 		 */
 		q = p;
-		while (q < (dst->strvalue + len)) {
+		while (q < (buff + len)) {
 			char c = *q++;
 
-			if ((c == '\\') && (q >= (dst->strvalue + len))) {
+			if ((c == '\\') && (q >= (buff + len))) {
 				fr_strerror_printf("Invalid escape at end of string");
+				talloc_free(buff);
 				return -1;
 			}
 
@@ -566,8 +576,8 @@ ssize_t value_data_from_str(TALLOC_CTX *ctx, value_data_t *dst,
 		}
 
 		*p = '\0';
-		ret = p - dst->strvalue;
-		dst->ptr = talloc_realloc(ctx, dst->ptr, char, ret + 1);
+		ret = p - buff;
+		dst->strvalue = talloc_realloc(ctx, buff, char, ret + 1);
 	}
 		goto finish;
 
@@ -590,14 +600,13 @@ ssize_t value_data_from_str(TALLOC_CTX *ctx, value_data_t *dst,
 			goto finish;
 		}
 
-	do_octets:
 		len -= 2;
 
 		/*
 		 *	Invalid.
 		 */
 		if ((len & 0x01) != 0) {
-			fr_strerror_printf("Length of Hex String is not even, got %zu bytes", ret);
+			fr_strerror_printf("Length of Hex String is not even, got %zu bytes", len);
 			return -1;
 		}
 
@@ -615,12 +624,25 @@ ssize_t value_data_from_str(TALLOC_CTX *ctx, value_data_t *dst,
 
 	case PW_TYPE_ABINARY:
 #ifdef WITH_ASCEND_BINARY
-		if ((len > 1) && (strncasecmp(src, "0x", 2) == 0)) goto do_octets;
+		if ((len > 1) && (strncasecmp(src, "0x", 2) == 0)) {
+			ssize_t bin;
 
-		if (ascend_parse_filter(dst, src, len) < 0 ) {
-			/* Allow ascend_parse_filter's strerror to bubble up */
-			return -1;
+			if (len > ((sizeof(dst->filter) + 1) * 2)) {
+				fr_strerror_printf("Hex data is too large for ascend filter");
+				return -1;
+			}
+
+			bin = fr_hex2bin((uint8_t *) &dst->filter, ret, src + 2, len);
+			if (bin < ret) {
+				memset(((uint8_t *) &dst->filter) + bin, 0, ret - bin);
+			}
+		} else {
+			if (ascend_parse_filter(dst, src, len) < 0 ) {
+				/* Allow ascend_parse_filter's strerror to bubble up */
+				return -1;
+			}
 		}
+
 		ret = sizeof(dst->filter);
 		goto finish;
 #else
@@ -634,29 +656,8 @@ ssize_t value_data_from_str(TALLOC_CTX *ctx, value_data_t *dst,
 
 	/* don't use this! */
 	case PW_TYPE_TLV:
-	{
-		uint8_t	*p;
-
-		if ((len < 2) || (len & 0x01) || (strncasecmp(src, "0x", 2) != 0)) {
-			fr_strerror_printf("Invalid TLV specification");
-			return -1;
-		}
-		len -= 2;
-
-		ret = len >> 1;
-		p = talloc_array(ctx, uint8_t, ret);
-		if (!p) {
-			fr_strerror_printf("No memory");
-			return -1;
-		}
-		if (fr_hex2bin(p, ret, src + 2, len) != (size_t)ret) {
-			fr_strerror_printf("Invalid hex data in TLV");
-			return -1;
-		}
-
-		dst->tlv = p;
-	}
-		goto finish;
+		fr_strerror_printf("Cannot parse TLV");
+		return -1;
 
 	case PW_TYPE_IPV4_ADDR:
 	{
@@ -1040,7 +1041,7 @@ ssize_t value_data_cast(TALLOC_CTX *ctx, value_data_t *dst,
 	 *	Serialise a value_data_t
 	 */
 	if (dst_type == PW_TYPE_STRING) {
-		dst->strvalue = vp_data_aprints_value(ctx, src_type, src_enumv, src, src_len, '\0');
+		dst->strvalue = value_data_aprints(ctx, src_type, src_enumv, src, src_len, '\0');
 		return talloc_array_length(dst->strvalue) - 1;
 	}
 
@@ -1085,6 +1086,10 @@ ssize_t value_data_cast(TALLOC_CTX *ctx, value_data_t *dst,
 
 		case PW_TYPE_INTEGER:
 			dst->integer64 = src->integer;
+			break;
+
+		case PW_TYPE_DATE:
+			dst->integer64 = src->date;
 			break;
 
 		case PW_TYPE_OCTETS:
@@ -1139,6 +1144,45 @@ ssize_t value_data_cast(TALLOC_CTX *ctx, value_data_t *dst,
 		goto fixed_length;
 	}
 
+	/*
+	 *	We can cast integers less that < INT_MAX to signed
+	 */
+	if (dst_type == PW_TYPE_SIGNED) {
+		switch (src_type) {
+		case PW_TYPE_BYTE:
+			dst->sinteger = src->byte;
+			break;
+
+		case PW_TYPE_SHORT:
+			dst->sinteger = src->ushort;
+			break;
+
+		case PW_TYPE_INTEGER:
+			if (src->integer > INT_MAX) {
+				fr_strerror_printf("Invalid cast: From integer to signed.  integer value %u is larger "
+						   "than max signed int and would overflow", src->integer);
+				return -1;
+			}
+			dst->sinteger = (int)src->integer;
+			break;
+
+		case PW_TYPE_INTEGER64:
+			if (src->integer > INT_MAX) {
+				fr_strerror_printf("Invalid cast: From integer64 to signed.  integer64 value %" PRIu64
+						   " is larger than max signed int and would overflow", src->integer64);
+				return -1;
+			}
+			dst->sinteger = (int)src->integer64;
+			break;
+
+		case PW_TYPE_OCTETS:
+			goto do_octets;
+
+		default:
+			goto invalid_cast;
+		}
+		goto fixed_length;
+	}
 	/*
 	 *	Conversions between IPv4 addresses, IPv6 addresses, IPv4 prefixes and IPv6 prefixes
 	 *
@@ -1377,9 +1421,8 @@ ssize_t value_data_copy(TALLOC_CTX *ctx, value_data_t *dst, PW_TYPE src_type,
 		break;
 
 	case PW_TYPE_STRING:
-		dst->strvalue = talloc_memdup(ctx, src->strvalue, src_len + 1);
+		dst->strvalue = talloc_bstrndup(ctx, src->strvalue, src_len);
 		if (!dst->strvalue) return -1;
-		talloc_set_type(dst->strvalue, char);
 		break;
 
 	case PW_TYPE_OCTETS:
@@ -1391,3 +1434,411 @@ ssize_t value_data_copy(TALLOC_CTX *ctx, value_data_t *dst, PW_TYPE src_type,
 
 	return src_len;
 }
+
+
+
+/** Print one attribute value to a string
+ *
+ */
+char *value_data_aprints(TALLOC_CTX *ctx,
+			 PW_TYPE type, DICT_ATTR const *enumv, value_data_t const *data,
+			 size_t inlen, char quote)
+{
+	char *p = NULL;
+	unsigned int i;
+
+	switch (type) {
+	case PW_TYPE_STRING:
+	{
+		size_t len, ret;
+
+		if (!quote) {
+			p = talloc_bstrndup(ctx, data->strvalue, inlen);
+			if (!p) return NULL;
+			talloc_set_type(p, char);
+			return p;
+		}
+
+		/* Gets us the size of the buffer we need to alloc */
+		len = fr_prints_len(data->strvalue, inlen, quote);
+		p = talloc_array(ctx, char, len);
+		if (!p) return NULL;
+
+		ret = fr_prints(p, len, data->strvalue, inlen, quote);
+		if (!fr_assert(ret == (len - 1))) {
+			talloc_free(p);
+			return NULL;
+		}
+		break;
+	}
+
+	case PW_TYPE_INTEGER:
+		i = data->integer;
+		goto print_int;
+
+	case PW_TYPE_SHORT:
+		i = data->ushort;
+		goto print_int;
+
+	case PW_TYPE_BYTE:
+		i = data->byte;
+
+	print_int:
+	{
+		DICT_VALUE const *dv;
+
+		if (enumv && (dv = dict_valbyattr(enumv->attr, enumv->vendor, i))) {
+			p = talloc_typed_strdup(ctx, dv->name);
+		} else {
+			p = talloc_typed_asprintf(ctx, "%u", i);
+		}
+	}
+		break;
+
+	case PW_TYPE_SIGNED:
+		p = talloc_typed_asprintf(ctx, "%d", data->sinteger);
+		break;
+
+	case PW_TYPE_INTEGER64:
+		p = talloc_typed_asprintf(ctx, "%" PRIu64 , data->integer64);
+		break;
+
+	case PW_TYPE_ETHERNET:
+		p = talloc_typed_asprintf(ctx, "%02x:%02x:%02x:%02x:%02x:%02x",
+					  data->ether[0], data->ether[1],
+					  data->ether[2], data->ether[3],
+					  data->ether[4], data->ether[5]);
+		break;
+
+	case PW_TYPE_ABINARY:
+#ifdef WITH_ASCEND_BINARY
+		p = talloc_array(ctx, char, 128);
+		if (!p) return NULL;
+		print_abinary(p, 128, (uint8_t *) &data->filter, inlen, 0);
+		break;
+#else
+		  /* FALL THROUGH */
+#endif
+
+	case PW_TYPE_OCTETS:
+		p = talloc_array(ctx, char, 2 + 1 + inlen * 2);
+		if (!p) return NULL;
+		p[0] = '0';
+		p[1] = 'x';
+
+		fr_bin2hex(p + 2, data->octets, inlen);
+		break;
+
+	case PW_TYPE_DATE:
+	{
+		time_t t;
+		struct tm s_tm;
+
+		t = data->date;
+
+		p = talloc_array(ctx, char, 64);
+		strftime(p, 64, "%b %e %Y %H:%M:%S %Z",
+			 localtime_r(&t, &s_tm));
+		break;
+	}
+
+	/*
+	 *	We need to use the proper inet_ntop functions for IP
+	 *	addresses, else the output might not match output of
+	 *	other functions, which makes testing difficult.
+	 *
+	 *	An example is tunnelled ipv4 in ipv6 addresses.
+	 */
+	case PW_TYPE_IPV4_ADDR:
+	case PW_TYPE_IPV4_PREFIX:
+	{
+		char buff[INET_ADDRSTRLEN  + 4]; // + /prefix
+
+		buff[0] = '\0';
+		value_data_prints(buff, sizeof(buff), type, enumv, data, inlen, '\0');
+
+		p = talloc_typed_strdup(ctx, buff);
+	}
+	break;
+
+	case PW_TYPE_IPV6_ADDR:
+	case PW_TYPE_IPV6_PREFIX:
+	{
+		char buff[INET6_ADDRSTRLEN + 4]; // + /prefix
+
+		buff[0] = '\0';
+		value_data_prints(buff, sizeof(buff), type, enumv, data, inlen, '\0');
+
+		p = talloc_typed_strdup(ctx, buff);
+	}
+	break;
+
+	case PW_TYPE_IFID:
+		p = talloc_typed_asprintf(ctx, "%x:%x:%x:%x",
+					  (data->ifid[0] << 8) | data->ifid[1],
+					  (data->ifid[2] << 8) | data->ifid[3],
+					  (data->ifid[4] << 8) | data->ifid[5],
+					  (data->ifid[6] << 8) | data->ifid[7]);
+		break;
+
+	case PW_TYPE_BOOLEAN:
+		p = talloc_typed_strdup(ctx, data->byte ? "yes" : "no");
+		break;
+
+	/*
+	 *	Don't add default here
+	 */
+	case PW_TYPE_INVALID:
+	case PW_TYPE_COMBO_IP_ADDR:
+	case PW_TYPE_COMBO_IP_PREFIX:
+	case PW_TYPE_TLV:
+	case PW_TYPE_EXTENDED:
+	case PW_TYPE_LONG_EXTENDED:
+	case PW_TYPE_EVS:
+	case PW_TYPE_VSA:
+	case PW_TYPE_TIMEVAL:
+	case PW_TYPE_MAX:
+		fr_assert(0);
+		return NULL;
+	}
+
+	return p;
+}
+
+
+/** Print the value of an attribute to a string
+ *
+ * @note return value should be checked with is_truncated.
+ * @note Will always \0 terminate unless outlen == 0.
+ *
+ * @param out Where to write the printed version of the attribute value.
+ * @param outlen Length of the output buffer.
+ * @param type of data being printed.
+ * @param enumv Enumerated string values for integer types.
+ * @param data to print.
+ * @param inlen Length of data.
+ * @param quote char to escape in string output.
+ * @return  the number of bytes written to the out buffer, or a number >= outlen if truncation has occurred.
+ */
+size_t value_data_prints(char *out, size_t outlen,
+			 PW_TYPE type, DICT_ATTR const *enumv, value_data_t const *data,
+			 ssize_t inlen, char quote)
+{
+	DICT_VALUE	*v;
+	char		buf[1024];	/* Interim buffer to use with poorly behaved printing functions */
+	char const	*a = NULL;
+	char		*p = out;
+	time_t		t;
+	struct tm	s_tm;
+	unsigned int	i;
+
+	size_t		len = 0, freespace = outlen;
+
+	if (!data) return 0;
+	if (outlen == 0) return inlen;
+
+	*out = '\0';
+
+	p = out;
+
+	switch (type) {
+	case PW_TYPE_STRING:
+
+		/*
+		 *	Ensure that WE add the quotation marks around the string.
+		 */
+		if (quote) {
+			if (freespace < 3) return inlen + 2;
+
+			*p++ = quote;
+			freespace--;
+
+			len = fr_prints(p, freespace, data->strvalue, inlen, quote);
+			/* always terminate the quoted string with another quote */
+			if (len >= (freespace - 1)) {
+				/* Use out not p as we're operating on the entire buffer */
+				out[outlen - 2] = (char) quote;
+				out[outlen - 1] = '\0';
+				return len + 2;
+			}
+			p += len;
+			freespace -= len;
+
+			*p++ = (char) quote;
+			freespace--;
+			*p = '\0';
+
+			return len + 2;
+		}
+
+		return fr_prints(out, outlen, data->strvalue, inlen, quote);
+
+	case PW_TYPE_INTEGER:
+		i = data->integer;
+		goto print_int;
+
+	case PW_TYPE_SHORT:
+		i = data->ushort;
+		goto print_int;
+
+	case PW_TYPE_BYTE:
+		i = data->byte;
+
+print_int:
+		/* Normal, non-tagged attribute */
+		if (enumv && (v = dict_valbyattr(enumv->attr, enumv->vendor, i)) != NULL) {
+			a = v->name;
+			len = strlen(a);
+		} else {
+			/* should never be truncated */
+			len = snprintf(buf, sizeof(buf), "%u", i);
+			a = buf;
+		}
+		break;
+
+	case PW_TYPE_INTEGER64:
+		return snprintf(out, outlen, "%" PRIu64, data->integer64);
+
+	case PW_TYPE_DATE:
+		t = data->date;
+		if (quote > 0) {
+			len = strftime(buf, sizeof(buf) - 1, "%%%b %e %Y %H:%M:%S %Z%%", localtime_r(&t, &s_tm));
+			buf[0] = (char) quote;
+			buf[len - 1] = (char) quote;
+			buf[len] = '\0';
+		} else {
+			len = strftime(buf, sizeof(buf), "%b %e %Y %H:%M:%S %Z", localtime_r(&t, &s_tm));
+		}
+		a = buf;
+		break;
+
+	case PW_TYPE_SIGNED: /* Damned code for 1 WiMAX attribute */
+		len = snprintf(buf, sizeof(buf), "%d", data->sinteger);
+		a = buf;
+		break;
+
+	case PW_TYPE_IPV4_ADDR:
+		a = inet_ntop(AF_INET, &(data->ipaddr), buf, sizeof(buf));
+		len = strlen(buf);
+		break;
+
+	case PW_TYPE_ABINARY:
+#ifdef WITH_ASCEND_BINARY
+		print_abinary(buf, sizeof(buf), (uint8_t const *) data->filter, inlen, quote);
+		a = buf;
+		len = strlen(buf);
+		break;
+#else
+	/* FALL THROUGH */
+#endif
+	case PW_TYPE_OCTETS:
+	case PW_TYPE_TLV:
+	{
+		size_t max;
+
+		/* Return the number of bytes we would have written */
+		len = (inlen * 2) + 2;
+		if (freespace <= 1) {
+			return len;
+		}
+
+		*out++ = '0';
+		freespace--;
+
+		if (freespace <= 1) {
+			*out = '\0';
+			return len;
+		}
+		*out++ = 'x';
+		freespace--;
+
+		if (freespace <= 2) {
+			*out = '\0';
+			return len;
+		}
+
+		/* Get maximum number of bytes we can encode given freespace */
+		max = ((freespace % 2) ? freespace - 1 : freespace - 2) / 2;
+		fr_bin2hex(out, data->octets, ((size_t)inlen > max) ? max : (size_t)inlen);
+	}
+		return len;
+
+	case PW_TYPE_IFID:
+		a = ifid_ntoa(buf, sizeof(buf), data->ifid);
+		len = strlen(buf);
+		break;
+
+	case PW_TYPE_IPV6_ADDR:
+		a = inet_ntop(AF_INET6, &data->ipv6addr, buf, sizeof(buf));
+		len = strlen(buf);
+		break;
+
+	case PW_TYPE_IPV6_PREFIX:
+	{
+		struct in6_addr addr;
+
+		/*
+		 *	Alignment issues.
+		 */
+		memcpy(&addr, &(data->ipv6prefix[2]), sizeof(addr));
+
+		a = inet_ntop(AF_INET6, &addr, buf, sizeof(buf));
+		if (a) {
+			p = buf;
+
+			len = strlen(buf);
+			p += len;
+			len += snprintf(p, sizeof(buf) - len, "/%u", (unsigned int) data->ipv6prefix[1]);
+		}
+	}
+		break;
+
+	case PW_TYPE_IPV4_PREFIX:
+	{
+		struct in_addr addr;
+
+		/*
+		 *	Alignment issues.
+		 */
+		memcpy(&addr, &(data->ipv4prefix[2]), sizeof(addr));
+
+		a = inet_ntop(AF_INET, &addr, buf, sizeof(buf));
+		if (a) {
+			p = buf;
+
+			len = strlen(buf);
+			p += len;
+			len += snprintf(p, sizeof(buf) - len, "/%u", (unsigned int) (data->ipv4prefix[1] & 0x3f));
+		}
+	}
+		break;
+
+	case PW_TYPE_ETHERNET:
+		return snprintf(out, outlen, "%02x:%02x:%02x:%02x:%02x:%02x",
+				data->ether[0], data->ether[1],
+				data->ether[2], data->ether[3],
+				data->ether[4], data->ether[5]);
+
+	/*
+	 *	Don't add default here
+	 */
+	case PW_TYPE_INVALID:
+	case PW_TYPE_COMBO_IP_ADDR:
+	case PW_TYPE_COMBO_IP_PREFIX:
+	case PW_TYPE_EXTENDED:
+	case PW_TYPE_LONG_EXTENDED:
+	case PW_TYPE_EVS:
+	case PW_TYPE_VSA:
+	case PW_TYPE_TIMEVAL:
+	case PW_TYPE_BOOLEAN:
+	case PW_TYPE_MAX:
+		fr_assert(0);
+		*out = '\0';
+		return 0;
+	}
+
+	if (a) strlcpy(out, a, outlen);
+
+	return len;	/* Return the number of bytes we would of written (for truncation detection) */
+}
+

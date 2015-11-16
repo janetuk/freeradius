@@ -50,7 +50,7 @@ typedef struct rlm_expr_t {
 
 static const CONF_PARSER module_config[] = {
 	{ "safe_characters", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_expr_t, allowed_chars), "@abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_: /" },
-	{NULL, -1, 0, NULL, NULL}
+	CONF_PARSER_TERMINATOR
 };
 
 /*
@@ -224,54 +224,48 @@ static bool get_number(REQUEST *request, char const **string, int64_t *answer)
 	 *	Look for an attribute.
 	 */
 	if (*p == '&') {
-		ssize_t slen;
-		VALUE_PAIR *vp;
-		value_pair_tmpl_t vpt;
+		ssize_t		slen;
+		VALUE_PAIR	*vp;
+		vp_tmpl_t	vpt;
 
 		p += 1;
 
 		slen = tmpl_from_attr_substr(&vpt, p, REQUEST_CURRENT, PAIR_LIST_REQUEST, false, false);
-		if (slen < 0) {
-			RDEBUG("Failed parsing attribute name '%s': %s", p, fr_strerror());
+		if (slen <= 0) {
+			REDEBUG("Failed parsing attribute name '%s': %s", p, fr_strerror());
 			return false;
 		}
 
 		p += slen;
 
 		if (tmpl_find_vp(&vp, request, &vpt) < 0) {
-			RDEBUG("Can't find &%s", vpt.tmpl_da->name);
+			RWDEBUG("Can't find &%.*s.  Using 0 as operand value", (int)vpt.len, vpt.name);
 			x = 0;
 			goto done;
 		}
 
-		switch (vp->da->type) {
-		default:
-			RDEBUG("WARNING: Non-integer attribute %s", vp->da->name);
-			x = 0;
-			break;
+		if (vp->da->type != PW_TYPE_INTEGER64) {
+			value_data_t	value;
 
-		case PW_TYPE_INTEGER64:
-			/*
-			 *	FIXME: error out if the number is too large.
-			 */
-			x = vp->vp_integer64;
-			break;
+			if (value_data_cast(vp, &value, PW_TYPE_INTEGER64, NULL, vp->da->type, vp->da, &vp->data, vp->vp_length) < 0) {
+				REDEBUG("Failed converting &%.*s to an integer value: %s", (int) vpt.len,
+					vpt.name, fr_strerror());
+				return false;
+			}
+			if (value.integer64 > INT64_MAX) {
+			overflow:
+				REDEBUG("Value of &%.*s (%"PRIu64 ") would overflow a signed 64bit integer "
+					"(our internal arithmetic type)", (int)vpt.len, vpt.name, value.integer64);
+				return false;
+			}
+			x = (int64_t)value.integer64;
 
-		case PW_TYPE_INTEGER:
-			x = vp->vp_integer;
-			break;
-
-		case PW_TYPE_SIGNED:
-			x = vp->vp_signed;
-			break;
-
-		case PW_TYPE_SHORT:
-			x = vp->vp_short;
-			break;
-
-		case PW_TYPE_BYTE:
-			x = vp->vp_byte;
-			break;
+			RINDENT();
+			RDEBUG3("&%.*s --> %" PRIu64, (int)vpt.len, vpt.name, x);
+			REXDENT();
+		} else {
+			if (vp->vp_integer64 > INT64_MAX) goto overflow;
+			x = (int64_t)vp->vp_integer64;
 		}
 
 		goto done;
@@ -976,7 +970,7 @@ static ssize_t sha1_xlat(UNUSED void *instance, REQUEST *request,
 	uint8_t digest[20];
 	ssize_t i, len, inlen;
 	uint8_t const *p;
-	fr_SHA1_CTX ctx;
+	fr_sha1_ctx ctx;
 
 	/*
 	 *      We need room for at least one octet of output.
@@ -1168,7 +1162,7 @@ static ssize_t hmac_sha1_xlat(UNUSED void *instance, REQUEST *request,
 static ssize_t pairs_xlat(UNUSED void *instance, REQUEST *request,
 			  char const *fmt, char *out, size_t outlen)
 {
-	value_pair_tmpl_t vpt;
+	vp_tmpl_t vpt;
 	vp_cursor_t cursor;
 	size_t len, freespace = outlen;
 	char *p = out;
@@ -1282,13 +1276,18 @@ static ssize_t base64_to_hex_xlat(UNUSED void *instance, REQUEST *request,
 static ssize_t explode_xlat(UNUSED void *instance, REQUEST *request,
 			    char const *fmt, char *out, size_t outlen)
 {
-	value_pair_tmpl_t vpt;
+	vp_tmpl_t vpt;
 	vp_cursor_t cursor, to_merge;
 	VALUE_PAIR *vp, *head = NULL;
 	ssize_t slen;
 	int count = 0;
 	char const *p = fmt;
 	char delim;
+
+	/*
+	 *  Trim whitespace
+	 */
+	while (isspace(*p) && p++);
 
 	slen = tmpl_from_attr_substr(&vpt, p, REQUEST_CURRENT, PAIR_LIST_REQUEST, false, false);
 	if (slen <= 0) {
@@ -1346,9 +1345,9 @@ static ssize_t explode_xlat(UNUSED void *instance, REQUEST *request,
 				continue;
 			}
 
-			new = pairalloc(talloc_parent(vp), vp->da);
+			new = fr_pair_afrom_da(talloc_parent(vp), vp->da);
 			if (!new) {
-				pairfree(&head);
+				fr_pair_list_free(&head);
 				return -1;
 			}
 			new->tag = vp->tag;
@@ -1360,7 +1359,7 @@ static ssize_t explode_xlat(UNUSED void *instance, REQUEST *request,
 
 				buff = talloc_array(new, uint8_t, q - p);
 				memcpy(buff, p, q - p);
-				pairmemsteal(new, buff);
+				fr_pair_value_memsteal(new, buff);
 			}
 				break;
 
@@ -1371,7 +1370,7 @@ static ssize_t explode_xlat(UNUSED void *instance, REQUEST *request,
 				buff = talloc_array(new, char, (q - p) + 1);
 				memcpy(buff, p, q - p);
 				buff[q - p] = '\0';
-				pairstrsteal(new, (char *)buff);
+				fr_pair_value_strsteal(new, (char *)buff);
 			}
 				break;
 
@@ -1481,14 +1480,14 @@ static ssize_t next_time_xlat(UNUSED void *instance, REQUEST *request,
  *	Parse the 3 arguments to lpad / rpad.
  */
 static bool parse_pad(REQUEST *request, char const *fmt,
-		       value_pair_tmpl_t **pvpt, size_t *plength,
+		       vp_tmpl_t **pvpt, size_t *plength,
 		       char *fill)
 {
 	ssize_t slen;
 	unsigned long length;
 	char const *p;
 	char *end;
-	value_pair_tmpl_t *vpt;
+	vp_tmpl_t *vpt;
 
 	*fill = ' ';		/* the default */
 
@@ -1500,11 +1499,11 @@ static bool parse_pad(REQUEST *request, char const *fmt,
 		return false;
 	}
 
-	vpt = talloc(request, value_pair_tmpl_t);
+	vpt = talloc(request, vp_tmpl_t);
 	if (!vpt) return false;
 
 	slen = tmpl_from_attr_substr(vpt, p, REQUEST_CURRENT, PAIR_LIST_REQUEST, false, false);
-	if (slen < 0) {
+	if (slen <= 0) {
 		talloc_free(vpt);
 		RDEBUG("Failed expanding string: %s", fr_strerror());
 		return false;
@@ -1546,13 +1545,13 @@ static bool parse_pad(REQUEST *request, char const *fmt,
 
 		*fill = *p;
 	}
-       
+
 	*pvpt = vpt;
 	*plength = length;
 
 	return true;
 }
-		      
+
 
 /** left pad a string
  *
@@ -1564,7 +1563,7 @@ static ssize_t lpad_xlat(UNUSED void *instance, REQUEST *request,
 	char fill;
 	size_t pad;
 	ssize_t len;
-	value_pair_tmpl_t *vpt;
+	vp_tmpl_t *vpt;
 
 	*out = '\0';
 	if (!parse_pad(request, fmt, &vpt, &pad, &fill)) {
@@ -1606,7 +1605,7 @@ static ssize_t rpad_xlat(UNUSED void *instance, REQUEST *request,
 	char fill;
 	size_t pad;
 	ssize_t len;
-	value_pair_tmpl_t *vpt;
+	vp_tmpl_t *vpt;
 
 	*out = '\0';
 
@@ -1648,7 +1647,7 @@ static ssize_t rpad_xlat(UNUSED void *instance, REQUEST *request,
  *	that must be referenced in later calls, store a handle to it
  *	in *instance otherwise put a null pointer there.
  */
-static int mod_instantiate(CONF_SECTION *conf, void *instance)
+static int mod_bootstrap(CONF_SECTION *conf, void *instance)
 {
 	rlm_expr_t *inst = instance;
 
@@ -1659,9 +1658,6 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 
 	xlat_register(inst->xlat_name, expr_xlat, NULL, inst);
 
-	/*
-	 *	FIXME: unregister these, too
-	 */
 	xlat_register("rand", rand_xlat, NULL, inst);
 	xlat_register("randstr", randstr_xlat, NULL, inst);
 	xlat_register("urlquote", urlquote_xlat, NULL, inst);
@@ -1707,17 +1703,9 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
  */
 extern module_t rlm_expr;
 module_t rlm_expr = {
-	RLM_MODULE_INIT,
-	"expr",				/* Name */
-	0,   	/* type */
-	sizeof(rlm_expr_t),
-	module_config,
-	mod_instantiate,		/* instantiation */
-	NULL,				/* detach */
-	{
-		NULL,			/* authentication */
-		NULL,			/* authorization */
-		NULL,			/* pre-accounting */
-		NULL			/* accounting */
-	},
+	.magic		= RLM_MODULE_INIT,
+	.name		= "expr",
+	.inst_size	= sizeof(rlm_expr_t),
+	.config		= module_config,
+	.bootstrap	= mod_bootstrap,
 };

@@ -5,8 +5,7 @@
  *
  *   This library is free software; you can redistribute it and/or
  *   modify it under the terms of the GNU Lesser General Public
- *   the Free Software Foundation; either version 2 of the License, or (at
- *   your option) any later version. either
+ *   License as published by the Free Software Foundation; either
  *   version 2.1 of the License, or (at your option) any later version.
  *
  *   This library is distributed in the hope that it will be useful,
@@ -163,6 +162,10 @@ int const fr_attr_shift[MAX_TLV_NEST + 1] = { 0, 8, 16, 24, 29 };
 
 int const fr_attr_mask[MAX_TLV_NEST + 1] = { 0xff, 0xff, 0xff, 0x1f, 0x07 };
 
+/*
+ *	attr & fr_attr_parent_mask[i] == Nth parent of attr
+ */
+static unsigned int const fr_attr_parent_mask[MAX_TLV_NEST + 1] = { 0, 0x000000ff, 0x0000ffff, 0x00ffffff, 0x1fffffff };
 
 /*
  *	Create the hash of the name.
@@ -636,6 +639,73 @@ int dict_valid_name(char const *name)
 	return 0;
 }
 
+
+/*
+ *	Bamboo skewers under the fingernails in 5, 4, 3, 2, ...
+ */
+static DICT_ATTR const *dict_parent(unsigned int attr, unsigned int vendor)
+{
+	int i;
+	unsigned int base_vendor;
+
+	/*
+	 *	RFC attributes can't be of type "tlv".
+	 */
+	if (!vendor) return NULL;
+
+	base_vendor = vendor & (FR_MAX_VENDOR - 1);
+
+	/*
+	 *	It's a real vendor.
+	 */
+	if (base_vendor != 0) {
+		DICT_VENDOR const *dv;
+
+		dv = dict_vendorbyvalue(base_vendor);
+		if (!dv) return NULL;
+
+		/*
+		 *	Only standard format attributes can be of type "tlv",
+		 *	Except for DHCP.  <sigh>
+		 */
+		if ((vendor != 54) && ((dv->type != 1) || (dv->length != 1))) return NULL;
+
+		for (i = MAX_TLV_NEST; i > 0; i--) {
+			unsigned int parent;
+
+			parent = attr & fr_attr_parent_mask[i];
+
+			if (parent != attr) return dict_attrbyvalue(parent, vendor); /* not base_vendor */
+		}
+
+		/*
+		 *	It was a top-level VSA.  There's no parent.
+		 *	We COULD return the appropriate enclosing VSA
+		 *	(26, or 241.26, etc.) but that's not what we
+		 *	want.
+		 */
+		return NULL;
+	}
+
+	/*
+	 *	It's an extended attribute.  Return the base Extended-Attr-X
+	 */
+	if (attr < 256) return dict_attrbyvalue((vendor / FR_MAX_VENDOR) & 0xff, 0);
+
+	/*
+	 *	Figure out which attribute it is.
+	 */
+	for (i = MAX_TLV_NEST; i > 0; i--) {
+		unsigned int parent;
+
+		parent = attr & fr_attr_parent_mask[i];
+		if (parent != attr) return dict_attrbyvalue(parent, vendor); /* not base_vendor */
+	}
+
+	return NULL;
+}
+
+
 /** Add an attribute to the dictionary
  *
  * @return 0 on success -1 on failure.
@@ -644,9 +714,9 @@ int dict_addattr(char const *name, int attr, unsigned int vendor, PW_TYPE type,
 		 ATTR_FLAGS flags)
 {
 	size_t namelen;
-	static int      max_attr = 0;
-	DICT_ATTR const	*da;
+	DICT_ATTR const	*parent;
 	DICT_ATTR *n;
+	static int      max_attr = 0;
 
 	namelen = strlen(name);
 	if (namelen >= DICT_ATTR_MAX_NAME_LEN) {
@@ -693,6 +763,61 @@ int dict_addattr(char const *name, int attr, unsigned int vendor, PW_TYPE type,
 	}
 
 	/*
+	 *	Check the parent attribute, and set the various flags
+	 *	based on the parents values.  It's OK for the caller
+	 *	to not set them, as we'll set them.  But if the caller
+	 *	sets them when he's not supposed to set them, that's
+	 *	an error.
+	 */
+	parent = dict_parent(attr, vendor);
+	if (parent) {
+		/*
+		 *	We're still in the same space and the parent isn't a TLV.  That's an error.
+		 *
+		 *	Otherwise, dict_parent() has taken us from an Extended sub-attribute to
+		 *	a *the* Extended attribute, whish isn't what we want here.
+		 */
+		if ((vendor == parent->vendor) && (parent->type != PW_TYPE_TLV)) {
+			fr_strerror_printf("dict_addattr: Attribute %s has parent attribute %s which is not of type 'tlv'",
+					   name, parent->name);
+			return -1;
+		}
+
+		flags.extended |= parent->flags.extended;
+		flags.long_extended |= parent->flags.long_extended;
+		flags.evs |= parent->flags.evs;
+	}
+
+	/*
+	 *	Manually extended flags for extended attributes.  We
+	 *	can't expect the caller to know all of the details of the flags.
+	 */
+	if (vendor >= FR_MAX_VENDOR) {
+		DICT_ATTR const *da;
+
+		/*
+		 *	Trying to manually create an extended
+		 *	attribute, but the parent extended attribute
+		 *	doesn't exist?  That's an error.
+		 */
+		da = dict_attrbyvalue(vendor / FR_MAX_VENDOR, 0);
+		if (!da) {
+			fr_strerror_printf("Extended attributes must be defined from the extended space");
+			return -1;
+		}
+
+		flags.extended |= da->flags.extended;
+		flags.long_extended |= da->flags.long_extended;
+		flags.evs |= da->flags.evs;
+
+		/*
+		 *	There's still a real vendor.  Since it's an
+		 *	extended attribute, set the EVS flag.
+		 */
+		if ((vendor & (FR_MAX_VENDOR -1)) != 0) flags.evs = 1;
+	}
+
+	/*
 	 *	Additional checks for extended attributes.
 	 */
 	if (flags.extended || flags.long_extended || flags.evs) {
@@ -715,28 +840,11 @@ int dict_addattr(char const *name, int attr, unsigned int vendor, PW_TYPE type,
 			fr_strerror_printf("dict_addattr: Attributes of type \"evs\" MUST have a parent of type \"extended\"");
 			return -1;
 		}
-
-		/* VSAs cannot be of format EVS */
-		if ((vendor & (FR_MAX_VENDOR - 1)) != 0) {
-			fr_strerror_printf("dict_addattr: Attribute of type \"evs\" fails internal sanity check");
-			return -1;
-		}
 	}
 
 	/*
-	 *	Allow for generic pointers
+	 *	Do various sanity checks.
 	 */
-	switch (type) {
-	default:
-		break;
-
-	case PW_TYPE_STRING:
-	case PW_TYPE_OCTETS:
-	case PW_TYPE_TLV:
-		flags.is_pointer = true;
-		break;
-	}
-
 	if (attr < 0) {
 		fr_strerror_printf("dict_addattr: ATTRIBUTE has invalid number (less than zero)");
 		return -1;
@@ -762,6 +870,118 @@ int dict_addattr(char const *name, int attr, unsigned int vendor, PW_TYPE type,
 			     (flags.encrypt != FLAG_ENCRYPT_NONE))) {
 		fr_strerror_printf("The \"concat\" flag cannot be used with any other flag");
 		return -1;
+	}
+
+	if (flags.length && (type != PW_TYPE_OCTETS)) {
+		fr_strerror_printf("The \"length\" flag can only be set for attributes of type \"octets\"");
+		return -1;
+	}
+
+	if (flags.length && (flags.has_tag || flags.array || flags.is_tlv || flags.has_tlv ||
+			     flags.concat || flags.evs || flags.extended || flags.long_extended ||
+			     (flags.encrypt > FLAG_ENCRYPT_USER_PASSWORD))) {
+		fr_strerror_printf("The \"length\" flag cannot be used with any other flag");
+		return -1;
+	}
+
+	/*
+	 *	Force "length" for data types of fixed length;
+	 */
+	switch (type) {
+	case PW_TYPE_BYTE:
+		flags.length = 1;
+		break;
+
+	case PW_TYPE_SHORT:
+		flags.length = 2;
+		break;
+
+	case PW_TYPE_DATE:
+	case PW_TYPE_IPV4_ADDR:
+	case PW_TYPE_INTEGER:
+	case PW_TYPE_SIGNED:
+		flags.length = 4;
+		break;
+
+	case PW_TYPE_INTEGER64:
+		flags.length = 8;
+		break;
+
+	case PW_TYPE_ETHERNET:
+		flags.length = 6;
+		break;
+
+	case PW_TYPE_IFID:
+		flags.length = 8;
+		break;
+
+	case PW_TYPE_IPV6_ADDR:
+		flags.length = 16;
+		break;
+
+	case PW_TYPE_EXTENDED:
+		if ((vendor != 0) || (attr < 241)) {
+			fr_strerror_printf("Attributes of type \"extended\" MUST be "
+					   "RFC attributes with value >= 241.");
+			return -1;
+		}
+
+		flags.length = 0;
+		flags.extended = 1;
+		break;
+
+	case PW_TYPE_LONG_EXTENDED:
+		if ((vendor != 0) || (attr < 241)) {
+			fr_strerror_printf("Attributes of type \"long-extended\" MUST "
+					   "be RFC attributes with value >= 241.");
+			return -1;
+		}
+
+		flags.length = 0;
+		flags.extended = 1;
+		flags.long_extended = 1;
+		break;
+
+	case PW_TYPE_EVS:
+		if (attr != PW_VENDOR_SPECIFIC) {
+			fr_strerror_printf("Attributes of type \"evs\" MUST have "
+					   "attribute code 26.");
+			return -1;
+		}
+
+		flags.length = 0;
+		flags.extended = 1;
+		flags.evs = 1;
+		break;
+
+	case PW_TYPE_STRING:
+	case PW_TYPE_OCTETS:
+	case PW_TYPE_TLV:
+		flags.is_pointer = true;
+		break;
+
+	default:
+		break;
+	}
+
+	/*
+	 *	Stupid hacks for MS-CHAP-MPPE-Keys.  The User-Password
+	 *	encryption method has no provisions for encoding the
+	 *	length of the data.  For User-Password, the data is
+	 *	(presumably) all printable non-zero data.  For
+	 *	MS-CHAP-MPPE-Keys, the data is binary crap.  So... we
+	 *	MUST specify a length in the dictionary.
+	 */
+	if ((flags.encrypt == FLAG_ENCRYPT_USER_PASSWORD) && (type != PW_TYPE_STRING)) {
+		if (type != PW_TYPE_OCTETS) {
+			fr_strerror_printf("The \"encrypt=1\" flag cannot be used with non-string data types");
+			return -1;
+		}
+
+		if (flags.length == 0) {
+			fr_strerror_printf("The \"encrypt=1\" flag MUST be used with an explicit length for 'octets' data types");
+			return -1;
+		}
 	}
 
 	if ((vendor & (FR_MAX_VENDOR -1)) != 0) {
@@ -825,49 +1045,6 @@ int dict_addattr(char const *name, int attr, unsigned int vendor, PW_TYPE type,
 		} /* else 256..65535 are allowed */
 
 		/*
-		 *	If the attribute is in the standard space, AND
-		 *	has a sub-type (e.g. 241.1 or 255.3), then its
-		 *	number is placed into the upper 8 bits of the
-		 *	vendor field.
-		 *
-		 *	This also happens for the new VSAs.
-		 *
-		 *	If we find it, then set the various flags
-		 *	based on what we see.
-		 */
-		if (vendor >= FR_MAX_VENDOR) {
-			unsigned int parent;
-
-			parent = (vendor / FR_MAX_VENDOR) & 0xff;
-
-			da = dict_attrbyvalue(parent, 0);
-			if (!da) {
-				fr_strerror_printf("dict_addattr: ATTRIBUTE refers to unknown parent attribute %u.", parent);
-				return -1;
-			}
-
-			/*
-			 *	These flags are inherited from the
-			 *	parent.
-			 */
-			flags.extended = da->flags.extended;
-			flags.long_extended = da->flags.long_extended;
-
-			/*
-			 *	Non-extended attributes can't have VSAs.
-			 */
-			if (!flags.extended &&
-			    ((vendor & (FR_MAX_VENDOR - 1)) != 0)) {
-				fr_strerror_printf("dict_addattr: ATTRIBUTE cannot be a VSA");
-				return -1;
-			}
-
-			if ((vendor & (FR_MAX_VENDOR - 1)) != 0) {
-				flags.evs = 1;
-			}
-		}
-
-		/*
 		 *	<sigh> Alvarion, being *again* a horribly
 		 *	broken vendor, has re-used the WiMAX format in
 		 *	their proprietary vendor space.  This re-use
@@ -875,7 +1052,7 @@ int dict_addattr(char const *name, int attr, unsigned int vendor, PW_TYPE type,
 		 *	Alvarion dictionaries.
 		 */
 		flags.wimax = dv->flags;
-	}
+	} /* it's a VSA of some kind */
 
 	/*
 	 *	Create a new attribute for the list
@@ -1294,22 +1471,6 @@ int dict_str2oid(char const *ptr, unsigned int *pvalue, unsigned int *pvendor,
 	return tlv_depth;
 }
 
-/*
- *	Bamboo skewers under the fingernails in 5, 4, 3, 2, ...
- */
-static DICT_ATTR const *dict_parent(unsigned int attr, unsigned int vendor)
-{
-	if (vendor < FR_MAX_VENDOR) {
-		return dict_attrbyvalue(attr & 0xff, vendor);
-	}
-
-	if (attr < 256) {
-		return dict_attrbyvalue((vendor / FR_MAX_VENDOR) & 0xff, 0);
-	}
-
-	return dict_attrbyvalue(attr & 0xff, vendor);
-}
-
 
 /*
  *	Process the ATTRIBUTE command
@@ -1323,7 +1484,7 @@ static int process_attribute(char const* fn, int const line,
 	unsigned int    vendor = 0;
 	unsigned int	value;
 	int		type;
-	unsigned int	length = 0;
+	unsigned int	length;
 	ATTR_FLAGS	flags;
 	char		*p;
 
@@ -1422,84 +1583,14 @@ static int process_attribute(char const* fn, int const line,
 			fr_strerror_printf("dict_init: %s[%d]: invalid length", fn, line);
 			return -1;
 		}
+
+		flags.length = length;
 	}
 
 	/*
-	 *	Only look up the vendor if the string
-	 *	is non-empty.
+	 *	Parse options.
 	 */
-	if (argc < 4) {
-		/*
-		 *	Force "length" for data types of fixed length;
-		 */
-		switch (type) {
-		case PW_TYPE_BYTE:
-			length = 1;
-			break;
-
-		case PW_TYPE_SHORT:
-			length = 2;
-			break;
-
-		case PW_TYPE_DATE:
-		case PW_TYPE_IPV4_ADDR:
-		case PW_TYPE_INTEGER:
-		case PW_TYPE_SIGNED:
-			length = 4;
-			break;
-
-		case PW_TYPE_INTEGER64:
-			length = 8;
-			break;
-
-		case PW_TYPE_ETHERNET:
-			length = 6;
-			break;
-
-		case PW_TYPE_IFID:
-			length = 8;
-			break;
-
-		case PW_TYPE_IPV6_ADDR:
-			length = 16;
-			break;
-
-		case PW_TYPE_EXTENDED:
-			if ((vendor != 0) || (value < 241)) {
-				fr_strerror_printf("dict_init: %s[%d]: Attributes of type \"extended\" MUST be "
-						   "RFC attributes with value >= 241.", fn, line);
-				return -1;
-			}
-			flags.extended = 1;
-			break;
-
-		case PW_TYPE_LONG_EXTENDED:
-			if ((vendor != 0) || (value < 241)) {
-				fr_strerror_printf("dict_init: %s[%d]: Attributes of type \"long-extended\" MUST "
-						   "be RFC attributes with value >= 241.", fn, line);
-				return -1;
-			}
-			flags.extended = 1;
-			flags.long_extended = 1;
-			break;
-
-		case PW_TYPE_EVS:
-			flags.extended = 1;
-			flags.evs = 1;
-			if (value != PW_VENDOR_SPECIFIC) {
-				fr_strerror_printf("dict_init: %s[%d]: Attributes of type \"evs\" MUST have "
-						   "attribute code 26.", fn, line);
-				return -1;
-			}
-			break;
-
-		default:
-			break;
-		}
-
-		flags.length = length;
-
-	} else {		/* argc == 4: we have options */
+	if (argc >= 4) {
 		char *key, *next, *last;
 
 		/*
@@ -1507,11 +1598,6 @@ static int process_attribute(char const* fn, int const line,
 		 */
 		if (flags.extended) {
 			fr_strerror_printf("dict_init: %s[%d]: Extended attributes cannot use flags", fn, line);
-			return -1;
-		}
-
-		if (length != 0) {
-			fr_strerror_printf("dict_init: %s[%d]: length cannot be used with options", fn, line);
 			return -1;
 		}
 
@@ -1678,7 +1764,7 @@ static int process_attribute(char const* fn, int const line,
 		}
 
 		/*
-		 *
+		 *	Shift the value left.
 		 */
 		value <<= fr_attr_shift[tlv_depth];
 		value |= block_tlv->attr;
@@ -1827,6 +1913,74 @@ static int process_value_alias(char const* fn, int const line, char **argv,
 }
 
 
+static int parse_format(char const *fn, int line, char const *format, int *pvalue, int *ptype, int *plength, bool *pcontinuation)
+{
+	char const *p;
+	int type, length;
+	bool continuation = false;
+
+	if (strncasecmp(format, "format=", 7) != 0) {
+		fr_strerror_printf("dict_init: %s[%d]: Invalid format for VENDOR.  Expected \"format=\", got \"%s\"",
+				   fn, line, format);
+		return -1;
+	}
+
+	p = format + 7;
+	if ((strlen(p) < 3) ||
+	    !isdigit((int) p[0]) ||
+	    (p[1] != ',') ||
+	    !isdigit((int) p[2]) ||
+	    (p[3] && (p[3] != ','))) {
+		fr_strerror_printf("dict_init: %s[%d]: Invalid format for VENDOR.  Expected text like \"1,1\", got \"%s\"",
+				   fn, line, p);
+		return -1;
+	}
+
+	type = (int) (p[0] - '0');
+	length = (int) (p[2] - '0');
+
+	if ((type != 1) && (type != 2) && (type != 4)) {
+		fr_strerror_printf("dict_init: %s[%d]: invalid type value %d for VENDOR",
+				   fn, line, type);
+		return -1;
+	}
+
+	if ((length != 0) && (length != 1) && (length != 2)) {
+		fr_strerror_printf("dict_init: %s[%d]: invalid length value %d for VENDOR",
+				   fn, line, length);
+		return -1;
+	}
+
+	if (p[3] == ',') {
+		if (!p[4]) {
+			fr_strerror_printf("dict_init: %s[%d]: Invalid format for VENDOR.  Expected text like \"1,1\", got \"%s\"",
+					   fn, line, p);
+			return -1;
+		}
+
+		if ((p[4] != 'c') ||
+		    (p[5] != '\0')) {
+			fr_strerror_printf("dict_init: %s[%d]: Invalid format for VENDOR.  Expected text like \"1,1\", got \"%s\"",
+					   fn, line, p);
+			return -1;
+		}
+		continuation = true;
+
+		if ((*pvalue != VENDORPEC_WIMAX) ||
+		    (type != 1) || (length != 1)) {
+			fr_strerror_printf("dict_init: %s[%d]: Only WiMAX VSAs can have continuations",
+					   fn, line);
+			return -1;
+		}
+	}
+
+	*ptype = type;
+	*plength = length;
+	*pcontinuation = continuation;
+	return 0;
+}
+
+
 /*
  *	Process the VENDOR command
  */
@@ -1834,8 +1988,9 @@ static int process_vendor(char const* fn, int const line, char **argv,
 			  int argc)
 {
 	int		value;
+	int		type, length;
 	bool		continuation = false;
-	char const	*format = NULL;
+	DICT_VENDOR	*dv;
 
 	if ((argc < 2) || (argc > 3)) {
 		fr_strerror_printf( "dict_init: %s[%d] invalid VENDOR entry",
@@ -1865,93 +2020,39 @@ static int process_vendor(char const* fn, int const line, char **argv,
 	}
 
 	/*
-	 *	Look for a format statement
+	 *	Look for a format statement.  Allow it to over-ride the hard-coded formats below.
 	 */
 	if (argc == 3) {
-		format = argv[2];
+		if (parse_format(fn, line, argv[2], &value, &type, &length, &continuation) < 0) {
+			return -1;
+		}
 
 	} else if (value == VENDORPEC_USR) { /* catch dictionary screw-ups */
-		format = "format=4,0";
+		type = 4;
+		length = 0;
 
 	} else if (value == VENDORPEC_LUCENT) {
-		format = "format=2,1";
+		type = 2;
+		length = 1;
 
 	} else if (value == VENDORPEC_STARENT) {
-		format = "format=2,2";
+		type = 2;
+		length = 2;
 
-	} /* else no fixups to do */
-
-	if (format) {
-		int type, length;
-		char const *p;
-		DICT_VENDOR *dv;
-
-		if (strncasecmp(format, "format=", 7) != 0) {
-			fr_strerror_printf("dict_init: %s[%d]: Invalid format for VENDOR.  Expected \"format=\", got \"%s\"",
-				   fn, line, format);
-			return -1;
-		}
-
-		p = format + 7;
-		if ((strlen(p) < 3) ||
-		    !isdigit((int) p[0]) ||
-		    (p[1] != ',') ||
-		    !isdigit((int) p[2]) ||
-		    (p[3] && (p[3] != ','))) {
-			fr_strerror_printf("dict_init: %s[%d]: Invalid format for VENDOR.  Expected text like \"1,1\", got \"%s\"",
-				   fn, line, p);
-			return -1;
-		}
-
-		type = (int) (p[0] - '0');
-		length = (int) (p[2] - '0');
-
-		if (p[3] == ',') {
-			if (!p[4]) {
-				fr_strerror_printf("dict_init: %s[%d]: Invalid format for VENDOR.  Expected text like \"1,1\", got \"%s\"",
-				   fn, line, p);
-				return -1;
-			}
-
-			if ((p[4] != 'c') ||
-			    (p[5] != '\0')) {
-				fr_strerror_printf("dict_init: %s[%d]: Invalid format for VENDOR.  Expected text like \"1,1\", got \"%s\"",
-					   fn, line, p);
-				return -1;
-			}
-			continuation = true;
-
-			if ((value != VENDORPEC_WIMAX) ||
-			    (type != 1) || (length != 1)) {
-				fr_strerror_printf("dict_init: %s[%d]: Only WiMAX VSAs can have continuations",
-					   fn, line);
-				return -1;
-			}
-		}
-
-		dv = dict_vendorbyvalue(value);
-		if (!dv) {
-			fr_strerror_printf("dict_init: %s[%d]: Failed adding format for VENDOR",
-				   fn, line);
-			return -1;
-		}
-
-		if ((type != 1) && (type != 2) && (type != 4)) {
-			fr_strerror_printf("dict_init: %s[%d]: invalid type value %d for VENDOR",
-				   fn, line, type);
-			return -1;
-		}
-
-		if ((length != 0) && (length != 1) && (length != 2)) {
-			fr_strerror_printf("dict_init: %s[%d]: invalid length value %d for VENDOR",
-				   fn, line, length);
-			return -1;
-		}
-
-		dv->type = type;
-		dv->length = length;
-		dv->flags = continuation;
+	} else {
+		type = length = 1;
 	}
+
+	dv = dict_vendorbyvalue(value);
+	if (!dv) {
+		fr_strerror_printf("dict_init: %s[%d]: Failed adding format for VENDOR",
+				   fn, line);
+		return -1;
+	}
+
+	dv->type = type;
+	dv->length = length;
+	dv->flags = continuation;
 
 	return 0;
 }
@@ -2355,7 +2456,7 @@ static int my_dict_init(char const *parent, char const *filename,
 				 *	attribute into the upper 8
 				 *	bits of the vendor ID
 				 */
-				block_vendor |= (da->attr & fr_attr_mask[0]) * FR_MAX_VENDOR;
+				block_vendor |= da->vendor;
 			}
 
 			continue;

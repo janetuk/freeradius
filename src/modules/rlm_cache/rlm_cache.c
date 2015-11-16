@@ -49,8 +49,7 @@ static const CONF_PARSER module_config[] = {
 	/* Should be a type which matches time_t, @fixme before 2038 */
 	{ "epoch", FR_CONF_OFFSET(PW_TYPE_SIGNED, rlm_cache_t, epoch), "0" },
 	{ "add_stats", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_cache_t, stats), "no" },
-
-	{ NULL, -1, 0, NULL, NULL }		/* end the list */
+	CONF_PARSER_TERMINATOR
 };
 
 static int cache_acquire(rlm_cache_handle_t **out, rlm_cache_t *inst, REQUEST *request)
@@ -119,7 +118,7 @@ static void CC_HINT(nonnull) cache_merge(rlm_cache_t *inst, REQUEST *request, rl
 {
 	VALUE_PAIR *vp;
 
-	vp = pairfind(request->config_items, PW_CACHE_MERGE, 0, TAG_ANY);
+	vp = fr_pair_find_by_num(request->config, PW_CACHE_MERGE, 0, TAG_ANY);
 	if (vp && (vp->vp_integer == 0)) {
 		RDEBUG2("Told not to merge entry into request");
 		return;
@@ -127,28 +126,33 @@ static void CC_HINT(nonnull) cache_merge(rlm_cache_t *inst, REQUEST *request, rl
 
 	RDEBUG2("Merging cache entry into request");
 
-	if (c->control) {
-		rdebug_pair_list(L_DBG_LVL_2, request, c->control, "&control:");
-		radius_pairmove(request, &request->config_items, paircopy(request, c->control), false);
-	}
-
 	if (c->packet && request->packet) {
 		rdebug_pair_list(L_DBG_LVL_2, request, c->packet, "&request:");
-		radius_pairmove(request, &request->packet->vps, paircopy(request->packet, c->packet), false);
+		radius_pairmove(request, &request->packet->vps, fr_pair_list_copy(request->packet, c->packet), false);
 	}
 
 	if (c->reply && request->reply) {
 		rdebug_pair_list(L_DBG_LVL_2, request, c->reply, "&reply:");
-		radius_pairmove(request, &request->reply->vps, paircopy(request->reply, c->reply), false);
+		radius_pairmove(request, &request->reply->vps, fr_pair_list_copy(request->reply, c->reply), false);
+	}
+
+	if (c->control) {
+		rdebug_pair_list(L_DBG_LVL_2, request, c->control, "&control:");
+		radius_pairmove(request, &request->config, fr_pair_list_copy(request, c->control), false);
+	}
+
+	if (c->state) {
+		rdebug_pair_list(L_DBG_LVL_2, request, c->state, "&session-state:");
+		radius_pairmove(request, &request->state, fr_pair_list_copy(request->state, c->state), false);
 	}
 
 	if (inst->stats) {
 		rad_assert(request->packet != NULL);
-		vp = pairfind(request->packet->vps, PW_CACHE_ENTRY_HITS, 0, TAG_ANY);
+		vp = fr_pair_find_by_num(request->packet->vps, PW_CACHE_ENTRY_HITS, 0, TAG_ANY);
 		if (!vp) {
-			vp = paircreate(request->packet, PW_CACHE_ENTRY_HITS, 0);
+			vp = fr_pair_afrom_num(request->packet, PW_CACHE_ENTRY_HITS, 0);
 			rad_assert(vp != NULL);
-			pairadd(&request->packet->vps, vp);
+			fr_pair_add(&request->packet->vps, vp);
 		}
 		vp->vp_integer = c->hits;
 	}
@@ -239,9 +243,9 @@ static rlm_rcode_t cache_insert(rlm_cache_t *inst, REQUEST *request, rlm_cache_h
 				char const *key, int ttl)
 {
 	VALUE_PAIR *vp, *to_cache;
-	vp_cursor_t src_list, cached_request, cached_reply, cached_control;
+	vp_cursor_t src_list, packet, reply, control, state;
 
-	value_pair_map_t const *map;
+	vp_map_t const *map;
 
 	bool merge = true;
 	rlm_cache_entry_t *c;
@@ -261,21 +265,19 @@ static rlm_rcode_t cache_insert(rlm_cache_t *inst, REQUEST *request, rlm_cache_h
 
 	RDEBUG("Creating new cache entry");
 
-	fr_cursor_init(&cached_request, &c->packet);
-	fr_cursor_init(&cached_reply, &c->reply);
-	fr_cursor_init(&cached_control, &c->control);
+	fr_cursor_init(&packet, &c->packet);
+	fr_cursor_init(&reply, &c->reply);
+	fr_cursor_init(&control, &c->control);
+	fr_cursor_init(&state, &c->state);
 
 	for (map = inst->maps; map != NULL; map = map->next) {
 		rad_assert(map->lhs && map->rhs);
 
-		if (map_to_vp(&to_cache, request, map, NULL) < 0) {
+		if (map_to_vp(c, &to_cache, request, map, NULL) < 0) {
 			RDEBUG("Skipping %s", map->rhs->name);
 			continue;
 		}
 
-		/*
-		 *	Reparent the VPs map_to_vp may return multiple.
-		 */
 		for (vp = fr_cursor_init(&src_list, &to_cache);
 		     vp;
 		     vp = fr_cursor_next(&src_list)) {
@@ -301,21 +303,24 @@ static rlm_rcode_t cache_insert(rlm_cache_t *inst, REQUEST *request, rlm_cache_h
 			RINDENT();
 			if (RDEBUG_ENABLED2) map_debug_log(request, map, vp);
 			REXDENT();
-			(void) talloc_steal(c, vp);
 
 			vp->op = map->op;
 
 			switch (map->lhs->tmpl_list) {
 			case PAIR_LIST_REQUEST:
-				fr_cursor_insert(&cached_request, vp);
+				fr_cursor_insert(&packet, vp);
 				break;
 
 			case PAIR_LIST_REPLY:
-				fr_cursor_insert(&cached_reply, vp);
+				fr_cursor_insert(&reply, vp);
 				break;
 
 			case PAIR_LIST_CONTROL:
-				fr_cursor_insert(&cached_control, vp);
+				fr_cursor_insert(&control, vp);
+				break;
+
+			case PAIR_LIST_STATE:
+				fr_cursor_insert(&state, vp);
 				break;
 
 			default:
@@ -327,7 +332,7 @@ static rlm_rcode_t cache_insert(rlm_cache_t *inst, REQUEST *request, rlm_cache_h
 	/*
 	 *	Check to see if we need to merge the entry into the request
 	 */
-	vp = pairfind(request->config_items, PW_CACHE_MERGE, 0, TAG_ANY);
+	vp = fr_pair_find_by_num(request->config, PW_CACHE_MERGE, 0, TAG_ANY);
 	if (vp && (vp->vp_integer == 0)) merge = false;
 
 	if (merge) cache_merge(inst, request, c);
@@ -342,7 +347,7 @@ static rlm_rcode_t cache_insert(rlm_cache_t *inst, REQUEST *request, rlm_cache_h
 			return RLM_MODULE_FAIL;
 
 		case CACHE_OK:
-			RDEBUG("Commited entry, TTL %d seconds", ttl);
+			RDEBUG("Committed entry, TTL %d seconds", ttl);
 			cache_free(inst, &c);
 			return RLM_MODULE_UPDATED;
 
@@ -356,13 +361,30 @@ static rlm_rcode_t cache_insert(rlm_cache_t *inst, REQUEST *request, rlm_cache_h
 /** Verify that a map in the cache section makes sense
  *
  */
-static int cache_verify(value_pair_map_t *map, void *ctx)
+static int cache_verify(vp_map_t *map, void *ctx)
 {
 	if (modcall_fixup_update(map, ctx) < 0) return -1;
 
 	if ((map->lhs->type != TMPL_TYPE_ATTR) &&
 	    (map->lhs->type != TMPL_TYPE_LIST)) {
-		cf_log_err(map->ci, "Left operand must be an attribute ref or a list");
+		cf_log_err(map->ci, "Destination must be an attribute ref or a list");
+		return -1;
+	}
+
+	switch (map->lhs->tmpl_list) {
+	case PAIR_LIST_REQUEST:
+	case PAIR_LIST_REPLY:
+	case PAIR_LIST_CONTROL:
+	case PAIR_LIST_STATE:
+		break;
+
+	default:
+		cf_log_err(map->ci, "Destination list must be one of request, reply, control or session-state");
+		return -1;
+	}
+
+	if (map->lhs->tmpl_request != REQUEST_CURRENT) {
+		cf_log_err(map->ci, "Cached attributes can only be inserted into the current request");
 		return -1;
 	}
 
@@ -435,7 +457,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_cache_it(void *instance, REQUEST *reques
 	 *	If Cache-Status-Only == yes, only return whether we found a
 	 *	valid cache entry
 	 */
-	vp = pairfind(request->config_items, PW_CACHE_STATUS_ONLY, 0, TAG_ANY);
+	vp = fr_pair_find_by_num(request->config, PW_CACHE_STATUS_ONLY, 0, TAG_ANY);
 	if (vp && vp->vp_integer) {
 		rcode = c ? RLM_MODULE_OK:
 			    RLM_MODULE_NOTFOUND;
@@ -447,7 +469,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_cache_it(void *instance, REQUEST *reques
 	 *	A TTL of 0 means "delete from the cache".
 	 *	A TTL < 0 means "delete from the cache and recreate the entry".
 	 */
-	vp = pairfind(request->config_items, PW_CACHE_TTL, 0, TAG_ANY);
+	vp = fr_pair_find_by_num(request->config, PW_CACHE_TTL, 0, TAG_ANY);
 	if (vp) ttl = vp->vp_signed;
 
 	/*
@@ -493,7 +515,7 @@ insert:
 	 *	If Cache-Read-Only == yes, then we only allow already cached entries
 	 *	to be merged into the request
 	 */
-	vp = pairfind(request->config_items, PW_CACHE_READ_ONLY, 0, TAG_ANY);
+	vp = fr_pair_find_by_num(request->config, PW_CACHE_READ_ONLY, 0, TAG_ANY);
 	if (vp && vp->vp_integer) {
 		rcode = RLM_MODULE_NOTFOUND;
 		goto finish;
@@ -512,7 +534,7 @@ finish:
 	/*
 	 *	Clear control attributes
 	 */
-	for (vp = fr_cursor_init(&cursor, &request->config_items);
+	for (vp = fr_cursor_init(&cursor, &request->config);
 	     vp;
 	     vp = fr_cursor_next(&cursor)) {
 		if (vp->da->vendor == 0) switch (vp->da->attr) {
@@ -589,13 +611,17 @@ static ssize_t cache_xlat(void *instance, REQUEST *request,
 		vps = c->control;
 		break;
 
+	case PAIR_LIST_STATE:
+		vps = c->state;
+		break;
+
 	default:
 		REDEBUG("Unsupported list \"%s\"", fr_int2str(pair_lists, list, "<UNKNOWN>"));
 		ret = -1;
 		goto finish;
 	}
 
-	vp = pairfind(vps, target->attr, target->vendor, TAG_ANY);
+	vp = fr_pair_find_by_num(vps, target->attr, target->vendor, TAG_ANY);
 	if (!vp) {
 		RDEBUG("No instance of this attribute has been cached");
 		*out = '\0';
@@ -645,6 +671,25 @@ static int mod_detach(void *instance)
 	return 0;
 }
 
+
+static int mod_bootstrap(CONF_SECTION *conf, void *instance)
+{
+	rlm_cache_t *inst = instance;
+
+	inst->cs = conf;
+
+	inst->name = cf_section_name2(conf);
+	if (!inst->name) inst->name = cf_section_name1(conf);
+
+	/*
+	 *	Register the cache xlat function
+	 */
+	xlat_register(inst->name, cache_xlat, NULL, inst);
+
+	return 0;
+}
+
+
 /*
  *	Instantiate the module.
  */
@@ -655,19 +700,11 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 
 	inst->cs = conf;
 
-	inst->xlat_name = cf_section_name2(conf);
-	if (!inst->xlat_name) inst->xlat_name = cf_section_name1(conf);
-
-	/*
-	 *	Register the cache xlat function
-	 */
-	xlat_register(inst->xlat_name, cache_xlat, NULL, inst);
-
 	/*
 	 *	Sanity check for crazy people.
 	 */
 	if (strncmp(inst->driver_name, "rlm_cache_", 8) != 0) {
-		ERROR("rlm_cache (%s): \"%s\" is NOT an Cache driver!", inst->xlat_name, inst->driver_name);
+		cf_log_err_cs(conf, "\"%s\" is NOT an Cache driver!", inst->driver_name);
 		return -1;
 	}
 
@@ -676,20 +713,20 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	 */
 	inst->handle = lt_dlopenext(inst->driver_name);
 	if (!inst->handle) {
-		ERROR("rlm_cache (%s): Could not link driver %s: %s", inst->xlat_name, inst->driver_name, dlerror());
-		ERROR("rlm_cache (%s): Make sure it (and all its dependent libraries!) are in the search path"
-		      "of your system's ld", inst->xlat_name);
+		cf_log_err_cs(conf, "Could not link driver %s: %s", inst->driver_name, dlerror());
+		cf_log_err_cs(conf, "Make sure it (and all its dependent libraries!) are in the search path"
+			      " of your system's ld");
 		return -1;
 	}
 
 	inst->module = (cache_module_t *) dlsym(inst->handle, inst->driver_name);
 	if (!inst->module) {
-		ERROR("rlm_cache (%s): Could not link symbol %s: %s", inst->xlat_name, inst->driver_name, dlerror());
+		cf_log_err_cs(conf, "Could not link symbol %s: %s", inst->driver_name, dlerror());
 		return -1;
 	}
 
-	INFO("rlm_cache (%s): Driver %s (module %s) loaded and linked", inst->xlat_name,
-	     inst->driver_name, inst->module->name);
+	DEBUG("rlm_cache (%s): Driver %s (module %s) loaded and linked", inst->name,
+	      inst->driver_name, inst->module->name);
 
 	/*
 	 *	Non optional fields and callbacks
@@ -699,7 +736,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	rad_assert(inst->module->insert);
 	rad_assert(inst->module->expire);
 
-	if (inst->module->mod_instantiate) {
+	if (inst->module->instantiate) {
 		CONF_SECTION *cs;
 		char const *name;
 
@@ -722,7 +759,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		 *	Should write its instance data in inst->driver,
 		 *	and parent it off of inst.
 		 */
-		if (inst->module->mod_instantiate(cs, inst) < 0) return -1;
+		if (inst->module->instantiate(cs, inst) < 0) return -1;
 	}
 
 	rad_assert(inst->key && *inst->key);
@@ -771,21 +808,19 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
  */
 extern module_t rlm_cache;
 module_t rlm_cache = {
-	RLM_MODULE_INIT,
-	"cache",
-	0,				/* type */
-	sizeof(rlm_cache_t),
-	module_config,
-	mod_instantiate,		/* instantiation */
-	mod_detach,			/* detach */
-	{
-		NULL,			/* authentication */
-		mod_cache_it,		/* authorization */
-		mod_cache_it,		/* preaccounting */
-		mod_cache_it,		/* accounting */
-		NULL,			/* checksimul */
-		mod_cache_it,	      	/* pre-proxy */
-		mod_cache_it,	       	/* post-proxy */
-		mod_cache_it,		/* post-auth */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "cache",
+	.inst_size	= sizeof(rlm_cache_t),
+	.config		= module_config,
+	.bootstrap	= mod_bootstrap,
+	.instantiate	= mod_instantiate,
+	.detach		= mod_detach,
+	.methods = {
+		[MOD_AUTHORIZE]		= mod_cache_it,
+		[MOD_PREACCT]		= mod_cache_it,
+		[MOD_ACCOUNTING]	= mod_cache_it,
+		[MOD_PRE_PROXY]		= mod_cache_it,
+		[MOD_POST_PROXY]	= mod_cache_it,
+		[MOD_POST_AUTH]		= mod_cache_it
 	},
 };

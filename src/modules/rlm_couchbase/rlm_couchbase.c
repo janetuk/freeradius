@@ -24,7 +24,7 @@
  * @copyright 2013-2014 The FreeRADIUS Server Project.
  */
 
-RCSID("$Id$");
+RCSID("$Id$")
 
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/libradius.h>
@@ -32,7 +32,6 @@ RCSID("$Id$");
 #include <freeradius-devel/rad_assert.h>
 
 #include <libcouchbase/couchbase.h>
-#include <json.h>
 
 #include "mod.h"
 #include "couchbase.h"
@@ -43,7 +42,7 @@ RCSID("$Id$");
  */
 static const CONF_PARSER client_config[] = {
 	{ "view", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_couchbase_t, client_view), "_design/client/_view/by_name" },
-	{NULL, -1, 0, NULL, NULL}     /* end the list */
+	CONF_PARSER_TERMINATOR
 };
 
 /**
@@ -67,7 +66,7 @@ static const CONF_PARSER module_config[] = {
 	{ "simul_vkey", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_XLAT, rlm_couchbase_t, simul_vkey), "%{tolower:%{%{Stripped-User-Name}:-%{User-Name}}}" },
 	{ "verify_simul", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_couchbase_t, verify_simul), NULL }, /* NULL defaults to "no" */
 #endif
-	{NULL, -1, 0, NULL, NULL}     /* end the list */
+	CONF_PARSER_TERMINATOR
 };
 
 /** Initialize the rlm_couchbase module
@@ -127,7 +126,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	}
 
 	/* initiate connection pool */
-	inst->pool = fr_connection_pool_module_init(conf, inst, mod_conn_create, mod_conn_alive, NULL);
+	inst->pool = fr_connection_pool_module_init(conf, inst, mod_conn_create, NULL, NULL);
 
 	/* check connection pool */
 	if (!inst->pool) {
@@ -138,7 +137,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 
 	/* load clients if requested */
 	if (inst->read_clients) {
-		CONF_SECTION *cs; /* conf section */
+		CONF_SECTION *cs, *map, *tmpl; /* conf section */
 
 		/* attempt to find client section */
 		cs = cf_section_sub_find(conf, "client");
@@ -148,20 +147,21 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 			return -1;
 		}
 
-
 		/* attempt to find attribute subsection */
-		cs = cf_section_sub_find(cs, "attribute");
-		if (!cs) {
+		map = cf_section_sub_find(cs, "attribute");
+		if (!map) {
 			ERROR("rlm_couchbase: failed to find attribute subsection while loading clients");
 			/* fail */
 			return -1;
 		}
 
+		tmpl = cf_section_sub_find(cs, "template");
+
 		/* debugging */
 		DEBUG("rlm_couchbase: preparing to load client documents");
 
 		/* attempt to load clients */
-		if (mod_load_client_documents(inst, cs) != 0) {
+		if (mod_load_client_documents(inst, tmpl, map) != 0) {
 			/* fail */
 			return -1;
 		}
@@ -223,7 +223,7 @@ static rlm_rcode_t mod_authorize(void *instance, REQUEST *request)
 		/* set return */
 		rcode = RLM_MODULE_FAIL;
 		/* return */
-		goto free_and_return;
+		goto finish;
 	}
 
 	/* debugging */
@@ -235,7 +235,7 @@ static rlm_rcode_t mod_authorize(void *instance, REQUEST *request)
 	/* inject reply value pairs defined in this json oblect */
 	mod_json_object_to_value_pairs(cookie->jobj, "reply", request);
 
-	free_and_return:
+	finish:
 
 	/* free json object */
 	if (cookie->jobj) {
@@ -283,7 +283,7 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 	rad_assert(request->packet != NULL);
 
 	/* sanity check */
-	if ((vp = pairfind(request->packet->vps, PW_ACCT_STATUS_TYPE, 0, TAG_ANY)) == NULL) {
+	if ((vp = fr_pair_find_by_num(request->packet->vps, PW_ACCT_STATUS_TYPE, 0, TAG_ANY)) == NULL) {
 		/* log debug */
 		RDEBUG("could not find status type in packet");
 		/* return */
@@ -320,7 +320,7 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 		/* set return */
 		rcode = RLM_MODULE_NOOP;
 		/* return */
-		goto free_and_return;
+		goto finish;
 	}
 
 	/* attempt to fetch document */
@@ -360,7 +360,7 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 	switch (status) {
 	case PW_STATUS_START:
 		/* add start time */
-		if ((vp = pairfind(request->packet->vps, PW_EVENT_TIMESTAMP, 0, TAG_ANY)) != NULL) {
+		if ((vp = fr_pair_find_by_num(request->packet->vps, PW_EVENT_TIMESTAMP, 0, TAG_ANY)) != NULL) {
 			/* add to json object */
 			json_object_object_add(cookie->jobj, "startTimestamp",
 					       mod_value_pair_to_json_object(request, vp));
@@ -369,7 +369,7 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 
 	case PW_STATUS_STOP:
 		/* add stop time */
-		if ((vp = pairfind(request->packet->vps, PW_EVENT_TIMESTAMP, 0, TAG_ANY)) != NULL) {
+		if ((vp = fr_pair_find_by_num(request->packet->vps, PW_EVENT_TIMESTAMP, 0, TAG_ANY)) != NULL) {
 			/* add to json object */
 			json_object_object_add(cookie->jobj, "stopTimestamp",
 					       mod_value_pair_to_json_object(request, vp));
@@ -387,7 +387,7 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 		/* don't doing anything */
 		rcode = RLM_MODULE_NOOP;
 		/* return */
-		goto free_and_return;
+		goto finish;
 	}
 
 	/* loop through pairs and add to json document */
@@ -408,7 +408,7 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 		/* set return */
 		rcode = RLM_MODULE_FAIL;
 		/* return */
-		goto free_and_return;
+		goto finish;
 	}
 
 	/* debugging */
@@ -422,8 +422,7 @@ static rlm_rcode_t mod_accounting(void *instance, REQUEST *request)
 		RERROR("failed to store document (%s): %s (0x%x)", dockey, lcb_strerror(NULL, cb_error), cb_error);
 	}
 
-	free_and_return:
-
+finish:
 	/* free and reset json object */
 	if (cookie->jobj) {
 		json_object_put(cookie->jobj);
@@ -523,7 +522,7 @@ static rlm_rcode_t mod_checksimul(void *instance, REQUEST *request) {
 		/* set return */
 		rcode = RLM_MODULE_FAIL;
 		/* return */
-		goto free_and_return;
+		goto finish;
 	}
 
 	/* debugging */
@@ -545,7 +544,7 @@ static rlm_rcode_t mod_checksimul(void *instance, REQUEST *request) {
 		/* set return */
 		rcode = RLM_MODULE_FAIL;
 		/* return */
-		goto free_and_return;
+		goto finish;
 	}
 
 	/* check for document id in return */
@@ -555,7 +554,7 @@ static rlm_rcode_t mod_checksimul(void *instance, REQUEST *request) {
 		/* set return */
 		rcode = RLM_MODULE_FAIL;
 		/* return */
-		goto free_and_return;
+		goto finish;
 	}
 
 	/* get and hold rows */
@@ -574,7 +573,7 @@ static rlm_rcode_t mod_checksimul(void *instance, REQUEST *request) {
 		/* set return */
 		rcode = RLM_MODULE_FAIL;
 		/* return */
-		goto free_and_return;
+		goto finish;
 	}
 
 	/* debugging */
@@ -589,7 +588,7 @@ static rlm_rcode_t mod_checksimul(void *instance, REQUEST *request) {
 	/* check count */
 	if (request->simul_count < request->simul_max) {
 		rcode = RLM_MODULE_OK;
-		goto free_and_return;
+		goto finish;
 	}
 
 	/*
@@ -598,7 +597,7 @@ static rlm_rcode_t mod_checksimul(void *instance, REQUEST *request) {
 	 */
 	if (inst->verify_simul != true) {
 		rcode = RLM_MODULE_OK;
-		goto free_and_return;
+		goto finish;
 	}
 
 	/* debugging */
@@ -608,24 +607,25 @@ static rlm_rcode_t mod_checksimul(void *instance, REQUEST *request) {
 	request->simul_count = 0;
 
 	/* get client ip address for MPP detection below */
-	if ((vp = pairfind(request->packet->vps, PW_FRAMED_IP_ADDRESS, 0, TAG_ANY)) != NULL) {
+	if ((vp = fr_pair_find_by_num(request->packet->vps, PW_FRAMED_IP_ADDRESS, 0, TAG_ANY)) != NULL) {
 		client_ip_addr = vp->vp_ipaddr;
 	}
 
 	/* get calling station id for MPP detection below */
-	if ((vp = pairfind(request->packet->vps, PW_CALLING_STATION_ID, 0, TAG_ANY)) != NULL) {
+	if ((vp = fr_pair_find_by_num(request->packet->vps, PW_CALLING_STATION_ID, 0, TAG_ANY)) != NULL) {
 		client_cs_id = vp->vp_strvalue;
 	}
 
 	/* loop across all row elements */
 	for (idx = 0; idx < json_object_array_length(jrows); idx++) {
+		/* clear docid */
+		memset(docid, 0, sizeof(docid));
+
 		/* fetch current index */
 		json = json_object_array_get_idx(jrows, idx);
 
 		/* get document id */
 		if (json_object_object_get_ex(json, "id", &jval)) {
-			/* clear docid */
-			memset(docid, 0, sizeof(docid));
 			/* copy and check length */
 			if (strlcpy(docid, json_object_get_string(jval), sizeof(docid)) >= sizeof(docid)) {
 				RERROR("document id from row longer than MAX_KEY_SIZE (%d)", MAX_KEY_SIZE);
@@ -649,7 +649,7 @@ static rlm_rcode_t mod_checksimul(void *instance, REQUEST *request) {
 			/* set return */
 			rcode = RLM_MODULE_FAIL;
 			/* return */
-			goto free_and_return;
+			goto finish;
 		}
 
 		/* debugging */
@@ -661,14 +661,14 @@ static rlm_rcode_t mod_checksimul(void *instance, REQUEST *request) {
 			if (!json_object_object_get_ex(cookie->jobj, element, &jval)){
 				RDEBUG("cannot zap stale entry without username");
 				rcode = RLM_MODULE_FAIL;
-				goto free_and_return;
+				goto finish;
 			}
 			/* copy json string value to user_name */
 			user_name = talloc_typed_strdup(request, json_object_get_string(jval));
 		} else {
 			RDEBUG("failed to find map entry for User-Name attribute");
 			rcode = RLM_MODULE_FAIL;
-			goto free_and_return;
+			goto finish;
 		}
 
 		/* get element name for Acct-Session-Id attribute */
@@ -677,14 +677,14 @@ static rlm_rcode_t mod_checksimul(void *instance, REQUEST *request) {
 			if (!json_object_object_get_ex(cookie->jobj, element, &jval)){
 				RDEBUG("cannot zap stale entry without session id");
 				rcode = RLM_MODULE_FAIL;
-				goto free_and_return;
+				goto finish;
 			}
 			/* copy json string value to session_id */
 			session_id = talloc_typed_strdup(request, json_object_get_string(jval));
 		} else {
 			RDEBUG("failed to find map entry for Acct-Session-Id attribute");
 			rcode = RLM_MODULE_FAIL;
-			goto free_and_return;
+			goto finish;
 		}
 
 		/* get element name for NAS-IP-Address attribute */
@@ -780,26 +780,17 @@ static rlm_rcode_t mod_checksimul(void *instance, REQUEST *request) {
 			/* check failed - return error */
 			REDEBUG("failed to check the terminal server for user '%s'", user_name);
 			rcode = RLM_MODULE_FAIL;
-			goto free_and_return;
+			goto finish;
 		}
 
 		/* free and reset document user name talloc */
-		if (user_name) {
-			talloc_free(user_name);
-			user_name = NULL;
-		}
+		if (user_name) TALLOC_FREE(user_name);
 
 		/* free and reset document calling station id talloc */
-		if (cs_id) {
-			talloc_free(cs_id);
-			cs_id = NULL;
-		}
+		if (cs_id) TALLOC_FREE(cs_id);
 
 		/* free and reset document session id talloc */
-		if (session_id) {
-			talloc_free(session_id);
-			session_id = NULL;
-		}
+		if (session_id) TALLOC_FREE(session_id);
 
 		/* free and reset json object before fetching next row */
 		if (cookie->jobj) {
@@ -809,30 +800,16 @@ static rlm_rcode_t mod_checksimul(void *instance, REQUEST *request) {
 	}
 
 	/* debugging */
-	RDEBUG("retained %d open sessions for %s after verification",
+	RDEBUG("Retained %d open sessions for %s after verification",
 	       request->simul_count, request->username->vp_strvalue);
 
-	free_and_return:
-
-	/* free document user name talloc */
-	if (user_name) {
-		talloc_free(user_name);
-	}
-
-	/* free document calling station id talloc */
-	if (cs_id) {
-		talloc_free(cs_id);
-	}
-
-	/* free document session id talloc */
-	if (session_id) {
-		talloc_free(session_id);
-	}
+finish:
+	if (user_name) talloc_free(user_name);
+	if (cs_id) talloc_free(cs_id);
+	if (session_id) talloc_free(session_id);
 
 	/* free rows */
-	if (jrows) {
-		json_object_put(jrows);
-	}
+	if (jrows) json_object_put(jrows);
 
 	/* free and reset json object */
 	if (cookie->jobj) {
@@ -840,10 +817,7 @@ static rlm_rcode_t mod_checksimul(void *instance, REQUEST *request) {
 		cookie->jobj = NULL;
 	}
 
-	/* release handle */
-	if (handle) {
-		fr_connection_release(inst->pool, handle);
-	}
+	if (handle) fr_connection_release(inst->pool, handle);
 
 	/*
 	 * The Auth module apparently looks at request->simul_count,
@@ -863,19 +837,11 @@ static rlm_rcode_t mod_checksimul(void *instance, REQUEST *request) {
  */
 static int mod_detach(void *instance)
 {
-	rlm_couchbase_t *inst = instance;  /* instance struct */
+	rlm_couchbase_t *inst = instance;
 
-	/* free json object attribute map */
-	if (inst->map) {
-		json_object_put(inst->map);
-	}
+	if (inst->map) json_object_put(inst->map);
+	if (inst->pool) fr_connection_pool_free(inst->pool);
 
-	/* destroy connection pool */
-	if (inst->pool) {
-		fr_connection_pool_delete(inst->pool);
-	}
-
-	/* return okay */
 	return 0;
 }
 
@@ -884,29 +850,20 @@ static int mod_detach(void *instance)
  */
 extern module_t rlm_couchbase;
 module_t rlm_couchbase = {
-	RLM_MODULE_INIT,
-	"rlm_couchbase",
-	RLM_TYPE_THREAD_SAFE,       /* type */
-	sizeof(rlm_couchbase_t),
-	module_config,
-	mod_instantiate,            /* instantiation */
-	mod_detach,                 /* detach */
-	{
-		NULL,                   /* authentication */
-		mod_authorize,          /* authorization */
-		NULL,                   /* preaccounting */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "couchbase",
+	.type		= RLM_TYPE_THREAD_SAFE,
+	.inst_size	= sizeof(rlm_couchbase_t),
+	.config		= module_config,
+	.instantiate	= mod_instantiate,
+	.detach		= mod_detach,
+	.methods = {
+		[MOD_AUTHORIZE]		= mod_authorize,
 #ifdef WITH_ACCOUNTING
-		mod_accounting,         /* accounting */
-#else
-		NULL,
+		[MOD_ACCOUNTING]	= mod_accounting,
 #endif
 #ifdef WITH_SESSION_MGMT
-		mod_checksimul,         /* checksimul */
-#else
-		NULL,
+		[MOD_SESSION]		= mod_checksimul
 #endif
-		NULL,                   /* pre-proxy */
-		NULL,                   /* post-proxy */
-		NULL                    /* post-auth */
 	},
 };

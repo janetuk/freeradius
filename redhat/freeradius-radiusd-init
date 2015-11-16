@@ -22,7 +22,7 @@
 # Get the wrappers for the standard lsb init functions
 . /lib/lsb/init-functions
 
-# and the RHEL specific ones
+# and the distro specific ones
 . /etc/init.d/functions
 
 prog=radiusd

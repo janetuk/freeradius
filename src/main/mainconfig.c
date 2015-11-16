@@ -25,6 +25,7 @@ RCSID("$Id$")
 
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/modules.h>
+#include <freeradius-devel/modpriv.h>
 #include <freeradius-devel/rad_assert.h>
 
 #include <sys/stat.h>
@@ -39,9 +40,9 @@ RCSID("$Id$")
 #  include <fcntl.h>
 #endif
 
-struct main_config_t	main_config;				//!< Main server configuration.
+main_config_t		main_config;				//!< Main server configuration.
 extern fr_cond_t	*debug_condition;
-fr_cond_t		*debug_condition;			//!< Condition used to mark packets up for checking.
+fr_cond_t		*debug_condition = NULL;			//!< Condition used to mark packets up for checking.
 bool			event_loop_started = false;		//!< Whether the main event loop has been started yet.
 
 typedef struct cached_config_t {
@@ -82,6 +83,68 @@ static bool		do_colourise = false;
 
 static char const	*radius_dir = NULL;	//!< Path to raddb directory
 
+/**********************************************************************
+ *
+ *	We need to figure out where the logs go, before doing anything
+ *	else.  This is so that the log messages go to the correct
+ *	place.
+ *
+ *	BUT, we want the settings from the command line to over-ride
+ *	the ones in the configuration file.  So, these items are
+ *	parsed ONLY if there is no "-l foo" on the command line.
+ *
+ **********************************************************************/
+
+/*
+ *	Log destinations
+ */
+static const CONF_PARSER startup_log_config[] = {
+	{ "destination",  FR_CONF_POINTER(PW_TYPE_STRING, &radlog_dest), "files" },
+	{ "syslog_facility",  FR_CONF_POINTER(PW_TYPE_STRING, &syslog_facility), STRINGIFY(0) },
+
+	{ "localstatedir", FR_CONF_POINTER(PW_TYPE_STRING, &localstatedir), "${prefix}/var"},
+	{ "logdir", FR_CONF_POINTER(PW_TYPE_STRING, &radlog_dir), "${localstatedir}/log"},
+	{ "file",  FR_CONF_POINTER(PW_TYPE_STRING, &main_config.log_file), "${logdir}/radius.log" },
+	{ "requests",  FR_CONF_POINTER(PW_TYPE_STRING | PW_TYPE_DEPRECATED, &default_log.file), NULL },
+	CONF_PARSER_TERMINATOR
+};
+
+
+/*
+ *	Basic configuration for the server.
+ */
+static const CONF_PARSER startup_server_config[] = {
+	{ "log",  FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) startup_log_config },
+
+	{ "name", FR_CONF_POINTER(PW_TYPE_STRING, &my_name), "radiusd"},
+	{ "prefix", FR_CONF_POINTER(PW_TYPE_STRING, &prefix), "/usr/local"},
+
+	{ "log_file",  FR_CONF_POINTER(PW_TYPE_STRING, &main_config.log_file), NULL },
+	{ "log_destination", FR_CONF_POINTER(PW_TYPE_STRING, &radlog_dest), NULL },
+	{ "use_utc", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &log_dates_utc), NULL },
+	CONF_PARSER_TERMINATOR
+};
+
+
+/**********************************************************************
+ *
+ *	Now that we've parsed the log destination, AND the security
+ *	items, we can parse the rest of the configuration items.
+ *
+ **********************************************************************/
+static const CONF_PARSER log_config[] = {
+	{ "stripped_names", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &log_stripped_names),"no" },
+	{ "auth", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &main_config.log_auth), "no" },
+	{ "auth_badpass", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &main_config.log_auth_badpass), "no" },
+	{ "auth_goodpass", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &main_config.log_auth_goodpass), "no" },
+	{ "msg_badpass", FR_CONF_POINTER(PW_TYPE_STRING, &main_config.auth_badpass_msg), NULL},
+	{ "msg_goodpass", FR_CONF_POINTER(PW_TYPE_STRING, &main_config.auth_goodpass_msg), NULL},
+	{ "colourise",FR_CONF_POINTER(PW_TYPE_BOOLEAN, &do_colourise), NULL },
+	{ "use_utc", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &log_dates_utc), NULL },
+	{ "msg_denied", FR_CONF_POINTER(PW_TYPE_STRING, &main_config.denied_msg), "You are already logged in - access denied" },
+	CONF_PARSER_TERMINATOR
+};
+
 
 /*
  *  Security configuration for the server.
@@ -93,47 +156,8 @@ static const CONF_PARSER security_config[] = {
 #ifdef ENABLE_OPENSSL_VERSION_CHECK
 	{ "allow_vulnerable_openssl", FR_CONF_POINTER(PW_TYPE_STRING, &main_config.allow_vulnerable_openssl), "no"},
 #endif
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
-
-
-/*
- *	Logging configuration for the server.
- */
-static const CONF_PARSER logdest_config[] = {
-	{ "destination",  FR_CONF_POINTER(PW_TYPE_STRING, &radlog_dest), "files" },
-	{ "syslog_facility",  FR_CONF_POINTER(PW_TYPE_STRING, &syslog_facility), STRINGIFY(0) },
-
-	{ "file",  FR_CONF_POINTER(PW_TYPE_STRING, &main_config.log_file), "${logdir}/radius.log" },
-	{ "requests",  FR_CONF_POINTER(PW_TYPE_STRING, &default_log.file), NULL },
-	{ NULL, -1, 0, NULL, NULL }
-};
-
-
-static const CONF_PARSER serverdest_config[] = {
-	{ "log",  FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) logdest_config },
-	{ "log_file",  FR_CONF_POINTER(PW_TYPE_STRING, &main_config.log_file), NULL },
-	{ "log_destination", FR_CONF_POINTER(PW_TYPE_STRING, &radlog_dest), NULL },
-	{ "use_utc", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &log_dates_utc), NULL },
-	{ NULL, -1, 0, NULL, NULL }
-};
-
-
-static const CONF_PARSER log_config_nodest[] = {
-	{ "stripped_names", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &log_stripped_names),"no" },
-	{ "auth", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &main_config.log_auth), "no" },
-	{ "auth_badpass", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &main_config.log_auth_badpass), "no" },
-	{ "auth_goodpass", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &main_config.log_auth_goodpass), "no" },
-	{ "msg_badpass", FR_CONF_POINTER(PW_TYPE_STRING, &main_config.auth_badpass_msg), NULL},
-	{ "msg_goodpass", FR_CONF_POINTER(PW_TYPE_STRING, &main_config.auth_goodpass_msg), NULL},
-	{ "colourise",FR_CONF_POINTER(PW_TYPE_BOOLEAN, &do_colourise), NULL },
-	{ "use_utc", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &log_dates_utc), NULL },
-	{ "msg_denied", FR_CONF_POINTER(PW_TYPE_STRING, &main_config.denied_msg),
-	  "You are already logged in - access denied" },
-
-	{ NULL, -1, 0, NULL, NULL }
-};
-
 
 static const CONF_PARSER resources[] = {
 	/*
@@ -142,13 +166,9 @@ static const CONF_PARSER resources[] = {
 	 *	it exists.
 	 */
 	{ "talloc_pool_size", FR_CONF_POINTER(PW_TYPE_INTEGER, &main_config.talloc_pool_size), NULL },
-
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 
-/*
- *  A mapping of configuration file names to internal variables
- */
 static const CONF_PARSER server_config[] = {
 	/*
 	 *	FIXME: 'prefix' is the ONLY one which should be
@@ -178,7 +198,7 @@ static const CONF_PARSER server_config[] = {
 #ifdef WITH_PROXY
 	{ "proxy_requests", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &main_config.proxy_requests), "yes" },
 #endif
-	{ "log", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) log_config_nodest },
+	{ "log", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) log_config },
 
 	{ "resources", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) resources },
 
@@ -196,10 +216,23 @@ static const CONF_PARSER server_config[] = {
 	{ "log_stripped_names", FR_CONF_POINTER(PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, &log_stripped_names), NULL },
 
 	{  "security", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) security_config },
-
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 
+
+/**********************************************************************
+ *
+ *	The next few items are here as a "bootstrap" for security.
+ *	They allow the server to switch users, chroot, while still
+ *	opening the various output files with the correct permission.
+ *
+ *	It's rare (or impossible) to have parse errors here, so we
+ *	don't worry too much about that.  In contrast, when we parse
+ *	the rest of the configuration, we CAN get parse errors.  We
+ *	want THOSE parse errors to go to the log file, and we want the
+ *	log file to have the correct permissions.
+ *
+ **********************************************************************/
 static const CONF_PARSER bootstrap_security_config[] = {
 #ifdef HAVE_SETUID
 	{ "user",  FR_CONF_POINTER(PW_TYPE_STRING, &uid_name), NULL },
@@ -207,12 +240,18 @@ static const CONF_PARSER bootstrap_security_config[] = {
 #endif
 	{ "chroot",  FR_CONF_POINTER(PW_TYPE_STRING, &chroot_dir), NULL },
 	{ "allow_core_dumps", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &allow_core_dumps), "no" },
-
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 
 static const CONF_PARSER bootstrap_config[] = {
 	{  "security", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) bootstrap_security_config },
+
+	{ "name", FR_CONF_POINTER(PW_TYPE_STRING, &my_name), "radiusd"},
+	{ "prefix", FR_CONF_POINTER(PW_TYPE_STRING, &prefix), "/usr/local"},
+	{ "localstatedir", FR_CONF_POINTER(PW_TYPE_STRING, &localstatedir), "${prefix}/var"},
+
+	{ "logdir", FR_CONF_POINTER(PW_TYPE_STRING, &radlog_dir), "${localstatedir}/log"},
+	{ "run_dir", FR_CONF_POINTER(PW_TYPE_STRING, &run_dir), "${localstatedir}/run/${name}"},
 
 	/*
 	 *	For backwards compatibility.
@@ -223,9 +262,9 @@ static const CONF_PARSER bootstrap_config[] = {
 #endif
 	{ "chroot",  FR_CONF_POINTER(PW_TYPE_STRING | PW_TYPE_DEPRECATED, &chroot_dir), NULL },
 	{ "allow_core_dumps", FR_CONF_POINTER(PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, &allow_core_dumps), NULL },
-
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
+
 
 static size_t config_escape_func(UNUSED REQUEST *request, char *out, size_t outlen, char const *in, UNUSED void *arg)
 {
@@ -379,7 +418,7 @@ static ssize_t xlat_getclient(UNUSED void *instance, REQUEST *request, char cons
 	}
 
 	strlcpy(buffer, p, (q + 1) - p);
-	if (fr_pton(&ip, buffer, -1, false) <= 0) {
+	if (fr_pton(&ip, buffer, -1, AF_UNSPEC, false) < 0) {
 		REDEBUG("\"%s\" is not a valid IPv4 or IPv6 address", buffer);
 		goto error;
 	}
@@ -411,6 +450,35 @@ static ssize_t xlat_getclient(UNUSED void *instance, REQUEST *request, char cons
 	return -1;
 }
 
+/*
+ *	Xlat for %{listen:foo}
+ */
+static ssize_t xlat_listen(UNUSED void *instance, REQUEST *request,
+			   char const *fmt, char *out, size_t outlen)
+{
+	char const *value = NULL;
+	CONF_PAIR *cp;
+
+	if (!fmt || !out || (outlen < 1)) return 0;
+
+	if (!request->listener) {
+		RWDEBUG("No listener associated with this request");
+		*out = '\0';
+		return 0;
+	}
+
+	cp = cf_pair_find(request->listener->cs, fmt);
+	if (!cp || !(value = cf_pair_value(cp))) {
+		RDEBUG("Listener does not contain config item \"%s\"", fmt);
+		*out = '\0';
+		return 0;
+	}
+
+	strlcpy(out, value, outlen);
+
+	return strlen(out);
+}
+
 #ifdef HAVE_SETUID
 /*
  *  Do chroot, if requested.
@@ -419,6 +487,9 @@ static ssize_t xlat_getclient(UNUSED void *instance, REQUEST *request, char cons
  */
 static int switch_users(CONF_SECTION *cs)
 {
+	bool do_suid = false;
+	bool do_sgid = false;
+
 	/*
 	 *	Get the current maximum for core files.  Do this
 	 *	before anything else so as to ensure it's properly
@@ -433,32 +504,41 @@ static int switch_users(CONF_SECTION *cs)
 	 *	Don't do chroot/setuid/setgid if we're in debugging
 	 *	as non-root.
 	 */
-	if (debug_flag && (getuid() != 0)) return 1;
+	if (rad_debug_lvl && (getuid() != 0)) return 1;
 
 	if (cf_section_parse(cs, NULL, bootstrap_config) < 0) {
 		fprintf(stderr, "radiusd: Error: Failed to parse user/group information.\n");
 		return 0;
 	}
 
-
 #ifdef HAVE_GRP_H
-	/*  Set GID.  */
+	/*
+	 *	Get the correct GID for the server.
+	 */
+	server_gid = getgid();
+
 	if (gid_name) {
 		struct group *gr;
 
 		gr = getgrnam(gid_name);
-		if (gr == NULL) {
+		if (!gr) {
 			fprintf(stderr, "%s: Cannot get ID for group %s: %s\n",
 				progname, gid_name, fr_syserror(errno));
 			return 0;
 		}
-		server_gid = gr->gr_gid;
-	} else {
-		server_gid = getgid();
+
+		if (server_gid != gr->gr_gid) {
+			server_gid = gr->gr_gid;
+			do_sgid = true;
+		}
 	}
 #endif
 
-	/*  Set UID.  */
+	/*
+	 *	Get the correct UID for the server.
+	 */
+	server_uid = getuid();
+
 	if (uid_name) {
 		struct passwd *user;
 
@@ -468,11 +548,12 @@ static int switch_users(CONF_SECTION *cs)
 			return 0;
 		}
 
-		if (getuid() == user->pw_uid) {
-			uid_name = NULL;
-		} else {
-
+		/*
+		 *	We're not the correct user.  Go set that.
+		 */
+		if (server_uid != user->pw_uid) {
 			server_uid = user->pw_uid;
+			do_suid = true;
 #ifdef HAVE_INITGROUPS
 			if (initgroups(uid_name, server_gid) < 0) {
 				fprintf(stderr, "%s: Cannot initialize supplementary group list for user %s: %s\n",
@@ -482,11 +563,13 @@ static int switch_users(CONF_SECTION *cs)
 			}
 #endif
 		}
+
 		talloc_free(user);
-	} else {
-		server_uid = getuid();
 	}
 
+	/*
+	 *	Do chroot BEFORE changing UIDs.
+	 */
 	if (chroot_dir) {
 		if (chroot(chroot_dir) < 0) {
 			fprintf(stderr, "%s: Failed to perform chroot %s: %s",
@@ -512,42 +595,88 @@ static int switch_users(CONF_SECTION *cs)
 	}
 
 #ifdef HAVE_GRP_H
-	/*  Set GID.  */
-	if (gid_name && (setgid(server_gid) < 0)) {
-		fprintf(stderr, "%s: Failed setting group to %s: %s",
-			progname, gid_name, fr_syserror(errno));
-		return 0;
+	/*
+	 *	Set the GID.  Don't bother checking it.
+	 */
+	if (do_sgid) {
+		if (setgid(server_gid) < 0){
+			fprintf(stderr, "%s: Failed setting group to %s: %s",
+				progname, gid_name, fr_syserror(errno));
+			return 0;
+		}
 	}
 #endif
 
 	/*
-	 *	Just before losing root permissions, ensure that the
-	 *	log files have the correct owner && group.
+	 *	The directories for PID files and logs must exist.  We
+	 *	need to create them if we're told to write files to
+	 *	those directories.
 	 *
-	 *	We have to do this because the log file MAY have been
-	 *	specified on the command-line.
+	 *	Because this creation is new in 3.0.9, it's a soft
+	 *	fail.
+	 *
 	 */
-	if (uid_name || gid_name) {
-		if ((default_log.dst == L_DST_FILES) &&
-		    (default_log.fd < 0)) {
-			default_log.fd = open(main_config.log_file,
-					      O_WRONLY | O_APPEND | O_CREAT, 0640);
-			if (default_log.fd < 0) {
-				fprintf(stderr, "radiusd: Failed to open log file %s: %s\n", main_config.log_file, fr_syserror(errno));
-				return 0;
-			}
+	if (main_config.write_pid) {
+		char *my_dir;
 
-			if (chown(main_config.log_file, server_uid, server_gid) < 0) {
-				fprintf(stderr, "%s: Cannot change ownership of log file %s: %s\n",
-					progname, main_config.log_file, fr_syserror(errno));
-				return 0;
-			}
+		my_dir = talloc_strdup(NULL, run_dir);
+		if (rad_mkdir(my_dir, 0750, server_uid, server_gid) < 0) {
+			DEBUG("Failed to create run_dir %s: %s",
+			      my_dir, strerror(errno));
+		}
+		talloc_free(my_dir);
+	}
+
+	if (default_log.dst == L_DST_FILES) {
+		char *my_dir;
+
+		my_dir = talloc_strdup(NULL, radlog_dir);
+		if (rad_mkdir(my_dir, 0750, server_uid, server_gid) < 0) {
+			DEBUG("Failed to create logdir %s: %s",
+			      my_dir, strerror(errno));
+		}
+		talloc_free(my_dir);
+	}
+
+	/*
+	 *	Once we're done with all of the privileged work,
+	 *	permanently change the UID.
+	 */
+	if (do_suid) {
+		rad_suid_set_down_uid(server_uid);
+		rad_suid_down();
+	}
+
+	/*
+	 *	If we don't already have a log file open, open one
+	 *	now.  We may not have been logging anything yet.  The
+	 *	server normally starts up fairly quietly.
+	 */
+	if ((default_log.dst == L_DST_FILES) &&
+	    (default_log.fd < 0)) {
+		default_log.fd = open(main_config.log_file,
+				      O_WRONLY | O_APPEND | O_CREAT, 0640);
+		if (default_log.fd < 0) {
+			fprintf(stderr, "radiusd: Failed to open log file %s: %s\n", main_config.log_file, fr_syserror(errno));
+			return 0;
 		}
 	}
 
-	if (uid_name) {
-		rad_suid_set_down_uid(server_uid);
-		rad_suid_down();
+	/*
+	 *	If we need to change UID, ensure that the log files
+	 *	have the correct owner && group.
+	 *
+	 *	We have to do this because some log files MAY already
+	 *	have been written as root.  We need to change them to
+	 *	have the correct ownership before proceeding.
+	 */
+	if ((do_suid || do_sgid) &&
+	    (default_log.dst == L_DST_FILES)) {
+		if (fchown(default_log.fd, server_uid, server_gid) < 0) {
+			fprintf(stderr, "%s: Cannot change ownership of log file %s: %s\n",
+				progname, main_config.log_file, fr_syserror(errno));
+			return 0;
+		}
 	}
 
 	/*
@@ -643,7 +772,7 @@ int main_config_init(void)
 	 *
 	 *	Which should be enough for many configurations.
 	 */
-	main_config.talloc_pool_size = 32 * 1024; /* default */
+	main_config.talloc_pool_size = 8 * 1024; /* default */
 
 	/*
 	 *	Read the distribution dictionaries first, then
@@ -720,12 +849,10 @@ do {\
 	version_init_numbers(subcs);
 
 	/* Read the configuration file */
-	snprintf(buffer, sizeof(buffer), "%.200s/%.50s.conf",
-		 radius_dir, main_config.name);
+	snprintf(buffer, sizeof(buffer), "%.200s/%.50s.conf", radius_dir, main_config.name);
 	if (cf_file_read(cs, buffer) < 0) {
 		ERROR("Errors reading or parsing %s", buffer);
 		talloc_free(cs);
-
 		return -1;
 	}
 
@@ -734,7 +861,7 @@ do {\
 	 *	set it now.
 	 */
 	if (default_log.dst == L_DST_NULL) {
-		if (cf_section_parse(cs, NULL, serverdest_config) < 0) {
+		if (cf_section_parse(cs, NULL, startup_server_config) < 0) {
 			fprintf(stderr, "radiusd: Error: Failed to parse log{} section.\n");
 			cf_file_free(cs);
 			return -1;
@@ -765,7 +892,7 @@ do {\
 				cf_file_free(cs);
 				return -1;
 			}
-			main_config.syslog_facility = fr_str2int(syslog_str2fac, syslog_facility, -1);
+			main_config.syslog_facility = fr_str2int(syslog_facility_table, syslog_facility, -1);
 			if (main_config.syslog_facility < 0) {
 				fprintf(stderr, "radiusd: Error: Unknown syslog_facility %s\n",
 					syslog_facility);
@@ -798,22 +925,6 @@ do {\
 #endif
 
 	/*
-	 *	Open the log file AFTER switching uid / gid.  If we
-	 *	did switch uid/gid, then the code in switch_users()
-	 *	took care of setting the file permissions correctly.
-	 */
-	if ((default_log.dst == L_DST_FILES) &&
-	    (default_log.fd < 0)) {
-		default_log.fd = open(main_config.log_file,
-					    O_WRONLY | O_APPEND | O_CREAT, 0640);
-		if (default_log.fd < 0) {
-			fprintf(stderr, "radiusd: Failed to open log file %s: %s\n", main_config.log_file, fr_syserror(errno));
-			cf_file_free(cs);
-			return -1;
-		}
-	}
-
-	/*
 	 *	This allows us to figure out where, relative to
 	 *	radiusd.conf, the other configuration files exist.
 	 */
@@ -835,12 +946,13 @@ do {\
 	 *	command-line: use whatever is in the config
 	 *	file.
 	 */
-	if (debug_flag == 0) {
-		debug_flag = main_config.debug_level;
+	if (rad_debug_lvl == 0) {
+		rad_debug_lvl = main_config.debug_level;
 	}
-	fr_debug_flag = debug_flag;
+	fr_debug_lvl = rad_debug_lvl;
 
-	FR_INTEGER_COND_CHECK("max_request_time", main_config.max_request_time, (main_config.max_request_time != 0), 100);
+	FR_INTEGER_COND_CHECK("max_request_time", main_config.max_request_time,
+			      (main_config.max_request_time != 0), 100);
 
 	/*
 	 *	reject_delay can be zero.  OR 1 though 10.
@@ -852,8 +964,8 @@ do {\
 
 	FR_INTEGER_BOUND_CHECK("cleanup_delay", main_config.cleanup_delay, <=, 10);
 
-	FR_INTEGER_BOUND_CHECK("resources.talloc_pool_size", main_config.talloc_pool_size, >=, 16*1024);
-	FR_INTEGER_BOUND_CHECK("resources.talloc_pool_size", main_config.talloc_pool_size, <=, 1024*1024);
+	FR_INTEGER_BOUND_CHECK("resources.talloc_pool_size", main_config.talloc_pool_size, >=, 2 * 1024);
+	FR_INTEGER_BOUND_CHECK("resources.talloc_pool_size", main_config.talloc_pool_size, <=, 1024 * 1024);
 
 	/*
 	 * Set default initial request processing delay to 1/3 of a second.
@@ -879,16 +991,17 @@ do {\
 	}
 
 	DEBUG2("%s: #### Loading Clients ####", main_config.name);
-	if (!clients_parse_section(cs, false)) {
+	if (!client_list_parse_section(cs, false)) {
 		return -1;
 	}
 
 	/*
-	 *  Register the %{config:section.subsection} xlat function.
+	 *	Register the %{config:section.subsection} xlat function.
 	 */
 	xlat_register("config", xlat_config, NULL, NULL);
 	xlat_register("client", xlat_client, NULL, NULL);
 	xlat_register("getclient", xlat_getclient, NULL, NULL);
+	xlat_register("listen", xlat_listen, NULL, NULL);
 
 	/*
 	 *  Go update our behaviour, based on the configuration
@@ -933,7 +1046,7 @@ int main_config_free(void)
 	 *	Clean up the configuration data
 	 *	structures.
 	 */
-	clients_free(NULL);
+	client_list_free(NULL);
 	realms_free();
 	listen_free(&main_config.listen);
 
@@ -969,20 +1082,105 @@ void hup_logfile(void)
 	}
 }
 
+static int hup_callback(void *ctx, void *data)
+{
+	CONF_SECTION *modules = ctx;
+	CONF_SECTION *cs = data;
+	CONF_SECTION *parent;
+	char const *name;
+	module_instance_t *mi;
+
+	/*
+	 *	Files may be defined in sub-sections of a module
+	 *	config.  Walk up the tree until we find the module
+	 *	definition.
+	 */
+	parent = cf_item_parent(cf_section_to_item(cs));
+	while (parent != modules) {
+		cs = parent;
+		parent = cf_item_parent(cf_section_to_item(cs));
+
+		/*
+		 *	Something went wrong.  Oh well...
+		 */
+		if (!parent) return 0;
+	}
+
+	name = cf_section_name2(cs);
+	if (!name) name = cf_section_name1(cs);
+
+	mi = module_find(modules, name);
+	if (!mi) return 0;
+
+	if ((mi->entry->module->type & RLM_TYPE_HUP_SAFE) == 0) return 0;
+
+	if (!module_hup_module(mi->cs, mi, time(NULL))) return 0;
+
+	return 0;
+}
+
 void main_config_hup(void)
 {
+	int rcode;
 	cached_config_t *cc;
 	CONF_SECTION *cs;
+	time_t when;
 	char buffer[1024];
 
-	INFO("HUP - Re-reading configuration files");
+	static time_t last_hup = 0;
+
+	/*
+	 *	Re-open the log file.  If we can't, then keep logging
+	 *	to the old log file.
+	 *
+	 *	The "open log file" code is here rather than in log.c,
+	 *	because it makes that function MUCH simpler.
+	 */
+	hup_logfile();
+
+	/*
+	 *	Only check the config files every few seconds.
+	 */
+	when = time(NULL);
+	if ((last_hup + 2) >= when) {
+		INFO("HUP - Last HUP was too recent.  Ignoring");
+		return;
+	}
+	last_hup = when;
+
+	rcode = cf_file_changed(cs_cache->cs, hup_callback);
+	if (rcode == CF_FILE_NONE) {
+		INFO("HUP - No files changed.  Ignoring");
+		return;
+	}
+
+	if (rcode == CF_FILE_ERROR) {
+		INFO("HUP - Cannot read configuration files.  Ignoring");
+		return;
+	}
+
+	/*
+	 *	No config files have changed.
+	 */
+	if ((rcode & CF_FILE_CONFIG) == 0) {
+		if ((rcode & CF_FILE_MODULE) != 0) {
+			INFO("HUP - Files loaded by a module have changed.");
+
+			/*
+			 *	FIXME: reload the module.
+			 */
+
+		}
+		return;
+	}
 
 	cs = cf_section_alloc(NULL, "main", NULL);
 	if (!cs) return;
 
 	/* Read the configuration file */
-	snprintf(buffer, sizeof(buffer), "%.200s/%.50s.conf",
-		 radius_dir, main_config.name);
+	snprintf(buffer, sizeof(buffer), "%.200s/%.50s.conf", radius_dir, main_config.name);
+
+	INFO("HUP - Re-reading configuration files");
 	if (cf_file_read(cs, buffer) < 0) {
 		ERROR("Failed to re-read or parse %s", buffer);
 		talloc_free(cs);
@@ -1008,15 +1206,6 @@ void main_config_hup(void)
 	cc->cs = talloc_steal(cc, cs);
 	cc->next = cs_cache;
 	cs_cache = cc;
-
-	/*
-	 *	Re-open the log file.  If we can't, then keep logging
-	 *	to the old log file.
-	 *
-	 *	The "open log file" code is here rather than in log.c,
-	 *	because it makes that function MUCH simpler.
-	 */
-	hup_logfile();
 
 	INFO("HUP - loading modules");
 

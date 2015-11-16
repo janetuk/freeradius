@@ -71,7 +71,7 @@ int ssl_check_consistency(void)
 	 *	1.0.0 and only allow moving backwards within a patch
 	 *	series.
 	 */
-	if (ssl_built & 0xf00000000) {
+	if (ssl_built & 0xf0000000) {
 		if ((ssl_built & 0xfffff000) != (ssl_linked & 0xfffff000) ||
 		    (ssl_built & 0x00000ff0) > (ssl_linked & 0x00000ff0)) goto mismatch;
 	/*
@@ -552,10 +552,10 @@ void version_print(void)
 
 		talloc_free(versions);
 
-		DEBUG3("Endianess:");
-#if defined(RADIUS_LITTLE_ENDIAN)
+		DEBUG3("Endianness:");
+#if defined(FR_LITTLE_ENDIAN)
 		DEBUG3("  little");
-#elif defined(RADIUS_BIG_ENDIAN)
+#elif defined(FR_BIG_ENDIAN)
 		DEBUG3("  big");
 #else
 		DEBUG3("  unknown");

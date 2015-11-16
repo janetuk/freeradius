@@ -5,8 +5,7 @@
  *
  *   This library is free software; you can redistribute it and/or
  *   modify it under the terms of the GNU Lesser General Public
- *   the Free Software Foundation; either version 2 of the License, or (at
- *   your option) any later version. either
+ *   License as published by the Free Software Foundation; either
  *   version 2.1 of the License, or (at your option) any later version.
  *
  *   This library is distributed in the hope that it will be useful,
@@ -968,8 +967,7 @@ int ascend_parse_filter(value_data_t *out, char const *value, size_t len)
 	 *	Once the filter is *completely* parsed, then we will
 	 *	over-write it with the final binary filter.
 	 */
-	p = talloc_memdup(NULL, value, len+1);
-	p[len] = '\0';
+	p = talloc_bstrndup(NULL, value, len);
 
 	/*
 	 *	Rather than printing specific error messages, we create
@@ -1064,7 +1062,6 @@ int ascend_parse_filter(value_data_t *out, char const *value, size_t len)
 	 */
 	if (rcode == 0) memcpy(out->filter, &filter, sizeof(filter));
 	talloc_free(p);
-	printf("%i", rcode);
 
 	return rcode;
 }

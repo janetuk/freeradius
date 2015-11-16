@@ -77,7 +77,7 @@ static CONF_PARSER module_config[] = {
 	{ "no_free_fail", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_sqlhpwippool_t, no_free_fail), "yes" },
 	{ "free_after", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_sqlhpwippool_t, free_after), "300" },
 	{ "sync_after", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_sqlhpwippool_t, sync_after), "25" },
-	{ NULL, -1, 0, NULL, NULL } /* end */
+	CONF_PARSER_TERMINATOR
 };
 
 int nvp_log(unsigned int line, rlm_sqlhpwippool_t *data, int lvl, char const *fmt, ...) CC_HINT(format (printf, 4, 5));
@@ -155,14 +155,14 @@ static int nvp_select(unsigned int line, rlm_sqlhpwippool_t *data,
 	}
 	va_end(ap);
 
-	if ((data->db->sql_store_result)(sqlsock, data->sql_inst->config)) {
+	if (data->db->sql_store_result && (data->db->sql_store_result)(sqlsock, data->sql_inst->config)) {
 		nvp_log(__LINE__, data, L_ERR,
 			"nvp_select(): error while saving results of query from line %u",
 			line);
 		return 0;
 	}
 
-	if ((data->db->sql_num_rows)(sqlsock, data->sql_inst->config) < 1) {
+	if (data->db->sql_num_rows && ((data->db->sql_num_rows)(sqlsock, data->sql_inst->config) < 1)) {
 		nvp_log(__LINE__, data, L_DBG,
 			"nvp_select(): no results in query from line %u", line);
 		return -1;
@@ -296,7 +296,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 
 	inst->sincesync = 0;
 
-	sql_inst = find_module_instance(cf_section_find("modules"), (inst->sql_module_instance), true);
+	sql_inst = module_instantiate(cf_section_find("modules"), (inst->sql_module_instance));
 	if (!sql_inst) {
 		nvp_log(__LINE__, inst, L_ERR,
 			"mod_instantiate(): cannot find module instance "
@@ -340,7 +340,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 	rlm_sqlhpwippool_t *inst = (rlm_sqlhpwippool_t *) instance;
 
 	/* if IP is already there, then nothing to do */
-	vp = pairfind(request->reply->vps, PW_FRAMED_IP_ADDRESS, 0, TAG_ANY);
+	vp = fr_pair_find_by_num(request->reply->vps, PW_FRAMED_IP_ADDRESS, 0, TAG_ANY);
 	if (vp) {
 		nvp_log(__LINE__, inst, L_DBG,
 			"mod_post_auth(): IP address "
@@ -349,7 +349,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 	}
 
 	/* if no pool name, we don't need to do anything */
-	vp = pairfind(request->reply->vps, ASN_IP_POOL_NAME, VENDORPEC_ASN, TAG_ANY);
+	vp = fr_pair_find_by_num(request->reply->vps, ASN_IP_POOL_NAME, VENDORPEC_ASN, TAG_ANY);
 	if (vp) {
 		pname = vp->vp_strvalue;
 		nvp_log(__LINE__, inst, L_DBG,
@@ -363,7 +363,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 	}
 
 	/* if no NAS IP address, assign 0 */
-	vp = pairfind(request->packet->vps, PW_NAS_IP_ADDRESS, 0, TAG_ANY);
+	vp = fr_pair_find_by_num(request->packet->vps, PW_NAS_IP_ADDRESS, 0, TAG_ANY);
 	if (vp) {
 		nasip = ntohl(vp->vp_ipaddr);
 	}
@@ -636,7 +636,7 @@ end_gid:
 	}
 
 	/* add IP address to reply packet */
-	vp = radius_paircreate(request->reply, &request->reply->vps,
+	vp = radius_pair_create(request->reply, &request->reply->vps,
 			       PW_FRAMED_IP_ADDRESS, 0);
 	vp->vp_ipaddr = ip.s_addr;
 
@@ -658,7 +658,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 	rlm_sqlhpwippool_t *inst = (rlm_sqlhpwippool_t *) instance;
 
 	/* if no unique session ID, don't even try */
-	vp = pairfind(request->packet->vps, PW_ACCT_UNIQUE_SESSION_ID, 0, TAG_ANY);
+	vp = fr_pair_find_by_num(request->packet->vps, PW_ACCT_UNIQUE_SESSION_ID, 0, TAG_ANY);
 	if (vp) {
 		sessid = vp->vp_strvalue;
 	}
@@ -668,7 +668,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 		return RLM_MODULE_FAIL;
 	}
 
-	vp = pairfind(request->packet->vps, PW_ACCT_STATUS_TYPE, 0, TAG_ANY);
+	vp = fr_pair_find_by_num(request->packet->vps, PW_ACCT_STATUS_TYPE, 0, TAG_ANY);
 	if (vp) {
 		acct_type = vp->vp_integer;
 	}
@@ -698,7 +698,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 	switch (acct_type) {
 	case PW_STATUS_START:
 	case PW_STATUS_ALIVE:
-		vp = pairfind(request->packet->vps, PW_FRAMED_IP_ADDRESS, 0, TAG_ANY);
+		vp = fr_pair_find_by_num(request->packet->vps, PW_FRAMED_IP_ADDRESS, 0, TAG_ANY);
 		if (!vp) {
 			nvp_log(__LINE__, inst, L_ERR, "mod_accounting(): no framed IP");
 			fr_connection_release(inst->sql_inst->pool, sqlsock);
@@ -738,7 +738,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 
 	case PW_STATUS_ACCOUNTING_OFF:
 	case PW_STATUS_ACCOUNTING_ON:
-		vp = pairfind(request->packet->vps, PW_NAS_IP_ADDRESS, 0, TAG_ANY);
+		vp = fr_pair_find_by_num(request->packet->vps, PW_NAS_IP_ADDRESS, 0, TAG_ANY);
 		if (!vp) {
 			nvp_log(__LINE__, inst, L_ERR, "mod_accounting(): no NAS IP");
 			fr_connection_release(inst->sql_inst->pool, sqlsock);
@@ -769,21 +769,14 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 
 extern module_t rlm_sqlhpwippool;
 module_t rlm_sqlhpwippool = {
-	RLM_MODULE_INIT,
-	"sqlhpwippool",			/* name */
-	RLM_TYPE_THREAD_SAFE,		/* type */
-	sizeof(rlm_sqlhpwippool_t),
-	module_config,
-	mod_instantiate,	/* instantiation */
-	NULL,				/* detach */
-	{
-		NULL,			/* authentication */
-		NULL,			/* authorization */
-		NULL,			/* preaccounting */
-		mod_accounting,/* accounting */
-		NULL,			/* checksimul */
-		NULL,			/* pre-proxy */
-		NULL,			/* post-proxy */
-		mod_post_auth	/* post-auth */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "sqlhpwippool",
+	.type		= RLM_TYPE_THREAD_SAFE,
+	.inst_size	= sizeof(rlm_sqlhpwippool_t),
+	.config		= module_config,
+	.instantiate	= mod_instantiate,
+	.methods = {
+		[MOD_ACCOUNTING]	= mod_accounting,
+		[MOD_POST_AUTH]		= mod_post_auth
 	},
 };

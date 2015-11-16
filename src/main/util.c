@@ -277,6 +277,86 @@ int rad_mkdir(char *dir, mode_t mode, uid_t uid, gid_t gid)
 	return rcode;
 }
 
+/** Ensures that a filename cannot walk up the directory structure
+ *
+ * Also sanitizes control chars.
+ *
+ * @param request Current request (may be NULL).
+ * @param out Output buffer.
+ * @param outlen Size of the output buffer.
+ * @param in string to escape.
+ * @param arg Context arguments (unused, should be NULL).
+ */
+size_t rad_filename_make_safe(UNUSED REQUEST *request, char *out, size_t outlen, char const *in, UNUSED void *arg)
+{
+	char const *q = in;
+	char *p = out;
+	size_t left = outlen;
+
+	while (*q) {
+		if (*q != '/') {
+			if (left < 2) break;
+
+			/*
+			 *	Smash control characters and spaces to
+			 *	something simpler.
+			 */
+			if (*q < ' ') {
+				*(p++) = '_';
+				continue;
+			}
+
+			*(p++) = *(q++);
+			left--;
+			continue;
+		}
+
+		/*
+		 *	For now, allow slashes in the expanded
+		 *	filename.  This allows the admin to set
+		 *	attributes which create sub-directories.
+		 *	Unfortunately, it also allows users to send
+		 *	attributes which *may* end up creating
+		 *	sub-directories.
+		 */
+		if (left < 2) break;
+		*(p++) = *(q++);
+
+		/*
+		 *	Get rid of ////../.././///.///..//
+		 */
+	redo:
+		/*
+		 *	Get rid of ////
+		 */
+		if (*q == '/') {
+			q++;
+			goto redo;
+		}
+
+		/*
+		 *	Get rid of /./././
+		 */
+		if ((q[0] == '.') &&
+		    (q[1] == '/')) {
+			q += 2;
+			goto redo;
+		}
+
+		/*
+		 *	Get rid of /../../../
+		 */
+		if ((q[0] == '.') && (q[1] == '.') &&
+		    (q[2] == '/')) {
+			q += 3;
+			goto redo;
+		}
+	}
+	*p = '\0';
+
+	return (p - out);
+}
+
 /** Escapes the raw string such that it should be safe to use as part of a file path
  *
  * This function is designed to produce a string that's still readable but portable
@@ -311,7 +391,7 @@ size_t rad_filename_escape(UNUSED REQUEST *request, char *out, size_t outlen, ch
 		/*
 		 *	Encode multibyte UTF8 chars
 		 */
-		utf8_len = fr_utf8_char((uint8_t const *) in);
+		utf8_len = fr_utf8_char((uint8_t const *) in, -1);
 		if (utf8_len > 1) {
 			if (freespace <= (utf8_len * 3)) break;
 
@@ -342,14 +422,13 @@ size_t rad_filename_escape(UNUSED REQUEST *request, char *out, size_t outlen, ch
 		if (((*in >= 'A') && (*in <= 'Z')) ||
 		    ((*in >= 'a') && (*in <= 'z')) ||
 		    ((*in >= '0') && (*in <= '9')) ||
-		    (*in == '_') || (*in == '.')) {
+		    (*in == '_')) {
 		    	if (freespace <= 1) break;
 
 		 	*out++ = *in++;
 		 	freespace--;
 		 	continue;
 		}
-
 		if (freespace <= 2) break;
 
 		/*
@@ -397,7 +476,7 @@ ssize_t rad_filename_unescape(char *out, size_t outlen, char const *in, size_t i
 		if (((*p >= 'A') && (*p <= 'Z')) ||
 		    ((*p >= 'a') && (*p <= 'z')) ||
 		    ((*p >= '0') && (*p <= '9')) ||
-		    (*p == '_') || (*p == '.')) {
+		    (*p == '_')) {
 		 	*out++ = *p;
 		 	freespace--;
 		 	continue;
@@ -490,13 +569,7 @@ static int _request_free(REQUEST *request)
 	rad_assert(!request->ev);
 
 #ifdef WITH_COA
-	if (request->coa) {
-		request->coa->parent = NULL;
-	}
-
-	if (request->parent && (request->parent->coa == request)) {
-		request->parent->coa = NULL;
-	}
+	rad_assert(request->coa == NULL);
 #endif
 
 #ifndef NDEBUG
@@ -530,11 +603,11 @@ REQUEST *request_alloc(TALLOC_CTX *ctx)
 #ifdef WITH_PROXY
 	request->proxy_reply = NULL;
 #endif
-	request->config_items = NULL;
+	request->config = NULL;
 	request->username = NULL;
 	request->password = NULL;
 	request->timestamp = time(NULL);
-	request->log.lvl = debug_flag; /* Default to global debug level */
+	request->log.lvl = rad_debug_lvl; /* Default to global debug level */
 
 	request->module = "";
 	request->component = "<core>";
@@ -647,7 +720,7 @@ REQUEST *request_alloc_coa(REQUEST *request)
 	request->coa = request_alloc_fake(request);
 	if (!request->coa) return NULL;
 
-	request->coa->options = 1;	/* is a CoA packet */
+	request->coa->options = RAD_REQUEST_OPTION_COA;	/* is a CoA packet */
 	request->coa->packet->code = 0; /* unknown, as of yet */
 	request->coa->child_state = REQUEST_RUNNING;
 	request->coa->proxy = rad_alloc(request->coa, false);
@@ -831,7 +904,7 @@ uint32_t rad_pps(uint32_t *past, uint32_t *present, time_t *then, struct timeval
  */
 
 int rad_expand_xlat(REQUEST *request, char const *cmd,
-		    int max_argc, char *argv[], bool can_fail,
+		    int max_argc, char const *argv[], bool can_fail,
 		    size_t argv_buflen, char *argv_buf)
 {
 	char const *from;
@@ -1011,7 +1084,7 @@ static void verify_packet(char const *file, int line, REQUEST *request, RADIUS_P
 	if (!packet->vps) return;
 
 #ifdef WITH_VERIFY_PTR
-	fr_verify_list(file, line, packet, packet->vps);
+	fr_pair_list_verify(file, line, packet, packet->vps);
 #endif
 }
 /*
@@ -1028,8 +1101,8 @@ void verify_request(char const *file, int line, REQUEST *request)
 	(void) talloc_get_type_abort(request, REQUEST);
 
 #ifdef WITH_VERIFY_PTR
-	fr_verify_list(file, line, request, request->config_items);
-	fr_verify_list(file, line, request, request->state);
+	fr_pair_list_verify(file, line, request, request->config);
+	fr_pair_list_verify(file, line, request, request->state);
 #endif
 
 	if (request->packet) verify_packet(file, line, request, request->packet, "request");
@@ -1135,7 +1208,7 @@ int rad_getpwuid(TALLOC_CTX *ctx, struct passwd **out, uid_t uid)
 		}
 	}
 
-	if (ret != 0) {
+	if ((ret != 0) || !*out) {
 		fr_strerror_printf("Failed resolving UID: %s", fr_syserror(ret));
 		talloc_free(buff);
 		errno = ret;
@@ -1200,7 +1273,7 @@ int rad_getpwnam(TALLOC_CTX *ctx, struct passwd **out, char const *name)
 		}
 	}
 
-	if (ret != 0) {
+	if ((ret != 0) || !*out) {
 		fr_strerror_printf("Failed resolving UID: %s", fr_syserror(ret));
 		talloc_free(buff);
 		errno = ret;
@@ -1265,7 +1338,7 @@ int rad_getgrgid(TALLOC_CTX *ctx, struct group **out, gid_t gid)
 		}
 	}
 
-	if (ret != 0) {
+	if ((ret != 0) || !*out) {
 		fr_strerror_printf("Failed resolving GID: %s", fr_syserror(ret));
 		talloc_free(buff);
 		errno = ret;
@@ -1330,7 +1403,7 @@ int rad_getgrnam(TALLOC_CTX *ctx, struct group **out, char const *name)
 		}
 	}
 
-	if (ret != 0) {
+	if ((ret != 0) || !*out) {
 		fr_strerror_printf("Failed resolving GID: %s", fr_syserror(ret));
 		talloc_free(buff);
 		errno = ret;
@@ -1423,7 +1496,6 @@ int rad_prints_gid(TALLOC_CTX *ctx, char *out, size_t outlen, gid_t gid)
 static bool doing_setuid = false;
 static uid_t suid_down_uid = (uid_t)-1;
 
-#  if defined(HAVE_SETRESUID) && defined (HAVE_GETRESUID)
 /** Set the uid and gid used when dropping privileges
  *
  * @note if this function hasn't been called, rad_suid_down will have no effect.
@@ -1436,6 +1508,7 @@ void rad_suid_set_down_uid(uid_t uid)
 	doing_setuid = true;
 }
 
+#  if defined(HAVE_SETRESUID) && defined (HAVE_GETRESUID)
 void rad_suid_up(void)
 {
 	uid_t ruid, euid, suid;
@@ -1500,26 +1573,32 @@ void rad_suid_down_permanent(void)
 	fr_reset_dumpable();
 }
 #  else
-void rad_suid_set_down_uid(UNUSED uid_t uid)
-{
-}
 /*
  *	Much less secure...
  */
 void rad_suid_up(void)
 {
+	if (!doing_setuid) return;
+
+	if (seteuid(0) < 0) {
+		ERROR("Failed switching up to euid 0: %s", fr_syserror(errno));
+		fr_exit_now(1);
+	}
+
 }
 
 void rad_suid_down(void)
 {
 	if (!doing_setuid) return;
 
-	if (setuid(suid_down_uid) < 0) {
+	if (geteuid() == suid_down_uid) return;
+
+	if (seteuid(suid_down_uid) < 0) {
 		struct passwd *passwd;
 		char const *name;
 
 		name = (rad_getpwuid(NULL, &passwd, suid_down_uid) < 0) ? "unknown": passwd->pw_name;
-		ERROR("Failed switching to uid %s: %s", name, fr_syserror(errno));
+		ERROR("Failed switching to euid %s: %s", name, fr_syserror(errno));
 		talloc_free(passwd);
 		fr_exit_now(1);
 	}
@@ -1529,11 +1608,36 @@ void rad_suid_down(void)
 
 void rad_suid_down_permanent(void)
 {
+	if (!doing_setuid) return;
+
+	/*
+	 *	Already done.  Don't do anything else.
+	 */
+	if (getuid() == suid_down_uid) return;
+
+	/*
+	 *	We're root, but running as a normal user.  Fix that,
+	 *	so we can call setuid().
+	 */
+	if (geteuid() == suid_down_uid) {
+		rad_suid_up();
+	}
+
+	if (setuid(suid_down_uid) < 0) {
+		struct passwd *passwd;
+		char const *name;
+
+		name = (rad_getpwuid(NULL, &passwd, suid_down_uid) < 0) ? "unknown": passwd->pw_name;
+		ERROR("Failed switching permanently to uid %s: %s", name, fr_syserror(errno));
+		talloc_free(passwd);
+		fr_exit_now(1);
+	}
+
 	fr_reset_dumpable();
 }
 #  endif /* HAVE_SETRESUID && HAVE_GETRESUID */
 #else  /* HAVE_SETUID */
-void rad_suid_set_down_uid(UNUSED uid_t uid)
+void rad_suid_set_down_uid(uid_t uid)
 {
 }
 void rad_suid_up(void)

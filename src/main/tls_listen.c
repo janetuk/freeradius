@@ -54,7 +54,7 @@ static void dump_hex(char const *msg, uint8_t const *data, size_t data_len)
 {
 	size_t i;
 
-	if (debug_flag < 3) return;
+	if (rad_debug_lvl < 3) return;
 
 	printf("%s %d\n", msg, (int) data_len);
 	if (data_len > 256) data_len = 256;
@@ -139,13 +139,11 @@ static int tls_socket_recv(rad_listen_t *listener)
 		sock->packet->dst_ipaddr = sock->my_ipaddr;
 		sock->packet->dst_port = sock->my_port;
 
-		if (sock->request) {
-			sock->request->packet = talloc_steal(sock->request, sock->packet);
-		}
+		if (sock->request) sock->request->packet = talloc_steal(sock->request, sock->packet);
 	}
 
 	/*
-	 *	Allocate a REQUEST for debugging.
+	 *	Allocate a REQUEST for debugging, and initialize the TLS session.
 	 */
 	if (!sock->request) {
 		sock->request = request = request_alloc(sock);
@@ -161,9 +159,6 @@ static int tls_socket_recv(rad_listen_t *listener)
 		request->component = "<core>";
 		request->component = "<tls-connect>";
 
-		/*
-		 *	Not sure if we should do this on every packet...
-		 */
 		request->reply = rad_alloc(request, false);
 		if (!request->reply) return 0;
 
@@ -178,7 +173,7 @@ static int tls_socket_recv(rad_listen_t *listener)
 		}
 
 		SSL_set_ex_data(sock->ssn->ssl, FR_TLS_EX_INDEX_REQUEST, (void *)request);
-		SSL_set_ex_data(sock->ssn->ssl, fr_tls_ex_index_certs, (void *)&request->packet->vps);
+		SSL_set_ex_data(sock->ssn->ssl, fr_tls_ex_index_certs, (void *) &sock->certs);
 		SSL_set_ex_data(sock->ssn->ssl, FR_TLS_EX_INDEX_TALLOC, sock->parent);
 
 		doing_init = true;
@@ -227,28 +222,33 @@ static int tls_socket_recv(rad_listen_t *listener)
 	}
 
 	/*
-	 *	Skip ahead to reading application data.
+	 *	If we need to do more initialization, do that here.
 	 */
-	if (SSL_is_init_finished(sock->ssn->ssl)) goto app;
+	if (!SSL_is_init_finished(sock->ssn->ssl)) {
+		if (!tls_handshake_recv(request, sock->ssn)) {
+			RDEBUG("FAILED in TLS handshake receive");
+			goto do_close;
+		}
 
-	if (!tls_handshake_recv(request, sock->ssn)) {
-		RDEBUG("FAILED in TLS handshake receive");
-		goto do_close;
+		/*
+		 *	More ACK data to send.  Do so.
+		 */
+		if (sock->ssn->dirty_out.used > 0) {
+			tls_socket_write(listener, request);
+			PTHREAD_MUTEX_UNLOCK(&sock->mutex);
+			return 0;
+		}
+
+		/*
+		 *	FIXME: Run the request through a virtual
+		 *	server in order to see if we like the
+		 *	certificate presented by the client.
+		 */
 	}
 
-	if (sock->ssn->dirty_out.used > 0) {
-		tls_socket_write(listener, request);
-		PTHREAD_MUTEX_UNLOCK(&sock->mutex);
-		return 0;
-	}
-
-app:
 	/*
-	 *	FIXME: Run the packet through a virtual server in
-	 *	order to see if we like the certificate presented by
-	 *	the client.
+	 *	Try to get application data.
 	 */
-
 	status = tls_application_data(sock->ssn, request);
 	RDEBUG("Application data status %d", status);
 
@@ -262,6 +262,9 @@ app:
 		return 0;
 	}
 
+	/*
+	 *	We now have a bunch of application data.
+	 */
 	dump_hex("TUNNELED DATA > ", sock->ssn->clean_out.data, sock->ssn->clean_out.used);
 
 	/*
@@ -270,7 +273,7 @@ app:
 	 */
 	if ((sock->ssn->clean_out.used < 20) ||
 	    (((sock->ssn->clean_out.data[2] << 8) | sock->ssn->clean_out.data[3]) != (int) sock->ssn->clean_out.used)) {
-		RDEBUG("Received bad packet: Length %d contents %d",
+		RDEBUG("Received bad packet: Length %zd contents %d",
 		       sock->ssn->clean_out.used,
 		       (sock->ssn->clean_out.data[2] << 8) | sock->ssn->clean_out.data[3]);
 		goto do_close;
@@ -284,7 +287,7 @@ app:
 	PTHREAD_MUTEX_UNLOCK(&sock->mutex);
 
 	if (!rad_packet_ok(packet, 0, NULL)) {
-		RDEBUG("Received bad packet: %s", fr_strerror());
+		if (DEBUG_ENABLED) ERROR("Receive - %s", fr_strerror());
 		DEBUG("Closing TLS socket from client");
 		PTHREAD_MUTEX_LOCK(&sock->mutex);
 		tls_socket_close(listener);
@@ -295,7 +298,7 @@ app:
 	/*
 	 *	Copied from src/lib/radius.c, rad_recv();
 	 */
-	if (fr_debug_flag) {
+	if (fr_debug_lvl) {
 		char host_ipaddr[128];
 
 		if (is_radius_code(packet->code)) {
@@ -345,7 +348,8 @@ int dual_tls_recv(rad_listen_t *listener)
 	rad_assert(sock->ssn != NULL);
 	rad_assert(client != NULL);
 
-	packet = sock->packet;
+	packet = talloc_steal(NULL, sock->packet);
+	sock->packet = NULL;
 
 	/*
 	 *	Some sanity checks, based on the packet code.
@@ -381,7 +385,7 @@ int dual_tls_recv(rad_listen_t *listener)
 		if (!main_config.status_server) {
 			FR_STATS_INC(auth, total_unknown_types);
 			WARN("Ignoring Status-Server request due to security configuration");
-			rad_free(&sock->packet);
+			rad_free(&packet);
 			return 0;
 		}
 		fun = rad_status_server;
@@ -393,17 +397,15 @@ int dual_tls_recv(rad_listen_t *listener)
 
 		DEBUG("Invalid packet code %d sent from client %s port %d : IGNORED",
 		      packet->code, client->shortname, packet->src_port);
-		rad_free(&sock->packet);
+		rad_free(&packet);
 		return 0;
 	} /* switch over packet types */
 
 	if (!request_receive(NULL, listener, packet, client, fun)) {
 		FR_STATS_INC(auth, total_packets_dropped);
-		rad_free(&sock->packet);
+		rad_free(&packet);
 		return 0;
 	}
-
-	sock->packet = NULL;	/* we have no need for more partial reads */
 
 	return 1;
 }
@@ -502,7 +504,7 @@ static ssize_t proxy_tls_read(rad_listen_t *listener)
 	 *	Get the maximum size of data to receive.
 	 */
 	if (!sock->data) sock->data = talloc_array(sock, uint8_t,
-						   sock->ssn->offset);
+						   sock->ssn->mtu);
 
 	data = sock->data;
 
@@ -552,7 +554,7 @@ static ssize_t proxy_tls_read(rad_listen_t *listener)
 		 *	FIXME: allocate a RADIUS_PACKET, and set
 		 *	"data" to be as large as necessary.
 		 */
-		if (length > sock->ssn->offset) {
+		if (length > sock->ssn->mtu) {
 			INFO("Received packet will be too large! Set \"fragment_size = %u\"",
 			     (data[2] << 8) | data[3]);
 			goto do_close;

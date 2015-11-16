@@ -12,6 +12,14 @@
 /* Define to 1 to have OpenSSL version check enabled */
 #undef ENABLE_OPENSSL_VERSION_CHECK
 
+/* Define if your processor stores words with the most significant byte first
+   */
+#undef FR_BIG_ENDIAN
+
+/* Define if your processor stores words with the least significant byte first
+   */
+#undef FR_LITTLE_ENDIAN
+
 /* style of gethostbyaddr_r functions */
 #undef GETHOSTBYADDRRSTYLE
 
@@ -24,13 +32,17 @@
 /* Define to 1 if you have the <arpa/inet.h> header file. */
 #undef HAVE_ARPA_INET_H
 
+/* Define if your compiler supports the __bounded__ attribute (usually OpenBSD
+   gcc). */
+#undef HAVE_ATTRIBUTE_BOUNDED
+
 /* Define to 1 if you have the `bindat' function. */
 #undef HAVE_BINDAT
 
 /* Define if we have a binary safe regular expression library */
 #undef HAVE_BINSAFE_REGEX
 
-/* Define if the compiler supports __builtin_types_compatible_p */
+/* Define if the compiler supports __builtin_bswap64 */
 #undef HAVE_BUILTIN_BSWAP_64
 
 /* Define if the compiler supports __builtin_choose_expr */
@@ -64,6 +76,9 @@
 /* Define to 1 if you have the <dirent.h> header file, and it defines `DIR'.
    */
 #undef HAVE_DIRENT_H
+
+/* Define to 1 if you have the `dladdr' function. */
+#undef HAVE_DLADDR
 
 /* Define to 1 if you have the <dlfcn.h> header file. */
 #undef HAVE_DLFCN_H
@@ -510,14 +525,6 @@
 
 /* Raw version string from VERSION file */
 #undef RADIUSD_VERSION_STRING
-
-/* Define if your processor stores words with the most significant byte first
-   */
-#undef RADIUS_BIG_ENDIAN
-
-/* Define if your processor stores words with the least significant byte first
-   */
-#undef RADIUS_LITTLE_ENDIAN
 
 /* Define as the return type of signal handlers (`int' or `void'). */
 #undef RETSIGTYPE

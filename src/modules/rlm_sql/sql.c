@@ -120,12 +120,12 @@ void *mod_conn_create(TALLOC_CTX *ctx, void *instance)
 
 /*************************************************************************
  *
- *	Function: sql_userparse
+ *	Function: sql_fr_pair_list_afrom_str
  *
  *	Purpose: Read entries from the database and fill VALUE_PAIR structures
  *
  *************************************************************************/
-int sql_userparse(TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR **head, rlm_sql_row_t row)
+int sql_fr_pair_list_afrom_str(TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR **head, rlm_sql_row_t row)
 {
 	VALUE_PAIR *vp;
 	char const *ptr, *value;
@@ -204,21 +204,21 @@ int sql_userparse(TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR **head, rlm_sql_
 	/*
 	 *	Create the pair
 	 */
-	vp = pairmake(ctx, NULL, row[2], NULL, operator);
+	vp = fr_pair_make(ctx, NULL, row[2], NULL, operator);
 	if (!vp) {
 		REDEBUG("Failed to create the pair: %s", fr_strerror());
 		return -1;
 	}
 
 	if (do_xlat) {
-		if (pairmark_xlat(vp, value) < 0) {
+		if (fr_pair_mark_xlat(vp, value) < 0) {
 			REDEBUG("Error marking pair for xlat");
 
 			talloc_free(vp);
 			return -1;
 		}
 	} else {
-		if (pairparsevalue(vp, value, -1) < 0) {
+		if (fr_pair_value_from_str(vp, value, -1) < 0) {
 			REDEBUG("Error parsing value: %s", fr_strerror());
 
 			talloc_free(vp);
@@ -229,7 +229,7 @@ int sql_userparse(TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR **head, rlm_sql_
 	/*
 	 *	Add the pair into the packet
 	 */
-	pairadd(head, vp);
+	fr_pair_add(head, vp);
 	return 0;
 }
 
@@ -256,7 +256,7 @@ sql_rcode_t rlm_sql_fetch_row(rlm_sql_t *inst, REQUEST *request, rlm_sql_handle_
 	 */
 	ret = (inst->module->sql_fetch_row)(*handle, inst->config);
 	if (ret < 0) {
-		ROPTIONAL(RERROR, ERROR, "Error fetching row");
+		MOD_ROPTIONAL(RERROR, ERROR, "Error fetching row");
 
 		rlm_sql_print_error(inst, request, *handle, false);
 	}
@@ -282,7 +282,7 @@ void rlm_sql_print_error(rlm_sql_t *inst, REQUEST *request, rlm_sql_handle_t *ha
 
 	num = (inst->module->sql_error)(handle->log_ctx, log, (sizeof(log) / sizeof(*log)), handle, inst->config);
 	if (num == 0) {
-		ROPTIONAL(RERROR, ERROR, "Unknown error");
+		MOD_ROPTIONAL(RERROR, ERROR, "Unknown error");
 		return;
 	}
 
@@ -293,21 +293,21 @@ void rlm_sql_print_error(rlm_sql_t *inst, REQUEST *request, rlm_sql_handle_t *ha
 
 		switch (log[i].type) {
 		case L_ERR:
-			ROPTIONAL(RERROR, ERROR, "%s: %s", driver, log[i].msg);
+			MOD_ROPTIONAL(RERROR, ERROR, "%s: %s", driver, log[i].msg);
 			break;
 
 		case L_WARN:
-			ROPTIONAL(RWARN, WARN, "%s: %s", driver, log[i].msg);
+			MOD_ROPTIONAL(RWARN, WARN, "%s: %s", driver, log[i].msg);
 			break;
 
 		case L_INFO:
-			ROPTIONAL(RINFO, INFO, "%s: %s", driver, log[i].msg);
+			MOD_ROPTIONAL(RINFO, INFO, "%s: %s", driver, log[i].msg);
 			break;
 
 		case L_DBG:
 		default:
 		debug:
-			ROPTIONAL(RDEBUG, DEBUG, "%s: %s", driver, log[i].msg);
+			MOD_ROPTIONAL(RDEBUG, DEBUG, "%s: %s", driver, log[i].msg);
 			break;
 		}
 	}
@@ -346,14 +346,14 @@ sql_rcode_t rlm_sql_query(rlm_sql_t *inst, REQUEST *request, rlm_sql_handle_t **
 	/*
 	 *  inst->pool may be NULL is this function is called by mod_conn_create.
 	 */
-	count = inst->pool ? fr_connection_get_num(inst->pool) : 0;
+	count = inst->pool ? fr_connection_pool_get_num(inst->pool) : 0;
 
 	/*
 	 *  Here we try with each of the existing connections, then try to create
 	 *  a new connection, then give up.
 	 */
 	for (i = 0; i < (count + 1); i++) {
-		ROPTIONAL(RDEBUG2, DEBUG2, "Executing query: %s", query);
+		MOD_ROPTIONAL(RDEBUG2, DEBUG2, "Executing query: %s", query);
 
 		ret = (inst->module->sql_query)(*handle, inst->config, query);
 		switch (ret) {
@@ -410,7 +410,7 @@ sql_rcode_t rlm_sql_query(rlm_sql_t *inst, REQUEST *request, rlm_sql_handle_t **
 		return ret;
 	}
 
-	ROPTIONAL(RERROR, ERROR, "Hit reconnection limit");
+	MOD_ROPTIONAL(RERROR, ERROR, "Hit reconnection limit");
 
 	return RLM_SQL_ERROR;
 }
@@ -446,13 +446,13 @@ sql_rcode_t rlm_sql_select_query(rlm_sql_t *inst, REQUEST *request, rlm_sql_hand
 	/*
 	 *  inst->pool may be NULL is this function is called by mod_conn_create.
 	 */
-	count = inst->pool ? fr_connection_get_num(inst->pool) : 0;
+	count = inst->pool ? fr_connection_pool_get_num(inst->pool) : 0;
 
 	/*
 	 *  For sanity, for when no connections are viable, and we can't make a new one
 	 */
 	for (i = 0; i < (count + 1); i++) {
-		ROPTIONAL(RDEBUG2, DEBUG2, "Executing select query: %s", query);
+		MOD_ROPTIONAL(RDEBUG2, DEBUG2, "Executing select query: %s", query);
 
 		ret = (inst->module->sql_select_query)(*handle, inst->config, query);
 		switch (ret) {
@@ -481,7 +481,7 @@ sql_rcode_t rlm_sql_select_query(rlm_sql_t *inst, REQUEST *request, rlm_sql_hand
 		return ret;
 	}
 
-	ROPTIONAL(RERROR, ERROR, "Hit reconnection limit");
+	MOD_ROPTIONAL(RERROR, ERROR, "Hit reconnection limit");
 
 	return RLM_SQL_ERROR;
 }
@@ -509,7 +509,7 @@ int sql_getvpdata(TALLOC_CTX *ctx, rlm_sql_t *inst, REQUEST *request, rlm_sql_ha
 	while (rlm_sql_fetch_row(inst, request, handle) == 0) {
 		row = (*handle)->row;
 		if (!row) break;
-		if (sql_userparse(ctx, request, pair, row) != 0) {
+		if (sql_fr_pair_list_afrom_str(ctx, request, pair, row) != 0) {
 			REDEBUG("Error parsing user data from database result");
 
 			(inst->module->sql_finish_select_query)(*handle, inst->config);

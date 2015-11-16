@@ -68,14 +68,13 @@ typedef struct {
 	enum {
 		GROUPTYPE_SIMPLE = 0,
 		GROUPTYPE_REDUNDANT,
-		GROUPTYPE_APPEND,
 		GROUPTYPE_COUNT
 	} grouptype;				/* after mc */
 	modcallable		*children;
 	modcallable		*tail;		/* of the children list */
 	CONF_SECTION		*cs;
-	value_pair_map_t	*map;		/* update */
-	value_pair_tmpl_t	*vpt;		/* switch */
+	vp_map_t	*map;		/* update */
+	vp_tmpl_t	*vpt;		/* switch */
 	fr_cond_t		*cond;		/* if/elsif */
 	bool			done_pass2;
 } modgroup;
@@ -322,7 +321,7 @@ static rlm_rcode_t CC_HINT(nonnull) call_modsingle(rlm_components_t component, m
 	return request->rcode;
 }
 
-static int default_component_results[RLM_COMPONENT_COUNT] = {
+static int default_component_results[MOD_COUNT] = {
 	RLM_MODULE_REJECT,	/* AUTH */
 	RLM_MODULE_NOTFOUND,	/* AUTZ */
 	RLM_MODULE_NOOP,	/* PREACCT */
@@ -381,14 +380,14 @@ typedef struct modcall_stack_entry_t {
 
 
 static bool modcall_recurse(REQUEST *request, rlm_components_t component, int depth,
-			    modcall_stack_entry_t *entry);
+			    modcall_stack_entry_t *entry, bool do_next_sibling);
 
 /*
  *	Call a child of a block.
  */
 static void modcall_child(REQUEST *request, rlm_components_t component, int depth,
 			  modcall_stack_entry_t *entry, modcallable *c,
-			  rlm_rcode_t *result)
+			  rlm_rcode_t *result, bool do_next_sibling)
 {
 	modcall_stack_entry_t *next;
 
@@ -407,7 +406,7 @@ static void modcall_child(REQUEST *request, rlm_components_t component, int dept
 	next->unwind = 0;
 
 	if (!modcall_recurse(request, component,
-			     depth, next)) {
+			     depth, next, do_next_sibling)) {
 		*result = RLM_MODULE_FAIL;
 		 return;
 	}
@@ -429,7 +428,7 @@ static void modcall_child(REQUEST *request, rlm_components_t component, int dept
  *	Interpret the various types of blocks.
  */
 static bool modcall_recurse(REQUEST *request, rlm_components_t component, int depth,
-			    modcall_stack_entry_t *entry)
+			    modcall_stack_entry_t *entry, bool do_next_sibling)
 {
 	bool if_taken, was_if;
 	modcallable *c;
@@ -585,7 +584,7 @@ redo:
 	if (c->type == MOD_UPDATE) {
 		int rcode;
 		modgroup *g = mod_callabletogroup(c);
-		value_pair_map_t *map;
+		vp_map_t *map;
 
 		MOD_LOG_OPEN_BRACE;
 		RINDENT();
@@ -660,7 +659,7 @@ redo:
 		     vp != NULL;
 		     vp = fr_cursor_next(&copy)) {
 #ifndef NDEBUG
-			if (fr_debug_flag >= 2) {
+			if (fr_debug_lvl >= 2) {
 				char buffer[1024];
 
 				vp_prints_value(buffer, sizeof(buffer), vp, '"');
@@ -683,15 +682,17 @@ redo:
 			next->priority = 0;
 			next->unwind = 0;
 
-			if (!modcall_recurse(request, component, depth + 1, next)) {
+			if (!modcall_recurse(request, component, depth + 1, next, true)) {
 				break;
 			}
 
 			/*
-			 *	We've unwound to the enclosing
-			 *	"foreach".  Stop the unwinding.
+			 *	We've been asked to unwind to the
+			 *	enclosing "foreach".  We're here, so
+			 *	we can stop unwinding.
 			 */
-			if (next->unwind == MOD_FOREACH) {
+			if (next->unwind == MOD_BREAK) {
+				entry->unwind = 0;
 				break;
 			}
 
@@ -709,7 +710,7 @@ redo:
 		 *	If we don't remove the request data, something could call
 		 *	the xlat outside of a foreach loop and trigger a segv.
 		 */
-		pairfree(&vps);
+		fr_pair_list_free(&vps);
 		request_data_get(request, (void *)radius_get_vp, foreach_depth);
 
 		rad_assert(next != NULL);
@@ -771,6 +772,11 @@ redo:
 		 *	MOD_GROUP.
 		 */
 		if (!g->children) {
+			if (c->type == MOD_CASE) {
+				result = RLM_MODULE_NOOP;
+				goto calculate_result;
+			}
+
 			RDEBUG2("%s { ... } # empty sub-section is ignored", c->name);
 			goto next_sibling;
 		}
@@ -778,7 +784,7 @@ redo:
 		MOD_LOG_OPEN_BRACE;
 		modcall_child(request, component,
 			      depth + 1, entry, g->children,
-			      &result);
+			      &result, true);
 		MOD_LOG_CLOSE_BRACE;
 		goto calculate_result;
 	} /* MOD_GROUP */
@@ -789,8 +795,8 @@ redo:
 		modgroup *g, *h;
 		fr_cond_t cond;
 		value_data_t data;
-		value_pair_map_t map;
-		value_pair_tmpl_t vpt;
+		vp_map_t map;
+		vp_tmpl_t vpt;
 
 		MOD_LOG_OPEN_BRACE;
 
@@ -838,10 +844,12 @@ redo:
 		    (g->vpt->type == TMPL_TYPE_XLAT) ||
 		    (g->vpt->type == TMPL_TYPE_EXEC)) {
 			char *p;
+			ssize_t len;
 
-			if (tmpl_aexpand(request, &p, request, g->vpt, NULL, NULL) < 0) goto find_null_case;
+			len = tmpl_aexpand(request, &p, request, g->vpt, NULL, NULL);
+			if (len < 0) goto find_null_case;
 			data.strvalue = p;
-			tmpl_init(&vpt, TMPL_TYPE_LITERAL, data.strvalue, talloc_array_length(data.strvalue) - 1);
+			tmpl_init(&vpt, TMPL_TYPE_LITERAL, data.strvalue, len);
 		}
 
 		/*
@@ -911,7 +919,7 @@ redo:
 
 	do_null_case:
 		talloc_free(data.ptr);
-		modcall_child(request, component, depth + 1, entry, found, &result);
+		modcall_child(request, component, depth + 1, entry, found, &result, true);
 		MOD_LOG_CLOSE_BRACE;
 		goto calculate_result;
 	} /* MOD_SWITCH */
@@ -940,12 +948,10 @@ redo:
 			}
 		}
 
-		MOD_LOG_OPEN_BRACE;
-
 		if (c->type == MOD_LOAD_BALANCE) {
 			modcall_child(request, component,
 				      depth + 1, entry, found,
-				      &result);
+				      &result, false);
 
 		} else {
 			this = found;
@@ -953,7 +959,7 @@ redo:
 			do {
 				modcall_child(request, component,
 					      depth + 1, entry, this,
-					      &result);
+					      &result, false);
 				if (this->actions[result] == MOD_ACTION_RETURN) {
 					priority = -1;
 					break;
@@ -1004,7 +1010,7 @@ redo:
 			radius_xlat(buffer, sizeof(buffer), request, mx->xlat_name, NULL, NULL);
 		} else {
 			RDEBUG("`%s`", mx->xlat_name);
-			radius_exec_program(NULL, 0, NULL, request, mx->xlat_name, request->packet->vps,
+			radius_exec_program(request, NULL, 0, NULL, request, mx->xlat_name, request->packet->vps,
 					    false, true, EXEC_TIMEOUT);
 		}
 
@@ -1076,7 +1082,6 @@ calculate_result:
 	 */
 	if (entry->unwind == MOD_BREAK) {
 		RDEBUG2("# unwind to enclosing foreach");
-		entry->unwind = 0;
 		goto finish;
 	}
 
@@ -1085,9 +1090,11 @@ calculate_result:
 	}
 
 next_sibling:
-	entry->c = entry->c->next;
+	if (do_next_sibling) {
+		entry->c = entry->c->next;
 
-	if (entry->c) goto redo;
+		if (entry->c) goto redo;
+	}
 
 finish:
 	/*
@@ -1120,7 +1127,7 @@ int modcall(rlm_components_t component, modcallable *c, REQUEST *request)
 	/*
 	 *	Call the main handler.
 	 */
-	if (!modcall_recurse(request, component, 0, &stack[0])) {
+	if (!modcall_recurse(request, component, 0, &stack[0], true)) {
 		return RLM_MODULE_FAIL;
 	}
 
@@ -1182,10 +1189,10 @@ static void dump_tree(rlm_components_t comp, modcallable *c)
 #endif
 
 /* These are the default actions. For each component, the group{} block
- * behaves like the code from the old module_*() function. redundant{} and
- * append{} are based on my guesses of what they will be used for. --Pac. */
+ * behaves like the code from the old module_*() function. redundant{}
+ * are based on my guesses of what they will be used for. --Pac. */
 static const int
-defaultactions[RLM_COMPONENT_COUNT][GROUPTYPE_COUNT][RLM_MODULE_NUMCODES] =
+defaultactions[MOD_COUNT][GROUPTYPE_COUNT][RLM_MODULE_NUMCODES] =
 {
 	/* authenticate */
 	{
@@ -1210,18 +1217,6 @@ defaultactions[RLM_COMPONENT_COUNT][GROUPTYPE_COUNT][RLM_MODULE_NUMCODES] =
 			MOD_ACTION_RETURN,	/* invalid  */
 			MOD_ACTION_RETURN,	/* userlock */
 			MOD_ACTION_RETURN,	/* notfound */
-			MOD_ACTION_RETURN,	/* noop     */
-			MOD_ACTION_RETURN	/* updated  */
-		},
-		/* append */
-		{
-			MOD_ACTION_RETURN,	/* reject   */
-			1,			/* fail     */
-			MOD_ACTION_RETURN,	/* ok       */
-			MOD_ACTION_RETURN,	/* handled  */
-			MOD_ACTION_RETURN,	/* invalid  */
-			MOD_ACTION_RETURN,	/* userlock */
-			2,			/* notfound */
 			MOD_ACTION_RETURN,	/* noop     */
 			MOD_ACTION_RETURN	/* updated  */
 		}
@@ -1251,18 +1246,6 @@ defaultactions[RLM_COMPONENT_COUNT][GROUPTYPE_COUNT][RLM_MODULE_NUMCODES] =
 			MOD_ACTION_RETURN,	/* notfound */
 			MOD_ACTION_RETURN,	/* noop     */
 			MOD_ACTION_RETURN	/* updated  */
-		},
-		/* append */
-		{
-			MOD_ACTION_RETURN,	/* reject   */
-			1,			/* fail     */
-			MOD_ACTION_RETURN,	/* ok       */
-			MOD_ACTION_RETURN,	/* handled  */
-			MOD_ACTION_RETURN,	/* invalid  */
-			MOD_ACTION_RETURN,	/* userlock */
-			2,			/* notfound */
-			MOD_ACTION_RETURN,	/* noop     */
-			MOD_ACTION_RETURN	/* updated  */
 		}
 	},
 	/* preacct */
@@ -1288,18 +1271,6 @@ defaultactions[RLM_COMPONENT_COUNT][GROUPTYPE_COUNT][RLM_MODULE_NUMCODES] =
 			MOD_ACTION_RETURN,	/* invalid  */
 			MOD_ACTION_RETURN,	/* userlock */
 			MOD_ACTION_RETURN,	/* notfound */
-			MOD_ACTION_RETURN,	/* noop     */
-			MOD_ACTION_RETURN	/* updated  */
-		},
-		/* append */
-		{
-			MOD_ACTION_RETURN,	/* reject   */
-			1,			/* fail     */
-			MOD_ACTION_RETURN,	/* ok       */
-			MOD_ACTION_RETURN,	/* handled  */
-			MOD_ACTION_RETURN,	/* invalid  */
-			MOD_ACTION_RETURN,	/* userlock */
-			2,			/* notfound */
 			MOD_ACTION_RETURN,	/* noop     */
 			MOD_ACTION_RETURN	/* updated  */
 		}
@@ -1329,18 +1300,6 @@ defaultactions[RLM_COMPONENT_COUNT][GROUPTYPE_COUNT][RLM_MODULE_NUMCODES] =
 			1,			/* notfound */
 			2,			/* noop     */
 			4			/* updated  */
-		},
-		/* append */
-		{
-			MOD_ACTION_RETURN,	/* reject   */
-			1,			/* fail     */
-			MOD_ACTION_RETURN,	/* ok       */
-			MOD_ACTION_RETURN,	/* handled  */
-			MOD_ACTION_RETURN,	/* invalid  */
-			MOD_ACTION_RETURN,	/* userlock */
-			2,			/* notfound */
-			MOD_ACTION_RETURN,	/* noop     */
-			MOD_ACTION_RETURN	/* updated  */
 		}
 	},
 	/* checksimul */
@@ -1358,18 +1317,6 @@ defaultactions[RLM_COMPONENT_COUNT][GROUPTYPE_COUNT][RLM_MODULE_NUMCODES] =
 			MOD_ACTION_RETURN	/* updated  */
 		},
 		/* redundant */
-		{
-			MOD_ACTION_RETURN,	/* reject   */
-			1,			/* fail     */
-			MOD_ACTION_RETURN,	/* ok       */
-			MOD_ACTION_RETURN,	/* handled  */
-			MOD_ACTION_RETURN,	/* invalid  */
-			MOD_ACTION_RETURN,	/* userlock */
-			MOD_ACTION_RETURN,	/* notfound */
-			MOD_ACTION_RETURN,	/* noop     */
-			MOD_ACTION_RETURN	/* updated  */
-		},
-		/* append */
 		{
 			MOD_ACTION_RETURN,	/* reject   */
 			1,			/* fail     */
@@ -1407,18 +1354,6 @@ defaultactions[RLM_COMPONENT_COUNT][GROUPTYPE_COUNT][RLM_MODULE_NUMCODES] =
 			MOD_ACTION_RETURN,	/* notfound */
 			MOD_ACTION_RETURN,	/* noop     */
 			MOD_ACTION_RETURN	/* updated  */
-		},
-		/* append */
-		{
-			MOD_ACTION_RETURN,	/* reject   */
-			1,			/* fail     */
-			MOD_ACTION_RETURN,	/* ok       */
-			MOD_ACTION_RETURN,	/* handled  */
-			MOD_ACTION_RETURN,	/* invalid  */
-			MOD_ACTION_RETURN,	/* userlock */
-			2,			/* notfound */
-			MOD_ACTION_RETURN,	/* noop     */
-			MOD_ACTION_RETURN	/* updated  */
 		}
 	},
 	/* post-proxy */
@@ -1446,18 +1381,6 @@ defaultactions[RLM_COMPONENT_COUNT][GROUPTYPE_COUNT][RLM_MODULE_NUMCODES] =
 			MOD_ACTION_RETURN,	/* notfound */
 			MOD_ACTION_RETURN,	/* noop     */
 			MOD_ACTION_RETURN	/* updated  */
-		},
-		/* append */
-		{
-			MOD_ACTION_RETURN,	/* reject   */
-			1,			/* fail     */
-			MOD_ACTION_RETURN,	/* ok       */
-			MOD_ACTION_RETURN,	/* handled  */
-			MOD_ACTION_RETURN,	/* invalid  */
-			MOD_ACTION_RETURN,	/* userlock */
-			2,			/* notfound */
-			MOD_ACTION_RETURN,	/* noop     */
-			MOD_ACTION_RETURN	/* updated  */
 		}
 	},
 	/* post-auth */
@@ -1483,18 +1406,6 @@ defaultactions[RLM_COMPONENT_COUNT][GROUPTYPE_COUNT][RLM_MODULE_NUMCODES] =
 			MOD_ACTION_RETURN,	/* invalid  */
 			MOD_ACTION_RETURN,	/* userlock */
 			MOD_ACTION_RETURN,	/* notfound */
-			MOD_ACTION_RETURN,	/* noop     */
-			MOD_ACTION_RETURN	/* updated  */
-		},
-		/* append */
-		{
-			MOD_ACTION_RETURN,	/* reject   */
-			1,			/* fail     */
-			MOD_ACTION_RETURN,	/* ok       */
-			MOD_ACTION_RETURN,	/* handled  */
-			MOD_ACTION_RETURN,	/* invalid  */
-			MOD_ACTION_RETURN,	/* userlock */
-			2,			/* notfound */
 			MOD_ACTION_RETURN,	/* noop     */
 			MOD_ACTION_RETURN	/* updated  */
 		}
@@ -1526,18 +1437,6 @@ defaultactions[RLM_COMPONENT_COUNT][GROUPTYPE_COUNT][RLM_MODULE_NUMCODES] =
 			MOD_ACTION_RETURN,	/* notfound */
 			MOD_ACTION_RETURN,	/* noop     */
 			MOD_ACTION_RETURN	/* updated  */
-		},
-		/* append */
-		{
-			MOD_ACTION_RETURN,	/* reject   */
-			1,			/* fail     */
-			MOD_ACTION_RETURN,	/* ok       */
-			MOD_ACTION_RETURN,	/* handled  */
-			MOD_ACTION_RETURN,	/* invalid  */
-			MOD_ACTION_RETURN,	/* userlock */
-			2,			/* notfound */
-			MOD_ACTION_RETURN,	/* noop     */
-			MOD_ACTION_RETURN	/* updated  */
 		}
 	},
 	/* send-coa */
@@ -1565,21 +1464,37 @@ defaultactions[RLM_COMPONENT_COUNT][GROUPTYPE_COUNT][RLM_MODULE_NUMCODES] =
 			MOD_ACTION_RETURN,	/* notfound */
 			MOD_ACTION_RETURN,	/* noop     */
 			MOD_ACTION_RETURN	/* updated  */
-		},
-		/* append */
-		{
-			MOD_ACTION_RETURN,	/* reject   */
-			1,			/* fail     */
-			MOD_ACTION_RETURN,	/* ok       */
-			MOD_ACTION_RETURN,	/* handled  */
-			MOD_ACTION_RETURN,	/* invalid  */
-			MOD_ACTION_RETURN,	/* userlock */
-			2,			/* notfound */
-			MOD_ACTION_RETURN,	/* noop     */
-			MOD_ACTION_RETURN	/* updated  */
 		}
 	}
 #endif
+};
+
+static const int authtype_actions[GROUPTYPE_COUNT][RLM_MODULE_NUMCODES] =
+{
+	/* group */
+	{
+		MOD_ACTION_RETURN,	/* reject   */
+		MOD_ACTION_RETURN,	/* fail     */
+		4,			/* ok       */
+		MOD_ACTION_RETURN,	/* handled  */
+		MOD_ACTION_RETURN,	/* invalid  */
+		MOD_ACTION_RETURN,	/* userlock */
+		1,			/* notfound */
+		2,			/* noop     */
+		3			/* updated  */
+	},
+	/* redundant */
+	{
+		MOD_ACTION_RETURN,	/* reject   */
+		1,			/* fail     */
+		MOD_ACTION_RETURN,	/* ok       */
+		MOD_ACTION_RETURN,	/* handled  */
+		MOD_ACTION_RETURN,	/* invalid  */
+		MOD_ACTION_RETURN,	/* userlock */
+		MOD_ACTION_RETURN,	/* notfound */
+		MOD_ACTION_RETURN,	/* noop     */
+		MOD_ACTION_RETURN	/* updated  */
+	}
 };
 
 /** Validate and fixup a map that's part of an update section.
@@ -1588,7 +1503,7 @@ defaultactions[RLM_COMPONENT_COUNT][GROUPTYPE_COUNT][RLM_MODULE_NUMCODES] =
  * @param ctx data to pass to fixup function (currently unused).
  * @return 0 if valid else -1.
  */
-int modcall_fixup_update(value_pair_map_t *map, UNUSED void *ctx)
+int modcall_fixup_update(vp_map_t *map, UNUSED void *ctx)
 {
 	CONF_PAIR *cp = cf_item_to_pair(map->ci);
 
@@ -1620,7 +1535,7 @@ int modcall_fixup_update(value_pair_map_t *map, UNUSED void *ctx)
 			     cf_pair_filename(cp), cf_pair_lineno(cp));
 		}
 
-		tmpl_free(&map->rhs);
+		TALLOC_FREE(map->rhs);
 
 		map->rhs = tmpl_alloc(map, TMPL_TYPE_NULL, NULL, 0);
 	}
@@ -1641,22 +1556,11 @@ int modcall_fixup_update(value_pair_map_t *map, UNUSED void *ctx)
 	/*
 	 *	Depending on the attribute type, some operators are disallowed.
 	 */
-	if (map->lhs->type == TMPL_TYPE_ATTR) {
-		switch (map->op) {
-		default:
-			cf_log_err(map->ci, "Invalid operator for attribute");
-			return -1;
-
-		case T_OP_EQ:
-		case T_OP_CMP_EQ:
-		case T_OP_ADD:
-		case T_OP_SUB:
-		case T_OP_LE:
-		case T_OP_GE:
-		case T_OP_CMP_FALSE:
-		case T_OP_SET:
-			break;
-		}
+	if ((map->lhs->type == TMPL_TYPE_ATTR) && (!fr_assignment_op[map->op] && !fr_equality_op[map->op])) {
+		cf_log_err(map->ci, "Invalid operator \"%s\" in update section.  "
+			   "Only assignment or filter operators are allowed",
+			   fr_int2str(fr_tokens, map->op, "<INVALID>"));
+		return -1;
 	}
 
 	if (map->lhs->type == TMPL_TYPE_LIST) {
@@ -1696,7 +1600,7 @@ int modcall_fixup_update(value_pair_map_t *map, UNUSED void *ctx)
 
 		case T_OP_SET:
 			if (map->rhs->type == TMPL_TYPE_EXEC) {
-				WARN("%s[%d] Please change ':=' to '=' for list assignment",
+				WARN("%s[%d]: Please change ':=' to '=' for list assignment",
 				     cf_pair_filename(cp), cf_pair_lineno(cp));
 			}
 
@@ -1742,8 +1646,26 @@ int modcall_fixup_update(value_pair_map_t *map, UNUSED void *ctx)
 		    (map->lhs->tmpl_da->type == PW_TYPE_STRING) &&
 		    (cf_pair_value_type(cp) == T_SINGLE_QUOTED_STRING)) {
 			tmpl_cast_in_place_str(map->rhs);
+
 		} else {
-			if (!tmpl_cast_in_place(map->rhs, map->lhs->tmpl_da->type, map->lhs->tmpl_da)) {
+			/*
+			 *	RHS is hex, try to parse it as
+			 *	type-specific data.
+			 */
+			if (map->lhs->auto_converted &&
+			    (map->rhs->name[0] == '0') && (map->rhs->name[1] == 'x') &&
+			    (map->rhs->len > 2) && ((map->rhs->len & 0x01) == 0)) {
+				vp_tmpl_t *vpt = map->rhs;
+				map->rhs = NULL;
+
+				if (!map_cast_from_hex(map, T_BARE_WORD, vpt->name)) {
+					map->rhs = vpt;
+					cf_log_err(map->ci, "%s", fr_strerror());
+					return -1;
+				}
+				talloc_free(vpt);
+
+			} else if (tmpl_cast_in_place(map->rhs, map->lhs->tmpl_da->type, map->lhs->tmpl_da) < 0) {
 				cf_log_err(map->ci, "%s", fr_strerror());
 				return -1;
 			}
@@ -1780,7 +1702,7 @@ static modcallable *do_compile_modupdate(modcallable *parent, rlm_components_t c
 	modgroup *g;
 	modcallable *csingle;
 
-	value_pair_map_t *head;
+	vp_map_t *head;
 
 	/*
 	 *	This looks at cs->name2 to determine which list to update
@@ -1827,7 +1749,7 @@ static modcallable *do_compile_modswitch (modcallable *parent, rlm_components_t 
 	modcallable *csingle;
 	modgroup *g;
 	ssize_t slen;
-	value_pair_tmpl_t *vpt;
+	vp_tmpl_t *vpt;
 
 	name2 = cf_section_name2(cs);
 	if (!name2) {
@@ -1847,7 +1769,7 @@ static modcallable *do_compile_modswitch (modcallable *parent, rlm_components_t 
 	 *	will fix it up.
 	 */
 	type = cf_section_name2_type(cs);
-	slen = tmpl_afrom_str(cs, &vpt, name2, strlen(name2), type, REQUEST_CURRENT, PAIR_LIST_REQUEST);
+	slen = tmpl_afrom_str(cs, &vpt, name2, strlen(name2), type, REQUEST_CURRENT, PAIR_LIST_REQUEST, true);
 	if ((slen < 0) && ((type != T_BARE_WORD) || (name2[0] != '&'))) {
 		char *spaces, *text;
 
@@ -1935,7 +1857,7 @@ static modcallable *do_compile_modcase(modcallable *parent, rlm_components_t com
 	char const *name2;
 	modcallable *csingle;
 	modgroup *g;
-	value_pair_tmpl_t *vpt;
+	vp_tmpl_t *vpt;
 
 	if (!parent || (parent->type != MOD_SWITCH)) {
 		cf_log_err_cs(cs, "\"case\" statements may only appear within a \"switch\" section");
@@ -1953,7 +1875,7 @@ static modcallable *do_compile_modcase(modcallable *parent, rlm_components_t com
 
 		type = cf_section_name2_type(cs);
 
-		slen = tmpl_afrom_str(cs, &vpt, name2, strlen(name2), type, REQUEST_CURRENT, PAIR_LIST_REQUEST);
+		slen = tmpl_afrom_str(cs, &vpt, name2, strlen(name2), type, REQUEST_CURRENT, PAIR_LIST_REQUEST, true);
 		if ((slen < 0) && ((type != T_BARE_WORD) || (name2[0] != '&'))) {
 			char *spaces, *text;
 
@@ -2022,7 +1944,7 @@ static modcallable *do_compile_modforeach(modcallable *parent,
 	modcallable *csingle;
 	modgroup *g;
 	ssize_t slen;
-	value_pair_tmpl_t *vpt;
+	vp_tmpl_t *vpt;
 
 	name2 = cf_section_name2(cs);
 	if (!name2) {
@@ -2043,7 +1965,7 @@ static modcallable *do_compile_modforeach(modcallable *parent,
 	 *	will fix it up.
 	 */
 	type = cf_section_name2_type(cs);
-	slen = tmpl_afrom_str(cs, &vpt, name2, strlen(name2), type, REQUEST_CURRENT, PAIR_LIST_REQUEST);
+	slen = tmpl_afrom_str(cs, &vpt, name2, strlen(name2), type, REQUEST_CURRENT, PAIR_LIST_REQUEST, true);
 	if ((slen < 0) && ((type != T_BARE_WORD) || (name2[0] != '&'))) {
 		char *spaces, *text;
 
@@ -2229,6 +2151,96 @@ static int all_children_are_modules(CONF_SECTION *cs, char const *name)
 	return 1;
 }
 
+/** Load a named module from "instantiate" or "policy".
+ *
+ * If it's "foo.method", look for "foo", and return "method" as the method
+ * we wish to use, instead of the input component.
+ *
+ * @param[out] pcomponent Where to write the method we found, if any.  If no method is specified
+ *	will be set to MOD_COUNT.
+ * @param[in] real_name Complete name string e.g. foo.authorize.
+ * @param[in] virtual_name Virtual module name e.g. foo.
+ * @param[in] method_name Method override (may be NULL) or the method name e.g. authorize.
+ * @return the CONF_SECTION specifying the virtual module.
+ */
+static CONF_SECTION *virtual_module_find_cs(rlm_components_t *pcomponent,
+					    char const *real_name, char const *virtual_name, char const *method_name)
+{
+	CONF_SECTION *cs, *subcs;
+	rlm_components_t method = *pcomponent;
+	char buffer[256];
+
+	/*
+	 *	Turn the method name into a method enum.
+	 */
+	if (method_name) {
+		rlm_components_t i;
+
+		for (i = MOD_AUTHENTICATE; i < MOD_COUNT; i++) {
+			if (strcmp(comp2str[i], method_name) == 0) break;
+		}
+
+		if (i != MOD_COUNT) {
+			method = i;
+		} else {
+			method_name = NULL;
+			virtual_name = real_name;
+		}
+	}
+
+	/*
+	 *	Look for "foo" in the "instantiate" section.  If we
+	 *	find it, AND there's no method name, we've found the
+	 *	right thing.
+	 *
+	 *	Return it to the caller, with the updated method.
+	 */
+	cs = cf_section_find("instantiate");
+	if (cs) {
+		/*
+		 *	Found "foo".  Load it as "foo", or "foo.method".
+		 */
+		subcs = cf_section_sub_find_name2(cs, NULL, virtual_name);
+		if (subcs) {
+			*pcomponent = method;
+			return subcs;
+		}
+	}
+
+	/*
+	 *	Look for it in "policy".
+	 *
+	 *	If there's no policy section, we can't do anything else.
+	 */
+	cs = cf_section_find("policy");
+	if (!cs) return NULL;
+
+	/*
+	 *	"foo.authorize" means "load policy "foo" as method "authorize".
+	 *
+	 *	And bail out if there's no policy "foo".
+	 */
+	if (method_name) {
+		subcs = cf_section_sub_find_name2(cs, NULL, virtual_name);
+		if (subcs) *pcomponent = method;
+
+		return subcs;
+	}
+
+	/*
+	 *	"foo" means "look for foo.component" first, to allow
+	 *	method overrides.  If that's not found, just look for
+	 *	a policy "foo".
+	 *
+	 */
+	snprintf(buffer, sizeof(buffer), "%s.%s",
+		 virtual_name, comp2str[method]);
+	subcs = cf_section_sub_find_name2(cs, NULL, buffer);
+	if (subcs) return subcs;
+
+	return cf_section_sub_find_name2(cs, NULL, virtual_name);
+}
+
 
 /*
  *	Compile one entry of a module call.
@@ -2276,12 +2288,6 @@ static modcallable *do_compile_modsingle(modcallable *parent,
 
 			return do_compile_modgroup(parent, component, cs,
 						   GROUPTYPE_REDUNDANT,
-						   grouptype, MOD_GROUP);
-
-		} else if (strcmp(modrefname, "append") == 0) {
-			*modname = name2;
-			return do_compile_modgroup(parent, component, cs,
-						   GROUPTYPE_APPEND,
 						   grouptype, MOD_GROUP);
 
 		} else if (strcmp(modrefname, "load-balance") == 0) {
@@ -2511,31 +2517,21 @@ static modcallable *do_compile_modsingle(modcallable *parent,
 	 *	policy { ... name { .. } .. }
 	 *	policy { ... name.method { .. } .. }
 	 *
-	 *	The "instantiate" virtual modules are identical to the
-	 *	policies at this point.  We should probably get rid of
-	 *	the "instantiate" ones, as they're duplicate and
-	 *	confusing.
+	 *	The only difference between things in "instantiate"
+	 *	and "policy" is that "instantiate" will cause modules
+	 *	to be instantiated in a particular order.
 	 */
 	subcs = NULL;
-	cs = cf_section_find("instantiate");
-	if (cs) subcs = cf_section_sub_find_name2(cs, NULL,
-						  modrefname);
-	if (!subcs &&
-	    (cs = cf_section_find("policy")) != NULL) {
+	p = strrchr(modrefname, '.');
+	if (!p) {
+		subcs = virtual_module_find_cs(&method, modrefname, modrefname, NULL);
+	} else {
 		char buffer[256];
 
-		snprintf(buffer, sizeof(buffer), "%s.%s",
-			 modrefname, comp2str[component]);
+		strlcpy(buffer, modrefname, sizeof(buffer));
+		buffer[p - modrefname] = '\0';
 
-		/*
-		 *	Prefer name.section, then name.
-		 */
-		subcs = cf_section_sub_find_name2(cs, NULL,
-							  buffer);
-		if (!subcs) {
-			subcs = cf_section_sub_find_name2(cs, NULL,
-							  modrefname);
-		}
+		subcs = virtual_module_find_cs(&method, modrefname, buffer, buffer + (p - modrefname) + 1);
 	}
 
 	/*
@@ -2573,7 +2569,7 @@ static modcallable *do_compile_modsingle(modcallable *parent,
 		 */
 		if (cf_section_name2(subcs)) {
 			csingle = do_compile_modsingle(parent,
-						       component,
+						       method,
 						       cf_section_to_item(subcs),
 						       grouptype,
 						       modname);
@@ -2588,7 +2584,7 @@ static modcallable *do_compile_modsingle(modcallable *parent,
 			 *	group foo { ...
 			 */
 			csingle = do_compile_modgroup(parent,
-						      component,
+						      method,
 						      subcs,
 						      GROUPTYPE_SIMPLE,
 						      grouptype, MOD_GROUP);
@@ -2626,63 +2622,17 @@ static modcallable *do_compile_modsingle(modcallable *parent,
 		 *	modules belongs in raddb/mods-available/,
 		 *	which isn't loaded into the "modules" section.
 		 */
-		if (cf_section_sub_find_name2(modules, NULL, realname)) {
-			this = find_module_instance(modules, realname, true);
-			if (this) goto allocate_csingle;
-
-			/*
-			 *
-			 */
-			if (realname != modrefname) {
-				return NULL;
-			}
-
-		} else {
-			/*
-			 *	We were asked to MAYBE load it and it
-			 *	doesn't exist.  Return a soft error.
-			 */
-			if (realname != modrefname) {
-				*modname = modrefname;
-				return NULL;
-			}
-		}
-	}
-
-	/*
-	 *	No module found by that name.  Maybe we're calling
-	 *	module.method
-	 */
-	p = strrchr(modrefname, '.');
-	if (p) {
-		rlm_components_t i;
-		p++;
+		this = module_instantiate_method(modules, realname, &method);
+		if (this) goto allocate_csingle;
 
 		/*
-		 *	Find the component.
+		 *	We were asked to MAYBE load it and it
+		 *	doesn't exist.  Return a soft error.
 		 */
-		for (i = RLM_COMPONENT_AUTH;
-		     i < RLM_COMPONENT_COUNT;
-		     i++) {
-			if (strcmp(p, comp2str[i]) == 0) {
-				char buffer[256];
-
-				strlcpy(buffer, modrefname, sizeof(buffer));
-				buffer[p - modrefname - 1] = '\0';
-				component = i;
-
-				this = find_module_instance(modules, buffer, true);
-				if (this) {
-					method = i;
-					goto allocate_csingle;
-				}
-			}
+		if (realname != modrefname) {
+			*modname = modrefname;
+			return NULL;
 		}
-
-		/*
-		 *	FIXME: check for "module", and give error "no
-		 *	such component" when we don't find the method.
-		 */
 	}
 
 	/*
@@ -2715,11 +2665,11 @@ allocate_csingle:
 	csingle = mod_singletocallable(single);
 	csingle->parent = parent;
 	csingle->next = NULL;
-	if (!parent || (component != RLM_COMPONENT_AUTH)) {
+	if (!parent || (component != MOD_AUTHENTICATE)) {
 		memcpy(csingle->actions, defaultactions[component][grouptype],
 		       sizeof csingle->actions);
 	} else { /* inside Auth-Type has different rules */
-		memcpy(csingle->actions, defaultactions[RLM_COMPONENT_AUTZ][grouptype],
+		memcpy(csingle->actions, authtype_actions[grouptype],
 		       sizeof csingle->actions);
 	}
 	rad_assert(modrefname != NULL);
@@ -2875,9 +2825,18 @@ static modcallable *do_compile_modgroup(modcallable *parent,
 
 			rad_assert(p->tail != NULL);
 
+			/*
+			 *	We're in the process of compiling the
+			 *	section, so the parent's tail is the
+			 *	previous "if" statement.
+			 */
 			f = mod_callabletogroup(p->tail);
-			rad_assert((f->mc.type == MOD_IF) ||
-				   (f->mc.type == MOD_ELSIF));
+			if ((f->mc.type != MOD_IF) &&
+			    (f->mc.type != MOD_ELSIF)) {
+				cf_log_err_cs(g->cs, "Invalid location for 'elsif'.  There is no preceding 'if' statement");
+				talloc_free(g);
+				return NULL;
+			}
 
 			/*
 			 *	If we took the previous condition, we
@@ -2907,8 +2866,12 @@ static modcallable *do_compile_modgroup(modcallable *parent,
 			rad_assert(p->tail != NULL);
 
 			f = mod_callabletogroup(p->tail);
-			rad_assert((f->mc.type == MOD_IF) ||
-				   (f->mc.type == MOD_ELSIF));
+			if ((f->mc.type != MOD_IF) &&
+			    (f->mc.type != MOD_ELSIF)) {
+				cf_log_err_cs(g->cs, "Invalid location for 'else'.  There is no preceding 'if' statement");
+				talloc_free(g);
+				return NULL;
+			}
 
 			/*
 			 *	If we took the previous condition, we
@@ -3004,10 +2967,10 @@ set_codes:
 	 */
 	for (i = 0; i < RLM_MODULE_NUMCODES; i++) {
 		if (!c->actions[i]) {
-			if (!parent || (component != RLM_COMPONENT_AUTH)) {
+			if (!parent || (component != MOD_AUTHENTICATE)) {
 				c->actions[i] = defaultactions[component][parentgrouptype][i];
 			} else { /* inside Auth-Type has different rules */
-				c->actions[i] = defaultactions[RLM_COMPONENT_AUTZ][parentgrouptype][i];
+				c->actions[i] = authtype_actions[parentgrouptype][i];
 			}
 		}
 	}
@@ -3043,7 +3006,7 @@ modcallable *compile_modgroup(modcallable *parent,
 					       GROUPTYPE_SIMPLE,
 					       GROUPTYPE_SIMPLE, MOD_GROUP);
 
-	if (debug_flag > 3) {
+	if (rad_debug_lvl > 3) {
 		modcall_debug(ret, 2);
 	}
 
@@ -3064,14 +3027,14 @@ void add_to_modcallable(modcallable *parent, modcallable *this)
 
 
 #ifdef WITH_UNLANG
-static bool pass2_xlat_compile(CONF_ITEM const *ci, value_pair_tmpl_t **pvpt, bool convert,
+static bool pass2_xlat_compile(CONF_ITEM const *ci, vp_tmpl_t **pvpt, bool convert,
 			       DICT_ATTR const *da)
 {
 	ssize_t slen;
 	char *fmt;
 	char const *error;
 	xlat_exp_t *head;
-	value_pair_tmpl_t *vpt;
+	vp_tmpl_t *vpt;
 
 	vpt = *pvpt;
 
@@ -3098,7 +3061,7 @@ static bool pass2_xlat_compile(CONF_ITEM const *ci, value_pair_tmpl_t **pvpt, bo
 	 *	Convert %{Attribute-Name} to &Attribute-Name
 	 */
 	if (convert) {
-		value_pair_tmpl_t *attr;
+		vp_tmpl_t *attr;
 
 		attr = xlat_to_tmpl_attr(talloc_parent(vpt), head);
 		if (attr) {
@@ -3123,13 +3086,13 @@ static bool pass2_xlat_compile(CONF_ITEM const *ci, value_pair_tmpl_t **pvpt, bo
 			if (cf_item_is_pair(ci)) {
 				CONF_PAIR *cp = cf_item_to_pair(ci);
 
-				WARN("%s[%d] Please change %%{%s} to &%s",
+				WARN("%s[%d]: Please change \"%%{%s}\" to &%s",
 				       cf_pair_filename(cp), cf_pair_lineno(cp),
 				       attr->name, attr->name);
 			} else {
 				CONF_SECTION *cs = cf_item_to_section(ci);
 
-				WARN("%s[%d] Please change %%{%s} to &%s",
+				WARN("%s[%d]: Please change \"%%{%s}\" to &%s",
 				       cf_section_filename(cs), cf_section_lineno(cs),
 				       attr->name, attr->name);
 			}
@@ -3150,7 +3113,7 @@ static bool pass2_xlat_compile(CONF_ITEM const *ci, value_pair_tmpl_t **pvpt, bo
 
 
 #ifdef HAVE_REGEX
-static bool pass2_regex_compile(CONF_ITEM const *ci, value_pair_tmpl_t *vpt)
+static bool pass2_regex_compile(CONF_ITEM const *ci, vp_tmpl_t *vpt)
 {
 	ssize_t slen;
 	regex_t *preg;
@@ -3197,7 +3160,7 @@ static bool pass2_regex_compile(CONF_ITEM const *ci, value_pair_tmpl_t *vpt)
 }
 #endif
 
-static bool pass2_fixup_undefined(CONF_ITEM const *ci, value_pair_tmpl_t *vpt)
+static bool pass2_fixup_undefined(CONF_ITEM const *ci, vp_tmpl_t *vpt)
 {
 	DICT_ATTR const *da;
 
@@ -3214,10 +3177,27 @@ static bool pass2_fixup_undefined(CONF_ITEM const *ci, value_pair_tmpl_t *vpt)
 	return true;
 }
 
-static bool pass2_callback(UNUSED void *ctx, fr_cond_t *c)
+static bool pass2_callback(void *ctx, fr_cond_t *c)
 {
-	value_pair_map_t *map;
+	vp_map_t *map;
+	vp_tmpl_t *vpt;
 
+	/*
+	 *	These don't get optimized.
+	 */
+	if ((c->type == COND_TYPE_TRUE) ||
+	    (c->type == COND_TYPE_FALSE)) {
+		return true;
+	}
+
+	/*
+	 *	Call children.
+	 */
+	if (c->type == COND_TYPE_CHILD) return pass2_callback(ctx, c->data.child);
+
+	/*
+	 *	A few simple checks here.
+	 */
 	if (c->type == COND_TYPE_EXISTS) {
 		if (c->data.vpt->type == TMPL_TYPE_XLAT) {
 			return pass2_xlat_compile(c->ci, &c->data.vpt, true, NULL);
@@ -3233,21 +3213,23 @@ static bool pass2_callback(UNUSED void *ctx, fr_cond_t *c)
 			if (!pass2_fixup_undefined(c->ci, c->data.vpt)) return false;
 			c->pass2_fixup = PASS2_FIXUP_NONE;
 		}
-		return true;
-	}
 
-	/*
-	 *	Maps have a paircompare fixup applied to them.
-	 *	Others get ignored.
-	 */
-	if (c->pass2_fixup == PASS2_FIXUP_NONE) {
-		if (c->type == COND_TYPE_MAP) {
-			map = c->data.map;
-			goto check_paircmp;
+		/*
+		 *	Convert virtual &Attr-Foo to "%{Attr-Foo}"
+		 */
+		vpt = c->data.vpt;
+		if ((vpt->type == TMPL_TYPE_ATTR) && vpt->tmpl_da->flags.virtual) {
+			vpt->tmpl_xlat = xlat_from_tmpl_attr(vpt, vpt);
+			vpt->type = TMPL_TYPE_XLAT_STRUCT;
 		}
 
 		return true;
 	}
+
+	/*
+	 *	And tons of complicated checks.
+	 */
+	rad_assert(c->type == COND_TYPE_MAP);
 
 	map = c->data.map;	/* shorter */
 
@@ -3285,7 +3267,6 @@ static bool pass2_callback(UNUSED void *ctx, fr_cond_t *c)
 		c->pass2_fixup = PASS2_FIXUP_NONE;
 	}
 
-check_paircmp:
 	/*
 	 *	Just in case someone adds a new fixup later.
 	 */
@@ -3297,13 +3278,88 @@ check_paircmp:
 	 */
 	if (map->lhs->type == TMPL_TYPE_XLAT) {
 		/*
-		 *	Don't compile the LHS to an attribute
-		 *	reference for now.  When we do that, we've got
-		 *	to check the RHS for type-specific data, and
-		 *	parse it to a TMPL_TYPE_DATA.
+		 *	Compile the LHS to an attribute reference only
+		 *	if the RHS is a literal.
+		 *
+		 *	@todo v3.1: allow anything anywhere.
 		 */
-		if (!pass2_xlat_compile(map->ci, &map->lhs, false, NULL)) {
-			return false;
+		if (map->rhs->type != TMPL_TYPE_LITERAL) {
+			if (!pass2_xlat_compile(map->ci, &map->lhs, false, NULL)) {
+				return false;
+			}
+		} else {
+			if (!pass2_xlat_compile(map->ci, &map->lhs, true, NULL)) {
+				return false;
+			}
+
+			/*
+			 *	Attribute compared to a literal gets
+			 *	the literal cast to the data type of
+			 *	the attribute.
+			 *
+			 *	The code in parser.c did this for
+			 *
+			 *		&Attr == data
+			 *
+			 *	But now we've just converted "%{Attr}"
+			 *	to &Attr, so we've got to do it again.
+			 */
+			if ((map->lhs->type == TMPL_TYPE_ATTR) &&
+			    (map->rhs->type == TMPL_TYPE_LITERAL)) {
+				/*
+				 *	RHS is hex, try to parse it as
+				 *	type-specific data.
+				 */
+				if (map->lhs->auto_converted &&
+				    (map->rhs->name[0] == '0') && (map->rhs->name[1] == 'x') &&
+				    (map->rhs->len > 2) && ((map->rhs->len & 0x01) == 0)) {
+					vpt = map->rhs;
+					map->rhs = NULL;
+
+					if (!map_cast_from_hex(map, T_BARE_WORD, vpt->name)) {
+						map->rhs = vpt;
+						cf_log_err(map->ci, "%s", fr_strerror());
+						return -1;
+					}
+					talloc_free(vpt);
+
+				} else if ((map->rhs->len > 0) ||
+					   (map->op != T_OP_CMP_EQ) ||
+					   (map->lhs->tmpl_da->type == PW_TYPE_STRING) ||
+					   (map->lhs->tmpl_da->type == PW_TYPE_OCTETS)) {
+
+					if (tmpl_cast_in_place(map->rhs, map->lhs->tmpl_da->type, map->lhs->tmpl_da) < 0) {
+						cf_log_err(map->ci, "Failed to parse data type %s from string: %s",
+							   fr_int2str(dict_attr_types, map->lhs->tmpl_da->type, "<UNKNOWN>"),
+							   map->rhs->name);
+						return false;
+					} /* else the cast was successful */
+
+				} else {	/* RHS is empty, it's just a check for empty / non-empty string */
+					vpt = talloc_steal(c, map->lhs);
+					map->lhs = NULL;
+					talloc_free(c->data.map);
+
+					/*
+					 *	"%{Foo}" == '' ---> !Foo
+					 *	"%{Foo}" != '' ---> Foo
+					 */
+					c->type = COND_TYPE_EXISTS;
+					c->data.vpt = vpt;
+					c->negate = !c->negate;
+
+					WARN("%s[%d]: Please change (\"%%{%s}\" %s '') to %c&%s",
+					     cf_section_filename(cf_item_to_section(c->ci)),
+					     cf_section_lineno(cf_item_to_section(c->ci)),
+					     vpt->name, c->negate ? "==" : "!=",
+					     c->negate ? '!' : ' ', vpt->name);
+
+					/*
+					 *	No more RHS, so we can't do more optimizations
+					 */
+					return true;
+				}
+			}
 		}
 	}
 
@@ -3341,11 +3397,10 @@ check_paircmp:
 	    (strncmp(map->lhs->name, "Foreach-Variable-", 17) == 0)) {
 		char *fmt;
 		ssize_t slen;
-		value_pair_tmpl_t *vpt;
 
 		fmt = talloc_asprintf(map->lhs, "%%{%s}", map->lhs->name);
 		slen = tmpl_afrom_str(map, &vpt, fmt, talloc_array_length(fmt) - 1,
-				      T_DOUBLE_QUOTED_STRING, REQUEST_CURRENT, PAIR_LIST_REQUEST);
+				      T_DOUBLE_QUOTED_STRING, REQUEST_CURRENT, PAIR_LIST_REQUEST, true);
 		if (slen < 0) {
 			char *spaces, *text;
 
@@ -3373,6 +3428,32 @@ check_paircmp:
 	}
 	rad_assert(map->lhs->type != TMPL_TYPE_REGEX);
 #endif
+
+	/*
+	 *	Convert &Packet-Type to "%{Packet-Type}", because
+	 *	these attributes don't really exist.  The code to
+	 *	find an attribute reference doesn't work, but the
+	 *	xlat code does.
+	 */
+	vpt = c->data.map->lhs;
+	if ((vpt->type == TMPL_TYPE_ATTR) && vpt->tmpl_da->flags.virtual) {
+		if (!c->cast) c->cast = vpt->tmpl_da;
+		vpt->tmpl_xlat = xlat_from_tmpl_attr(vpt, vpt);
+		vpt->type = TMPL_TYPE_XLAT_STRUCT;
+	}
+
+	/*
+	 *	Convert RHS to expansions, too.
+	 */
+	vpt = c->data.map->rhs;
+	if ((vpt->type == TMPL_TYPE_ATTR) && vpt->tmpl_da->flags.virtual) {
+		vpt->tmpl_xlat = xlat_from_tmpl_attr(vpt, vpt);
+		vpt->type = TMPL_TYPE_XLAT_STRUCT;
+	}
+
+	/*
+	 *	@todo v3.1: do the same thing for the RHS...
+	 */
 
 	/*
 	 *	Only attributes can have a paircompare registered, and
@@ -3413,7 +3494,7 @@ check_paircmp:
 
 	/*
 	 *	Mark it as requiring a paircompare() call, instead of
-	 *	paircmp().
+	 *	fr_pair_cmp().
 	 */
 	c->pass2_fixup = PASS2_PAIRCOMPARE;
 
@@ -3426,7 +3507,7 @@ check_paircmp:
  */
 static bool modcall_pass2_update(modgroup *g)
 {
-	value_pair_map_t *map;
+	vp_map_t *map;
 
 	for (map = g->map; map != NULL; map = map->next) {
 		if (map->rhs->type == TMPL_TYPE_XLAT) {
@@ -3550,7 +3631,7 @@ bool modcall_pass2(modcallable *mc)
 
 				slen = tmpl_afrom_str(g->cs, &g->vpt, c->name, strlen(c->name),
 						      cf_section_name2_type(g->cs),
-						      REQUEST_CURRENT, PAIR_LIST_REQUEST);
+						      REQUEST_CURRENT, PAIR_LIST_REQUEST, true);
 				if (slen < 0) {
 					char *spaces, *text;
 
@@ -3583,6 +3664,14 @@ bool modcall_pass2(modcallable *mc)
 			}
 
 			/*
+			 *	Convert virtual &Attr-Foo to "%{Attr-Foo}"
+			 */
+			if ((g->vpt->type == TMPL_TYPE_ATTR) && g->vpt->tmpl_da->flags.virtual) {
+				g->vpt->tmpl_xlat = xlat_from_tmpl_attr(g->vpt, g->vpt);
+				g->vpt->type = TMPL_TYPE_XLAT_STRUCT;
+			}
+
+			/*
 			 *	We may have: switch Foo-Bar {
 			 *
 			 *	where Foo-Bar is an attribute defined
@@ -3592,10 +3681,10 @@ bool modcall_pass2(modcallable *mc)
 			 *	switch to using that.
 			 */
 			if (g->vpt->type == TMPL_TYPE_LITERAL) {
-				value_pair_tmpl_t *vpt;
+				vp_tmpl_t *vpt;
 
 				slen = tmpl_afrom_str(g->cs, &vpt, c->name, strlen(c->name), cf_section_name2_type(g->cs),
-						      REQUEST_CURRENT, PAIR_LIST_REQUEST);
+						      REQUEST_CURRENT, PAIR_LIST_REQUEST, true);
 				if (slen < 0) goto parse_error;
 				if (vpt->type == TMPL_TYPE_ATTR) {
 					talloc_free(g->vpt);
@@ -3614,9 +3703,9 @@ bool modcall_pass2(modcallable *mc)
 			if ((g->vpt->type == TMPL_TYPE_ATTR) &&
 			    (c->name[0] != '&')) {
 				WARN("%s[%d]: Please change %s to &%s",
-				       cf_section_filename(g->cs),
-				       cf_section_lineno(g->cs),
-				       c->name, c->name);
+				     cf_section_filename(g->cs),
+				     cf_section_lineno(g->cs),
+				     c->name, c->name);
 			}
 
 		do_children:
@@ -3649,7 +3738,7 @@ bool modcall_pass2(modcallable *mc)
 			    (cf_section_name2_type(g->cs) == T_BARE_WORD)) {
 				slen = tmpl_afrom_str(g->cs, &g->vpt, c->name, strlen(c->name),
 						      cf_section_name2_type(g->cs),
-						      REQUEST_CURRENT, PAIR_LIST_REQUEST);
+						      REQUEST_CURRENT, PAIR_LIST_REQUEST, true);
 				if (slen < 0) goto parse_error;
 			}
 
@@ -3677,7 +3766,7 @@ bool modcall_pass2(modcallable *mc)
 				if (f->vpt->type == TMPL_TYPE_ATTR) {
 					rad_assert(f->vpt->tmpl_da != NULL);
 
-					if (!tmpl_cast_in_place(g->vpt, f->vpt->tmpl_da->type, f->vpt->tmpl_da)) {
+					if (tmpl_cast_in_place(g->vpt, f->vpt->tmpl_da->type, f->vpt->tmpl_da) < 0) {
 						cf_log_err_cs(g->cs, "Invalid argument for case statement: %s",
 							      fr_strerror());
 						return false;
@@ -3714,6 +3803,14 @@ bool modcall_pass2(modcallable *mc)
 				}
 			}
 
+			/*
+			 *	Virtual attribute fixes for "case" statements, too.
+			 */
+			if ((g->vpt->type == TMPL_TYPE_ATTR) && g->vpt->tmpl_da->flags.virtual) {
+				g->vpt->tmpl_xlat = xlat_from_tmpl_attr(g->vpt, g->vpt);
+				g->vpt->type = TMPL_TYPE_XLAT_STRUCT;
+			}
+
 			if (!modcall_pass2(g->children)) return false;
 			g->done_pass2 = true;
 			break;
@@ -3745,7 +3842,7 @@ bool modcall_pass2(modcallable *mc)
 			 *	Check for that now.
 			 */
 			slen = tmpl_afrom_str(g->cs, &g->vpt, c->name, strlen(c->name), cf_section_name2_type(g->cs),
-					      REQUEST_CURRENT, PAIR_LIST_REQUEST);
+					      REQUEST_CURRENT, PAIR_LIST_REQUEST, true);
 			if (slen < 0) goto parse_error;
 
 		check_children:
@@ -3805,7 +3902,7 @@ void modcall_debug(modcallable *mc, int depth)
 {
 	modcallable *this;
 	modgroup *g;
-	value_pair_map_t *map;
+	vp_map_t *map;
 	char buffer[1024];
 
 	for (this = mc; this != NULL; this = this->next) {

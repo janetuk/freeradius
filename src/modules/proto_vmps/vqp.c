@@ -5,8 +5,7 @@
  *
  *   This library is free software; you can redistribute it and/or
  *   modify it under the terms of the GNU Lesser General Public
- *   the Free Software Foundation; either version 2 of the License, or (at
- *   your option) any later version. either
+ *   License as published by the Free Software Foundation; either
  *   version 2.1 of the License, or (at your option) any later version.
  *
  *   This library is distributed in the hope that it will be useful,
@@ -31,7 +30,7 @@ RCSID("$Id$")
 #define MAX_VMPS_LEN (MAX_STRING_LEN - 1)
 
 /* @todo: this is a hack */
-#  define debug_pair(vp)	do { if (fr_debug_flag && fr_log_fp) { \
+#  define debug_pair(vp)	do { if (fr_debug_lvl && fr_log_fp) { \
 					vp_print(fr_log_fp, vp); \
 				     } \
 				} while(0)
@@ -423,7 +422,7 @@ int vqp_decode(RADIUS_PACKET *packet)
 	if (packet->data_len < VQP_HDR_LEN) return -1;
 
 	fr_cursor_init(&cursor, &packet->vps);
-	vp = paircreate(packet, PW_VQP_PACKET_TYPE, 0);
+	vp = fr_pair_afrom_num(packet, PW_VQP_PACKET_TYPE, 0);
 	if (!vp) {
 		fr_strerror_printf("No memory");
 		return -1;
@@ -432,7 +431,7 @@ int vqp_decode(RADIUS_PACKET *packet)
 	debug_pair(vp);
 	fr_cursor_insert(&cursor, vp);
 
-	vp = paircreate(packet, PW_VQP_ERROR_CODE, 0);
+	vp = fr_pair_afrom_num(packet, PW_VQP_ERROR_CODE, 0);
 	if (!vp) {
 		fr_strerror_printf("No memory");
 		return -1;
@@ -441,7 +440,7 @@ int vqp_decode(RADIUS_PACKET *packet)
 	debug_pair(vp);
 	fr_cursor_insert(&cursor, vp);
 
-	vp = paircreate(packet, PW_VQP_SEQUENCE_NUMBER, 0);
+	vp = fr_pair_afrom_num(packet, PW_VQP_SEQUENCE_NUMBER, 0);
 	if (!vp) {
 		fr_strerror_printf("No memory");
 		return -1;
@@ -469,15 +468,22 @@ int vqp_decode(RADIUS_PACKET *packet)
 		 *	Hack to get the dictionaries to work correctly.
 		 */
 		attribute |= 0x2000;
-		vp = paircreate(packet, attribute, 0);
+		vp = fr_pair_afrom_num(packet, attribute, 0);
 		if (!vp) {
-			pairfree(&packet->vps);
+			fr_pair_list_free(&packet->vps);
 
 			fr_strerror_printf("No memory");
 			return -1;
 		}
 
 		switch (vp->da->type) {
+		case PW_TYPE_ETHERNET:
+			if (length != 6) goto unknown;
+
+			memcpy(&vp->vp_ether, ptr, 6);
+			vp->vp_length = 6;
+			break;
+
 		case PW_TYPE_IPV4_ADDR:
 			if (length == 4) {
 				memcpy(&vp->vp_ipaddr, ptr, 4);
@@ -490,15 +496,16 @@ int vqp_decode(RADIUS_PACKET *packet)
 			 *	valuepair so we must change it's da to an
 			 *	unknown attr.
 			 */
+		unknown:
 			vp->da = dict_unknown_afrom_fields(vp, vp->da->attr, vp->da->vendor);
 			/* FALL-THROUGH */
 
 		default:
 		case PW_TYPE_OCTETS:
 			if (length < 1024) {
-				pairmemcpy(vp, ptr, length);
+				fr_pair_value_memcpy(vp, ptr, length);
 			} else {
-				pairmemcpy(vp, ptr, 1024);
+				fr_pair_value_memcpy(vp, ptr, 1024);
 			}
 			break;
 
@@ -561,7 +568,7 @@ int vqp_encode(RADIUS_PACKET *packet, RADIUS_PACKET *original)
 
 	if (packet->data) return 0;
 
-	vp = pairfind(packet->vps, PW_VQP_PACKET_TYPE, 0, TAG_ANY);
+	vp = fr_pair_find_by_num(packet->vps, PW_VQP_PACKET_TYPE, 0, TAG_ANY);
 	if (!vp) {
 		fr_strerror_printf("Failed to find VQP-Packet-Type in response packet");
 		return -1;
@@ -576,7 +583,7 @@ int vqp_encode(RADIUS_PACKET *packet, RADIUS_PACKET *original)
 	length = VQP_HDR_LEN;
 	memset(vps, 0, sizeof(vps));
 
-	vp = pairfind(packet->vps, PW_VQP_ERROR_CODE, 0, TAG_ANY);
+	vp = fr_pair_find_by_num(packet->vps, PW_VQP_ERROR_CODE, 0, TAG_ANY);
 
 	/*
 	 *	FIXME: Map attributes from calling-station-Id, etc.
@@ -591,7 +598,7 @@ int vqp_encode(RADIUS_PACKET *packet, RADIUS_PACKET *original)
 	if (!vp) for (i = 0; i < VQP_MAX_ATTRIBUTES; i++) {
 		if (!contents[code][i]) break;
 
-		vps[i] = pairfind(packet->vps, contents[code][i] | 0x2000, 0, TAG_ANY);
+		vps[i] = fr_pair_find_by_num(packet->vps, contents[code][i] | 0x2000, 0, TAG_ANY);
 
 		/*
 		 *	FIXME: Print the name...
@@ -682,6 +689,10 @@ int vqp_encode(RADIUS_PACKET *packet, RADIUS_PACKET *original)
 		switch (vp->da->type) {
 		case PW_TYPE_IPV4_ADDR:
 			memcpy(ptr, &vp->vp_ipaddr, 4);
+			break;
+
+		case PW_TYPE_ETHERNET:
+			memcpy(ptr, vp->vp_ether, vp->vp_length);
 			break;
 
 		default:

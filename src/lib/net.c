@@ -1,8 +1,7 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or (at
- *   your option) any later version.
+ *   it under the terms of the GNU General Public License, version 2 of the
+ *   License as published by the Free Software Foundation.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -20,10 +19,31 @@
  * @brief Functions to parse raw packets.
  *
  * @author Arran Cudbard-Bell <a.cudbardb@freeradius.org>
- * @copyright 2014 Arran Cudbard-Bell <a.cudbardb@freeradius.org>
+ * @copyright 2014-2015 Arran Cudbard-Bell <a.cudbardb@freeradius.org>
  */
  #include <freeradius-devel/libradius.h>
  #include <freeradius-devel/net.h>
+
+/** Check whether fr_link_layer_offset can process a link_layer
+ *
+ * @param link_layer to check.
+ * @return true if supported, else false.
+ */
+bool fr_link_layer_supported(int link_layer)
+{
+	switch (link_layer) {
+	case DLT_EN10MB:
+	case DLT_RAW:
+	case DLT_NULL:
+	case DLT_LOOP:
+	case DLT_LINUX_SLL:
+	case DLT_PFLOG:
+		return true;
+
+	default:
+		return false;
+	}
+}
 
 /** Returns the length of the link layer header
  *
@@ -38,14 +58,14 @@
  *
  * @param data start of packet data.
  * @param len caplen.
- * @param link_type value returned from pcap_linktype.
+ * @param link_layer value returned from pcap_linktype.
  * @return the length of the header, or -1 on error.
  */
-ssize_t fr_link_layer_offset(uint8_t const *data, size_t len, int link_type)
+ssize_t fr_link_layer_offset(uint8_t const *data, size_t len, int link_layer)
 {
 	uint8_t const *p = data;
 
-	switch (link_type) {
+	switch (link_layer) {
 	case DLT_RAW:
 		break;
 
@@ -53,7 +73,10 @@ ssize_t fr_link_layer_offset(uint8_t const *data, size_t len, int link_type)
 	case DLT_LOOP:
 		p += 4;
 		if (((size_t)(p - data)) > len) {
-			goto ood;
+		ood:
+			fr_strerror_printf("Out of data, needed %zu bytes, have %zu bytes",
+					   (size_t)(p - data), len);
+			return -1;
 		}
 		break;
 
@@ -111,16 +134,11 @@ ssize_t fr_link_layer_offset(uint8_t const *data, size_t len, int link_type)
 		break;
 
 	default:
-		fr_strerror_printf("Unsupported link layer type %i", link_type);
+		fr_strerror_printf("Unsupported link layer type %i", link_layer);
 	}
 
-	done:
+done:
 	return p - data;
-
-	ood:
-	fr_strerror_printf("Out of data, needed %zu bytes, have %zu bytes", (size_t)(p - data), len);
-
-	return -1;
 }
 
 /** Calculate UDP checksum
@@ -181,9 +199,9 @@ uint16_t fr_iph_checksum(uint8_t const *data, uint8_t ihl)
 {
 	uint64_t sum = 0;
 	uint16_t const *p = (uint16_t const *)data;
-	
+
 	uint8_t nwords = (ihl << 1); /* number of 16-bit words */
-	
+
 	for (sum = 0; nwords > 0; nwords--) {
 		sum += *p++;
 	}

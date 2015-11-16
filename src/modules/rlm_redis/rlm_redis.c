@@ -36,13 +36,15 @@ static const CONF_PARSER module_config[] = {
 	{ "port", FR_CONF_OFFSET(PW_TYPE_SHORT, REDIS_INST, port), "6379" },
 	{ "database", FR_CONF_OFFSET(PW_TYPE_INTEGER, REDIS_INST, database), "0" },
 	{ "password", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_SECRET, REDIS_INST, password), NULL },
-
-	{ NULL, -1, 0, NULL, NULL} /* end the list */
+	CONF_PARSER_TERMINATOR
 };
 
 static int _mod_conn_free(REDISSOCK *dissocket)
 {
-	redisFree(dissocket->conn);
+	if (dissocket->conn) {
+		redisFree(dissocket->conn);
+		dissocket->conn = NULL;
+	}
 
 	if (dissocket->reply) {
 		freeReplyObject(dissocket->reply);
@@ -61,7 +63,18 @@ static void *mod_conn_create(TALLOC_CTX *ctx, void *instance)
 	char buffer[1024];
 
 	conn = redisConnect(inst->hostname, inst->port);
-	if (conn->err) return NULL;
+	if (!conn) {
+		ERROR("rlm_redis (%s): Failed calling redisConnect('%s', %d)",
+		      inst->xlat_name, inst->hostname, inst->port);
+		return NULL;
+	}
+
+	if (conn && conn->err) {
+		ERROR("rlm_redis (%s): Problems with redisConnect('%s', %d), %s",
+				inst->xlat_name, inst->hostname, inst->port, redisReplyReaderGetError(conn));
+		redisFree(conn);
+		return NULL;
+	}
 
 	if (inst->password) {
 		snprintf(buffer, sizeof(buffer), "AUTH %s", inst->password);
@@ -102,7 +115,6 @@ static void *mod_conn_create(TALLOC_CTX *ctx, void *instance)
 			       inst->xlat_name);
 			goto do_close;
 		}
-
 
 		switch (reply->type) {
 		case REDIS_REPLY_STATUS:
@@ -188,7 +200,7 @@ static int mod_detach(void *instance)
 {
 	REDIS_INST *inst = instance;
 
-	fr_connection_pool_delete(inst->pool);
+	fr_connection_pool_free(inst->pool);
 
 	return 0;
 }
@@ -201,7 +213,7 @@ int rlm_redis_query(REDISSOCK **dissocket_p, REDIS_INST *inst,
 {
 	REDISSOCK *dissocket;
 	int argc;
-	char *argv[MAX_REDIS_ARGS];
+	char const *argv[MAX_REDIS_ARGS];
 	char argv_buf[MAX_QUERY_LEN];
 
 	if (!query || !*query || !inst || !dissocket_p) {
@@ -215,8 +227,8 @@ int rlm_redis_query(REDISSOCK **dissocket_p, REDIS_INST *inst,
 
 	dissocket = *dissocket_p;
 
-	DEBUG2("executing %s ...", argv[0]);
-	dissocket->reply = redisCommandArgv(dissocket->conn, argc, (char const **)(void **)argv, NULL);
+	DEBUG2("rlm_redis (%s): executing the query: \"%s\"", inst->xlat_name, query);
+	dissocket->reply = redisCommandArgv(dissocket->conn, argc, argv, NULL);
 	if (!dissocket->reply) {
 		RERROR("%s", dissocket->conn->errstr);
 
@@ -230,7 +242,7 @@ int rlm_redis_query(REDISSOCK **dissocket_p, REDIS_INST *inst,
 		dissocket->reply = redisCommand(dissocket->conn, query);
 		if (!dissocket->reply) {
 			RERROR("Failed after re-connect");
-			fr_connection_del(inst->pool, dissocket);
+			fr_connection_close(inst->pool, dissocket);
 			goto error;
 		}
 
@@ -259,23 +271,23 @@ int rlm_redis_finish_query(REDISSOCK *dissocket)
 	return 0;
 }
 
-static int mod_instantiate(CONF_SECTION *conf, void *instance)
+static int mod_bootstrap(CONF_SECTION *conf, void *instance)
 {
-	static bool version_done;
-
 	REDIS_INST *inst = instance;
 
-	if (!version_done) {
-		version_done = true;
-
-		INFO("rlm_redis: libhiredis version: %i.%i.%i", HIREDIS_MAJOR, HIREDIS_MINOR, HIREDIS_PATCH);
-	}
+	INFO("rlm_redis: libhiredis version: %i.%i.%i", HIREDIS_MAJOR, HIREDIS_MINOR, HIREDIS_PATCH);
 
 	inst->xlat_name = cf_section_name2(conf);
-
 	if (!inst->xlat_name) inst->xlat_name = cf_section_name1(conf);
 
-	xlat_register(inst->xlat_name, redis_xlat, NULL, inst); /* FIXME! */
+	xlat_register(inst->xlat_name, redis_xlat, NULL, inst);
+
+	return 0;
+}
+
+static int mod_instantiate(CONF_SECTION *conf, void *instance)
+{
+	REDIS_INST *inst = instance;
 
 	inst->pool = fr_connection_pool_module_init(conf, inst, mod_conn_create, NULL, NULL);
 	if (!inst->pool) {
@@ -290,21 +302,12 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 
 extern module_t rlm_redis;
 module_t rlm_redis = {
-	RLM_MODULE_INIT,
-	"redis",
-	RLM_TYPE_THREAD_SAFE, /* type */
-	sizeof(REDIS_INST),	/* yuck */
-	module_config,
-	mod_instantiate, /* instantiation */
-	mod_detach, /* detach */
-	{
-		NULL, /* authentication */
-		NULL, /* authorization */
-		NULL, /* preaccounting */
-		NULL, /* accounting */
-		NULL, /* checksimul */
-		NULL, /* pre-proxy */
-		NULL, /* post-proxy */
-		NULL /* post-auth */
-	},
+	.magic		= RLM_MODULE_INIT,
+	.name		= "redis",
+	.type		= RLM_TYPE_THREAD_SAFE,
+	.inst_size	= sizeof(REDIS_INST),
+	.config		= module_config,
+	.bootstrap	= mod_bootstrap,
+	.instantiate	= mod_instantiate,
+	.detach		= mod_detach
 };

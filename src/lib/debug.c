@@ -95,12 +95,9 @@ static fr_fault_cb_t panic_cb = NULL;			//!< Callback to execute whilst panickin
 
 static bool dump_core;					//!< Whether we should drop a core on fatal signals.
 
-static void CC_HINT(format (printf, 1, 2)) _fr_fault_log(char const *msg, ...);
-
-fr_fault_log_t fr_fault_log = _fr_fault_log;		//!< Function to use to process logging output.
 static int fr_fault_log_fd = STDERR_FILENO;		//!< Where to write debug output.
 
-fr_debug_state_t fr_debug_state = DEBUG_STATE_UNKNOWN;	//!< Whether were attached to by a debugger.
+fr_debug_state_t fr_debug_state = DEBUG_STATE_UNKNOWN;	//!< Whether we're attached to by a debugger.
 
 #ifdef HAVE_SYS_RESOURCE_H
 static struct rlimit core_limits;
@@ -437,7 +434,7 @@ fr_bt_marker_t *fr_backtrace_attach(UNUSED fr_cbuff_t **cbuff, UNUSED TALLOC_CTX
 
 static int _panic_on_free(UNUSED char *foo)
 {
-	fr_fault(SIGUSR1);
+	fr_fault(SIGABRT);
 	return -1;	/* this should make the free fail */
 }
 
@@ -622,7 +619,7 @@ static int fr_fault_check_permissions(void)
  *
  * @param sig caught
  */
-void fr_fault(int sig)
+NEVER_RETURNS void fr_fault(int sig)
 {
 	char cmd[sizeof(panic_action) + 20];
 	char *out = cmd;
@@ -638,11 +635,8 @@ void fr_fault(int sig)
 	 *	as it may interfere with the operation of the debugger.
 	 *	If something calls us directly we just raise the signal and let
 	 *	the debugger handle it how it wants.
-	 *
-	 *	The only exception are SIGUSR1 and SIGUSR2 which print out various
-	 *	debugging info, and should be allowed to continue.
 	 */
-	if ((fr_debug_state == DEBUG_STATE_ATTACHED) && (sig != SIGUSR1) && (sig != SIGUSR2)) {
+	if (fr_debug_state == DEBUG_STATE_ATTACHED) {
 		FR_FAULT_LOG("RAISING SIGNAL: %s", strsignal(sig));
 		raise(sig);
 		goto finish;
@@ -669,7 +663,7 @@ void fr_fault(int sig)
 	if (panic_cb && (panic_cb(sig) < 0)) goto finish;
 
 	/*
-	 *	Produce a simple backtrace - They've very basic but at least give us an
+	 *	Produce a simple backtrace - They're very basic but at least give us an
 	 *	idea of the area of the code we hit the issue in.
 	 *
 	 *	See below in fr_fault_setup() and
@@ -677,30 +671,15 @@ void fr_fault(int sig)
 	 *	for why we only print backtraces in debug builds if we're using GLIBC.
 	 */
 #if defined(HAVE_EXECINFO) && (!defined(NDEBUG) || !defined(__GNUC__))
-	{
-		size_t frame_count, i;
+	if (fr_fault_log_fd >= 0) {
+		size_t frame_count;
 		void *stack[MAX_BT_FRAMES];
-		char **strings;
 
 		frame_count = backtrace(stack, MAX_BT_FRAMES);
 
 		FR_FAULT_LOG("Backtrace of last %zu frames:", frame_count);
 
-		/*
-		 *	Only use backtrace_symbols() if we don't have a logging fd.
-		 *	If the server has experienced memory corruption, there's
-		 *	a high probability that calling backtrace_symbols() which
-		 *	mallocs more memory, will fail.
-		 */
-		if (fr_fault_log_fd < 0) {
-			strings = backtrace_symbols(stack, frame_count);
-			for (i = 0; i < frame_count; i++) {
-				FR_FAULT_LOG("%s", strings[i]);
-			}
-			free(strings);
-		} else {
-			backtrace_symbols_fd(stack, frame_count, fr_fault_log_fd);
-		}
+		backtrace_symbols_fd(stack, frame_count, fr_fault_log_fd);
 	}
 #endif
 
@@ -763,25 +742,51 @@ void fr_fault(int sig)
 	FR_FAULT_LOG("Panic action exited with %i", code);
 
 finish:
-#ifdef SIGUSR1
-	if (sig == SIGUSR1) {
-		return;
-	}
-#endif
 	fr_exit_now(1);
 }
 
-#ifdef SIGABRT
-/** Work around debuggers which can't backtrace past the signal handler
+/** Callback executed on fatal talloc error
  *
- * At least this provides us some information when we get talloc errors.
+ * This is the simple version which mostly behaves the same way as the default
+ * one, and will not call panic_action.
+ *
+ * @param reason string provided by talloc.
  */
+static void _fr_talloc_fault_simple(char const *reason) CC_HINT(noreturn);
+static void _fr_talloc_fault_simple(char const *reason)
+{
+	FR_FAULT_LOG("talloc abort: %s\n", reason);
+
+#if defined(HAVE_EXECINFO) && (!defined(NDEBUG) || !defined(__GNUC__))
+	if (fr_fault_log_fd >= 0) {
+		size_t frame_count;
+		void *stack[MAX_BT_FRAMES];
+
+		frame_count = backtrace(stack, MAX_BT_FRAMES);
+		FR_FAULT_LOG("Backtrace of last %zu frames:", frame_count);
+		backtrace_symbols_fd(stack, frame_count, fr_fault_log_fd);
+	}
+#endif
+	abort();
+}
+
+/** Callback executed on fatal talloc error
+ *
+ * Translates a talloc abort into a fr_fault call.
+ * Mostly to work around issues with some debuggers not being able to
+ * attach after a SIGABRT has been raised.
+ *
+ * @param reason string provided by talloc.
+ */
+static void _fr_talloc_fault(char const *reason) CC_HINT(noreturn);
 static void _fr_talloc_fault(char const *reason)
 {
-	fr_fault_log("talloc abort: %s\n", reason);
+	FR_FAULT_LOG("talloc abort: %s", reason);
+#ifdef SIGABRT
 	fr_fault(SIGABRT);
-}
 #endif
+	fr_exit_now(1);
+}
 
 /** Wrapper to pass talloc log output to our fr_fault_log function
  *
@@ -797,8 +802,9 @@ static void _fr_talloc_log(char const *msg)
  */
 int fr_log_talloc_report(TALLOC_CTX *ctx)
 {
+#define TALLOC_REPORT_MAX_DEPTH 20
+
 	FILE *log;
-	int i = 0;
 	int fd;
 
 	fd = dup(fr_fault_log_fd);
@@ -817,15 +823,24 @@ int fr_log_talloc_report(TALLOC_CTX *ctx)
 		fprintf(log, "Current state of talloced memory:\n");
 		talloc_report_full(talloc_null_ctx, log);
 	} else {
+		int i;
+
 		fprintf(log, "Talloc chunk lineage:\n");
 		fprintf(log, "%p (%s)", ctx, talloc_get_name(ctx));
-		while ((ctx = talloc_parent(ctx))) fprintf(log, " < %p (%s)", ctx, talloc_get_name(ctx));
+
+		i = 0;
+		while ((i < TALLOC_REPORT_MAX_DEPTH) && (ctx = talloc_parent(ctx))) {
+			fprintf(log, " < %p (%s)", ctx, talloc_get_name(ctx));
+			i++;
+		}
 		fprintf(log, "\n");
 
+		i = 0;
 		do {
 			fprintf(log, "Talloc context level %i:\n", i++);
 			talloc_report_full(ctx, log);
 		} while ((ctx = talloc_parent(ctx)) &&
+			 (i < TALLOC_REPORT_MAX_DEPTH) &&
 			 (talloc_parent(ctx) != talloc_autofree_ctx) &&	/* Stop before we hit the autofree ctx */
 			 (talloc_parent(ctx) != talloc_null_ctx));  	/* Stop before we hit NULL ctx */
 	}
@@ -835,21 +850,22 @@ int fr_log_talloc_report(TALLOC_CTX *ctx)
 	return 0;
 }
 
-/** Signal handler to print out a talloc memory report
- *
- * @param sig caught
- */
-static void _fr_fault_mem_report(int sig)
-{
-	FR_FAULT_LOG("CAUGHT SIGNAL: %s", strsignal(sig));
-
-	if (fr_log_talloc_report(NULL) < 0) fr_perror("memreport");
-}
 
 static int _fr_disable_null_tracking(UNUSED bool *p)
 {
 	talloc_disable_null_tracking();
 	return 0;
+}
+
+/** Register talloc fault handlers
+ *
+ * Just register the fault handlers we need to make talloc
+ * produce useful debugging output.
+ */
+void fr_talloc_fault_setup(void)
+{
+	talloc_set_log_fn(_fr_talloc_log);
+	talloc_set_abort_fn(_fr_talloc_fault_simple);
 }
 
 /** Registers signal handlers to execute panic_action on fatal signal
@@ -903,12 +919,6 @@ int fr_fault_setup(char const *cmd, char const *program)
 		fr_debug_state_t debug_state;
 
 		/*
-		 *  Setup the default logger
-		 */
-		if (!fr_fault_log) fr_fault_set_log_fn(NULL);
-		talloc_set_log_fn(_fr_talloc_log);
-
-		/*
 		 *  Installing signal handlers interferes with some debugging
 		 *  operations.  Give the developer control over whether the
 		 *  signal handlers are installed or not.
@@ -925,6 +935,8 @@ int fr_fault_setup(char const *cmd, char const *program)
 		} else {
 			debug_state = DEBUG_STATE_ATTACHED;
 		}
+
+		talloc_set_log_fn(_fr_talloc_log);
 
 		/*
 		 *  These signals can't be properly dealt with in the debugger
@@ -962,13 +974,6 @@ int fr_fault_setup(char const *cmd, char const *program)
 		case DEBUG_STATE_ATTACHED:
 			break;
 		}
-#ifdef SIGUSR1
-		if (fr_set_signal(SIGUSR1, fr_fault) < 0) return -1;
-#endif
-
-#ifdef SIGUSR2
-		if (fr_set_signal(SIGUSR2, _fr_fault_mem_report) < 0) return -1;
-#endif
 
 		/*
 		 *  Needed for memory reports
@@ -1031,25 +1036,24 @@ void fr_fault_set_cb(fr_fault_cb_t func)
 	panic_cb = func;
 }
 
-/** Default logger, logs output to stderr
+/** Log output to the fr_fault_log_fd
  *
+ * We used to support a user defined callback, which was set to a radlog
+ * function. Unfortunately, when logging to syslog, syslog would malloc memory
+ * which would result in a deadlock if fr_fault was triggered from within
+ * a malloc call.
+ *
+ * Now we just write directly to the FD.
  */
-static void CC_HINT(format (printf, 1, 2)) _fr_fault_log(char const *msg, ...)
+void fr_fault_log(char const *msg, ...)
 {
 	va_list ap;
 
-	va_start(ap, msg);
-	vfprintf(stderr, msg, ap);
-	va_end(ap);
-}
+	if (fr_fault_log_fd < 0) return;
 
-/** Set a file descriptor to log panic_action output to.
- *
- * @param func to call to output log messages.
- */
-void fr_fault_set_log_fn(fr_fault_log_t func)
-{
-	fr_fault_log = func ? func : _fr_fault_log;
+	va_start(ap, msg);
+	vdprintf(fr_fault_log_fd, msg, ap);
+	va_end(ap);
 }
 
 /** Set a file descriptor to log memory reports to.
@@ -1061,185 +1065,20 @@ void fr_fault_set_log_fd(int fd)
 	fr_fault_log_fd = fd;
 }
 
-#ifdef WITH_VERIFY_PTR
-
-/*
- *	Verify a VALUE_PAIR
+/** A soft assertion which triggers the fault handler in debug builds
+ *
+ * @param file the assertion failed in.
+ * @param line of the assertion in the file.
+ * @param expr that was evaluated.
+ * @param cond Result of evaluating the expression.
+ * @return the value of cond.
  */
-inline void fr_verify_vp(char const *file, int line, VALUE_PAIR const *vp)
-{
-	if (!vp) {
-		FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR pointer was NULL", file, line);
-		fr_assert(0);
-		fr_exit_now(1);
-	}
-
-	(void) talloc_get_type_abort(vp, VALUE_PAIR);
-
-	if (!vp->da) {
-		FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR da pointer was NULL", file, line);
-		fr_assert(0);
-		fr_exit_now(1);
-	}
-
-	if (vp->data.ptr) switch (vp->da->type) {
-	case PW_TYPE_OCTETS:
-	case PW_TYPE_TLV:
-	{
-		size_t len;
-		TALLOC_CTX *parent;
-
-		if (!talloc_get_type(vp->data.ptr, uint8_t)) {
-			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR \"%s\" data buffer type should be "
-				     "uint8_t but is %s\n", file, line, vp->da->name, talloc_get_name(vp->data.ptr));
-			(void) talloc_get_type_abort(vp->data.ptr, uint8_t);
-		}
-
-		len = talloc_array_length(vp->vp_octets);
-		if (vp->vp_length > len) {
-			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR \"%s\" length %zu is greater than "
-				     "uint8_t data buffer length %zu\n", file, line, vp->da->name, vp->vp_length, len);
-			fr_assert(0);
-			fr_exit_now(1);
-		}
-
-		parent = talloc_parent(vp->data.ptr);
-		if (parent != vp) {
-			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR \"%s\" char buffer is not "
-				     "parented by VALUE_PAIR %p, instead parented by %p (%s)\n",
-				     file, line, vp->da->name,
-				     vp, parent, parent ? talloc_get_name(parent) : "NULL");
-			fr_assert(0);
-			fr_exit_now(1);
-		}
-	}
-		break;
-
-	case PW_TYPE_STRING:
-	{
-		size_t len;
-		TALLOC_CTX *parent;
-
-		if (!talloc_get_type(vp->data.ptr, char)) {
-			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR \"%s\" data buffer type should be "
-				     "char but is %s\n", file, line, vp->da->name, talloc_get_name(vp->data.ptr));
-			(void) talloc_get_type_abort(vp->data.ptr, char);
-		}
-
-		len = (talloc_array_length(vp->vp_strvalue) - 1);
-		if (vp->vp_length > len) {
-			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR \"%s\" length %zu is greater than "
-				     "char buffer length %zu\n", file, line, vp->da->name, vp->vp_length, len);
-			fr_assert(0);
-			fr_exit_now(1);
-		}
-
-		if (vp->vp_strvalue[vp->vp_length] != '\0') {
-			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR \"%s\" char buffer not \\0 "
-				     "terminated\n", file, line, vp->da->name);
-			fr_assert(0);
-			fr_exit_now(1);
-		}
-
-		parent = talloc_parent(vp->data.ptr);
-		if (parent != vp) {
-			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR \"%s\" char buffer is not "
-				     "parented by VALUE_PAIR %p, instead parented by %p (%s)\n",
-				     file, line, vp->da->name,
-				     vp, parent, parent ? talloc_get_name(parent) : "NULL");
-			fr_assert(0);
-			fr_exit_now(1);
-		}
-	}
-		break;
-
-	default:
-		break;
-	}
-
-	if (vp->da->flags.is_unknown) {
-		(void) talloc_get_type_abort(vp->da, DICT_ATTR);
-	} else {
-		DICT_ATTR const *da;
-
-		/*
-		 *	Attribute may be present with multiple names
-		 */
-		da = dict_attrbyname(vp->da->name);
-		if (!da) {
-			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR attribute %p \"%s\" (%s) "
-				     "not found in global dictionary",
-				     file, line, vp->da, vp->da->name,
-				     fr_int2str(dict_attr_types, vp->da->type, "<INVALID>"));
-			fr_assert(0);
-			fr_exit_now(1);
-		}
-
-		if (da->type == PW_TYPE_COMBO_IP_ADDR) {
-			da = dict_attrbytype(vp->da->attr, vp->da->vendor, vp->da->type);
-			if (!da) {
-				FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR attribute %p \"%s\" "
-					     "variant (%s) not found in global dictionary",
-					     file, line, vp->da, vp->da->name,
-					     fr_int2str(dict_attr_types, vp->da->type, "<INVALID>"));
-				fr_assert(0);
-				fr_exit_now(1);
-			}
-		}
-
-
-		if (da != vp->da) {
-			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: VALUE_PAIR "
-				     "dictionary pointer %p \"%s\" (%s) "
-				     "and global dictionary pointer %p \"%s\" (%s) differ",
-				     file, line, vp->da, vp->da->name,
-				     fr_int2str(dict_attr_types, vp->da->type, "<INVALID>"),
-				     da, da->name, fr_int2str(dict_attr_types, da->type, "<INVALID>"));
-			fr_assert(0);
-			fr_exit_now(1);
-		}
-	}
-}
-
-/*
- *	Verify a pair list
- */
-void fr_verify_list(char const *file, int line, TALLOC_CTX *expected, VALUE_PAIR *vps)
-{
-	vp_cursor_t cursor;
-	VALUE_PAIR *vp;
-	TALLOC_CTX *parent;
-
-	for (vp = fr_cursor_init(&cursor, &vps);
-	     vp;
-	     vp = fr_cursor_next(&cursor)) {
-		VERIFY_VP(vp);
-
-		parent = talloc_parent(vp);
-		if (expected && (parent != expected)) {
-			FR_FAULT_LOG("CONSISTENCY CHECK FAILED %s[%u]: Expected VALUE_PAIR \"%s\" to be parented "
-				     "by %p (%s), instead parented by %p (%s)\n",
-				     file, line, vp->da->name,
-				     expected, talloc_get_name(expected),
-				     parent, parent ? talloc_get_name(parent) : "NULL");
-
-			fr_log_talloc_report(expected);
-			if (parent) fr_log_talloc_report(parent);
-
-			fr_assert(0);
-			fr_exit_now(1);
-		}
-
-	}
-}
-#endif
-
 bool fr_assert_cond(char const *file, int line, char const *expr, bool cond)
 {
 	if (!cond) {
 		FR_FAULT_LOG("SOFT ASSERT FAILED %s[%u]: %s", file, line, expr);
-#if !defined(NDEBUG) && defined(SIGUSR1)
-		fr_fault(SIGUSR1);
+#if !defined(NDEBUG)
+		fr_fault(SIGABRT);
 #endif
 		return false;
 	}
@@ -1249,8 +1088,7 @@ bool fr_assert_cond(char const *file, int line, char const *expr, bool cond)
 
 /** Exit possibly printing a message about why we're exiting.
  *
- * Use the fr_exit(status) macro instead of calling this function
- * directly.
+ * @note Use the fr_exit(status) macro instead of calling this function directly.
  *
  * @param file where fr_exit() was called.
  * @param line where fr_exit() was called.
@@ -1274,8 +1112,7 @@ void NEVER_RETURNS _fr_exit(char const *file, int line, int status)
 
 /** Exit possibly printing a message about why we're exiting.
  *
- * Use the fr_exit_now(status) macro instead of calling this function
- * directly.
+ * @note Use the fr_exit_now(status) macro instead of calling this function directly.
  *
  * @param file where fr_exit_now() was called.
  * @param line where fr_exit_now() was called.

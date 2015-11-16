@@ -51,6 +51,12 @@ extern "C" {
 #  define CC_HINT(_x)
 #endif
 
+#ifdef HAVE_ATTRIBUTE_BOUNDED
+#  define CC_BOUNDED(_x, ...) CC_HINT(__bounded__(_x, ## __VA_ARGS__))
+#else
+#  define CC_BOUNDED(...)
+#endif
+
 /*
  *	Macros to add pragmas
  */
@@ -116,16 +122,16 @@ extern "C" {
  *	Other projects seem to use endian.h and variants, but these are
  *	in non standard locations, and may mess up cross compiling.
  *
- *	Here at least the endianess can be set explicitly with
+ *	Here at least the endianness can be set explicitly with
  *	-DLITTLE_ENDIAN or -DBIG_ENDIAN.
  */
-#if !defined(RADIUS_LITTLE_ENDIAN) && !defined(RADIUS_BIG_ENDIAN)
+#if !defined(FR_LITTLE_ENDIAN) && !defined(FR_BIG_ENDIAN)
 #  if defined(__LITTLE_ENDIAN__) || \
       (defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__))
-#    define RADIUS_LITTLE_ENDIAN 1
+#    define FR_LITTLE_ENDIAN 1
 #  elif defined(__BIG_ENDIAN__) || \
       (defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__))
-#    define RADIUS_BIG_ENDIAN 1
+#    define FR_BIG_ENDIAN 1
 #  else
 #    error Failed determining endianness of system
 #  endif

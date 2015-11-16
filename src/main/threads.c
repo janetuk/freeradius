@@ -202,7 +202,7 @@ static const CONF_PARSER thread_config[] = {
 	{ "auto_limit_acct", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &thread_pool.auto_limit_acct), NULL },
 #endif
 #endif
-	{ NULL, -1, 0, NULL, NULL }
+	CONF_PARSER_TERMINATOR
 };
 #endif
 
@@ -551,7 +551,7 @@ static int request_dequeue(REQUEST **prequest)
 	rad_assert(request->magic == REQUEST_MAGIC);
 
 	request->component = "<core>";
-	request->module = "";
+	request->module = "<running>";
 	request->child_state = REQUEST_RUNNING;
 
 	/*
@@ -669,15 +669,15 @@ static void *request_handler_thread(void *arg)
 			VALUE_PAIR *vp;
 			REQUEST *request = self->request;
 
-			vp = radius_paircreate(request, &request->config_items,
+			vp = radius_pair_create(request, &request->config,
 					       181, VENDORPEC_FREERADIUS);
 			if (vp) vp->vp_integer = thread_pool.pps_in.pps;
 
-			vp = radius_paircreate(request, &request->config_items,
+			vp = radius_pair_create(request, &request->config,
 					       182, VENDORPEC_FREERADIUS);
 			if (vp) vp->vp_integer = thread_pool.pps_in.pps;
 
-			vp = radius_paircreate(request, &request->config_items,
+			vp = radius_pair_create(request, &request->config,
 					       183, VENDORPEC_FREERADIUS);
 			if (vp) {
 				vp->vp_integer = thread_pool.max_queue_size - thread_pool.num_queued;
@@ -1008,7 +1008,7 @@ int thread_pool_init(CONF_SECTION *cs, bool *spawn_flag)
 	 *	Allocate multiple fifos.
 	 */
 	for (i = 0; i < RAD_LISTEN_MAX; i++) {
-		thread_pool.fifo[i] = fr_fifo_create(thread_pool.max_queue_size, NULL);
+		thread_pool.fifo[i] = fr_fifo_create(NULL, thread_pool.max_queue_size, NULL);
 		if (!thread_pool.fifo[i]) {
 			ERROR("FATAL: Failed to set up request fifo");
 			return -1;
@@ -1087,6 +1087,26 @@ void thread_pool_stop(void)
 		pthread_join(handle->pthread_id, NULL);
 		delete_thread(handle);
 	}
+
+	for (i = 0; i < RAD_LISTEN_MAX; i++) {
+		fr_fifo_free(thread_pool.fifo[i]);
+	}
+
+#ifdef WNOHANG
+	fr_hash_table_free(thread_pool.waiters);
+#endif
+
+#ifdef HAVE_OPENSSL_CRYPTO_H
+	/*
+	 *	We're no longer threaded.  Remove the mutexes and free
+	 *	the memory.
+	 */
+	CRYPTO_set_id_callback(NULL);
+	CRYPTO_set_locking_callback(NULL);
+
+	free(ssl_mutexes);
+#endif
+
 #endif
 }
 
@@ -1147,7 +1167,7 @@ static void thread_pool_manage(time_t now)
 	 */
 	active_threads = thread_pool.active_threads;
 	spare = thread_pool.total_threads - active_threads;
-	if (debug_flag) {
+	if (rad_debug_lvl) {
 		static uint32_t old_total = 0;
 		static uint32_t old_active = 0;
 
@@ -1494,7 +1514,7 @@ void exec_trigger(REQUEST *request, CONF_SECTION *cs, char const *name, int quen
 
 	DEBUG("Trigger %s -> %s", name, value);
 
-	radius_exec_program(NULL, 0, NULL, request, value, vp, false, true, EXEC_TIMEOUT);
+	radius_exec_program(request, NULL, 0, NULL, request, value, vp, false, true, EXEC_TIMEOUT);
 
 	if (alloc) talloc_free(request);
 }
