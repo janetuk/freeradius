@@ -634,7 +634,6 @@ exit 0
 %{_libdir}/freeradius/rlm_sql.so
 %{_libdir}/freeradius/rlm_sqlcounter.so
 %{_libdir}/freeradius/rlm_sqlippool.so
-%{_libdir}/freeradius/rlm_sqlhpwippool.so
 %{_libdir}/freeradius/rlm_sql_null.so
 %{_libdir}/freeradius/rlm_test.so
 %{_libdir}/freeradius/rlm_unix.so
