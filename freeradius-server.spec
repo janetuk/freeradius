@@ -674,7 +674,6 @@ exit 0
 %dir %attr(750,root,radiusd) /etc/raddb/sites-enabled
 %config(missingok) /etc/raddb/sites-enabled/abfab-tr-idp
 %config(missingok) /etc/raddb/sites-enabled/abfab-tls
-%config(missingok) /etc/raddb/sites-enabled/channel_bindings
 %dir %attr(750,root,radiusd) /etc/raddb/mods-enabled
 %config(missingok) /etc/raddb/mods-enabled/abfab_psk_sql
 
