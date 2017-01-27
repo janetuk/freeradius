@@ -623,6 +623,10 @@ static ssize_t xlat_string(UNUSED void *instance, REQUEST *request,
 		len = fr_prints(out, outlen, (char const *) p, vp->vp_length, '"');
 		break;
 
+		/*
+		 *	Note that "%{string:...}" is NOT binary safe!
+		 *	It is explicitly used to get rid of embedded zeros.
+		 */
 	case PW_TYPE_STRING:
 		len = strlcpy(out, vp->vp_strvalue, outlen);
 		break;
@@ -652,6 +656,8 @@ static ssize_t xlat_xlat(UNUSED void *instance, REQUEST *request,
 	}
 
 	if ((radius_get_vp(&vp, request, fmt) < 0) || !vp) goto nothing;
+
+	if (vp->da->type != PW_TYPE_STRING) goto nothing;
 
 	return radius_xlat(out, outlen, request, vp->vp_strvalue, NULL, NULL);
 }
@@ -2356,10 +2362,13 @@ static char *xlat_aprint(TALLOC_CTX *ctx, REQUEST *request, xlat_exp_t const * c
 	 *	Escape the non-literals we found above.
 	 */
 	if (str && escape) {
+		size_t len;
 		char *escaped;
 
-		escaped = talloc_array(ctx, char, 2048); /* FIXME: do something intelligent */
-		escape(request, escaped, 2038, str, escape_ctx);
+		len = talloc_array_length(str) * 3;
+
+		escaped = talloc_array(ctx, char, len);
+		escape(request, escaped, len, str, escape_ctx);
 		talloc_free(str);
 		str = escaped;
 	}

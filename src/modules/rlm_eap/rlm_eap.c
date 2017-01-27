@@ -113,6 +113,12 @@ static int mod_instantiate(CONF_SECTION *cs, void *instance)
 	inst->xlat_name = cf_section_name2(cs);
 	if (!inst->xlat_name) inst->xlat_name = "EAP";
 
+	if (!dict_valbyname(PW_AUTH_TYPE, 0, inst->xlat_name)) {
+		cf_log_err_cs(cs, "Failed to find 'Auth-Type %s' section.  Cannot authenticate users.",
+			      inst->xlat_name);
+		return -1;
+	}
+
 	/* Load all the configured EAP-Types */
 	num_methods = 0;
 	for(scs = cf_subsection_find_next(cs, NULL, NULL);
@@ -155,12 +161,17 @@ static int mod_instantiate(CONF_SECTION *cs, void *instance)
 		 *	etc. configurations from eap.conf in order to
 		 *	have EAP without the TLS types.
 		 */
-		if ((method == PW_EAP_TLS) ||
-		    (method == PW_EAP_TTLS) ||
-		    (method == PW_EAP_PEAP)) {
-			DEBUG2("rlm_eap (%s): Ignoring EAP method %s because we do not have OpenSSL support",
-			       inst->xlat_name, name);
+		switch (method) {
+		case PW_EAP_TLS:
+		case PW_EAP_TTLS:
+		case PW_EAP_PEAP:
+		case PW_EAP_PWD:
+			WARN("rlm_eap (%s): Ignoring EAP method %s because we don't have OpenSSL support",
+			     inst->xlat_name, name);
 			continue;
+
+		default:
+			break;
 		}
 #endif
 
@@ -243,8 +254,8 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 	inst = (rlm_eap_t *) instance;
 
 	if (!fr_pair_find_by_num(request->packet->vps, PW_EAP_MESSAGE, 0, TAG_ANY)) {
-		REDEBUG("You set 'Auth-Type = EAP' for a request that does "
-			"not contain an EAP-Message attribute!");
+		REDEBUG("You set 'Auth-Type = %s' for a request that does "
+			"not contain an EAP-Message attribute!", inst->xlat_name);
 		return RLM_MODULE_INVALID;
 	}
 
@@ -346,7 +357,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		 */
 		fr_pair_delete_by_num(&request->proxy->vps, PW_FREERADIUS_PROXIED_TO, VENDORPEC_FREERADIUS, TAG_ANY);
 
-		RDEBUG2("Tunneled session will be proxied.  Not doing EAP");
+		RWDEBUG2("Tunneled session will be proxied.  Not doing EAP");
 		return RLM_MODULE_HANDLED;
 	}
 #endif
@@ -518,6 +529,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_proxy(void *inst, REQUEST *request)
 {
 	size_t		i;
 	size_t		len;
+	ssize_t		ret;
 	char		*p;
 	VALUE_PAIR	*vp;
 	eap_handler_t	*handler;
@@ -660,18 +672,30 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_proxy(void *inst, REQUEST *request)
 	i = 34;
 	p = talloc_memdup(vp, vp->vp_strvalue, vp->vp_length + 1);
 	talloc_set_type(p, uint8_t);
-	len = rad_tunnel_pwdecode((uint8_t *)p + 17, &i, request->home_server->secret, request->proxy->vector);
+	ret = rad_tunnel_pwdecode((uint8_t *)p + 17, &i, request->home_server->secret, request->proxy->vector);
+	if (ret < 0) {
+		REDEBUG("Decoding leap:session-key failed");
+		talloc_free(p);
+		return RLM_MODULE_FAIL;
+	}
+	len = i;
 
-	/*
-	 *	FIXME: Assert that i == 16.
-	 */
+	if (i != 16) {
+		REDEBUG("Decoded key length is incorrect, must be 16 bytes");
+		talloc_free(p);
+		return RLM_MODULE_FAIL;
+	}
 
 	/*
 	 *	Encrypt the session key again, using the request data.
 	 */
-	rad_tunnel_pwencode(p + 17, &len,
-			    request->client->secret,
-			    request->packet->vector);
+	ret = rad_tunnel_pwencode(p + 17, &len, request->client->secret, request->packet->vector);
+	if (ret < 0) {
+		REDEBUG("Decoding leap:session-key failed");
+		talloc_free(p);
+		return RLM_MODULE_FAIL;
+	}
+
 	fr_pair_value_strsteal(vp, p);
 
 	return RLM_MODULE_UPDATED;

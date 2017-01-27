@@ -346,6 +346,41 @@ finish:
 }
 
 
+static size_t regex_escape(UNUSED REQUEST *request, char *out, size_t outlen, char const *in, UNUSED void *arg)
+{
+	char *p = out;
+
+	while (*in && (outlen > 2)) {
+		switch (*in) {
+		case '\\':
+		case '.':
+		case '*':
+		case '+':
+		case '?':
+		case '|':
+		case '^':
+		case '$':
+		case '[':	/* we don't list close braces */
+		case '{':
+		case '(':
+			if (outlen < 3) goto done;
+
+			*(p++) = '\\';
+			outlen--;
+			/* FALL-THROUGH */
+
+		default:
+			*(p++) = *(in++);
+			outlen--;
+			break;
+		}
+	}
+
+done:
+	*(p++) = '\0';
+	return p - out;
+}
+
 
 /** Convert both operands to the same type
  *
@@ -371,6 +406,8 @@ static int cond_normalise_and_cmp(REQUEST *request, fr_cond_t const *c,
 
 	value_data_t lhs_cast, rhs_cast;
 	void *lhs_cast_buff = NULL, *rhs_cast_buff = NULL;
+
+	xlat_escape_t escape = NULL;
 
 	/*
 	 *	Cast operand to correct type.
@@ -415,7 +452,11 @@ do {\
 	 *	Regular expressions need both operands to be strings
 	 */
 #ifdef HAVE_REGEX
-	if (map->op == T_OP_REG_EQ) cast_type = PW_TYPE_STRING;
+	if (map->op == T_OP_REG_EQ) {
+		cast_type = PW_TYPE_STRING;
+
+		if (map->rhs->type == TMPL_TYPE_XLAT_STRUCT) escape = regex_escape;
+	}
 	else
 #endif
 	/*
@@ -519,7 +560,7 @@ do {\
 		if (map->rhs->type != TMPL_TYPE_LITERAL) {
 			char *p;
 
-			ret = tmpl_aexpand(request, &p, request, map->rhs, NULL, NULL);
+			ret = tmpl_aexpand(request, &p, request, map->rhs, escape, NULL);
 			if (ret < 0) {
 				EVAL_DEBUG("FAIL [%i]", __LINE__);
 				rcode = -1;
@@ -573,6 +614,7 @@ finish:
 
 	return rcode;
 }
+
 
 /** Evaluate a map
  *

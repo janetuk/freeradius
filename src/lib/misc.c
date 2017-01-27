@@ -31,6 +31,28 @@ RCSID("$Id$")
 #include <pwd.h>
 #include <sys/uio.h>
 
+#ifdef HAVE_DIRENT_H
+#include <dirent.h>
+
+/*
+ *	Some versions of Linux don't have closefrom(), but they will
+ *	have /proc.
+ *
+ *	BSD systems will generally have closefrom(), but not proc.
+ *
+ *	OSX doesn't have closefrom() or /proc/self/fd, but it does
+ *	have /dev/fd
+ */
+#ifdef __linux__
+#define CLOSEFROM_DIR "/proc/self/fd"
+#elif defined(__APPLE__)
+#define CLOSEFROM_DIR "/dev/fd"
+#else
+#undef HAVE_DIRENT_H
+#endif
+
+#endif
+
 #define FR_PUT_LE16(a, val)\
 	do {\
 		a[1] = ((uint16_t) (val)) >> 8;\
@@ -78,6 +100,28 @@ int fr_set_signal(int sig, sig_t func)
 	}
 #endif
 	return 0;
+}
+
+/** Uninstall a signal for a specific handler
+ *
+ * man sigaction says these are fine to call from a signal handler.
+ *
+ * @param sig SIGNAL
+ */
+int fr_unset_signal(int sig)
+{
+#ifdef HAVE_SIGACTION
+        struct sigaction act;
+
+        memset(&act, 0, sizeof(act));
+        act.sa_flags = 0;
+        sigemptyset(&act.sa_mask);
+        act.sa_handler = SIG_DFL;
+
+        return sigaction(sig, &act, NULL);
+#else
+        return signal(sig, SIG_DFL);
+#endif
 }
 
 static int _fr_trigger_talloc_ctx_free(fr_talloc_link_t *trigger)
@@ -198,6 +242,66 @@ char const *ip_ntoa(char *buffer, uint32_t ipaddr)
 	return buffer;
 }
 
+/*
+ *	Parse decimal digits until we run out of decimal digits.
+ */
+static int ip_octet_from_str(char const *str, uint32_t *poctet)
+{
+	uint32_t octet;
+	char const *p = str;
+
+	if ((*p < '0') || (*p > '9')) {
+		return -1;
+	}
+
+	octet = 0;
+
+	while ((*p >= '0') && (*p <= '9')) {
+		octet *= 10;
+		octet += *p - '0';
+		p++;
+
+		if (octet > 255) return -1;
+	}
+
+
+	*poctet = octet;
+	return p - str;
+}
+
+static int ip_prefix_from_str(char const *str, uint32_t *paddr)
+{
+	int shift, length;
+	uint32_t octet;
+	uint32_t addr;
+	char const *p = str;
+
+	addr = 0;
+
+	for (shift = 24; shift >= 0; shift -= 8) {
+		length = ip_octet_from_str(p, &octet);
+		if (length <= 0) return -1;
+
+		addr |= octet << shift;
+		p += length;
+
+		/*
+		 *	EOS or / means we're done.
+		 */
+		if (!*p || (*p == '/')) break;
+
+		/*
+		 *	We require dots between octets.
+		 */
+		if (*p != '.') return -1;
+		p++;
+	}
+
+	*paddr = htonl(addr);
+	return p - str;
+}
+
+
 /** Parse an IPv4 address or IPv4 prefix in presentation format (and others)
  *
  * @param out Where to write the ip address value.
@@ -210,7 +314,7 @@ char const *ip_ntoa(char *buffer, uint32_t ipaddr)
 int fr_pton4(fr_ipaddr_t *out, char const *value, ssize_t inlen, bool resolve, bool fallback)
 {
 	char *p;
-	unsigned int prefix;
+	unsigned int mask;
 	char *eptr;
 
 	/* Dotted quad + / + [0-9]{1,2} */
@@ -230,6 +334,7 @@ int fr_pton4(fr_ipaddr_t *out, char const *value, ssize_t inlen, bool resolve, b
 	}
 
 	p = strchr(value, '/');
+
 	/*
 	 *	192.0.2.2 is parsed as if it was /32
 	 */
@@ -242,6 +347,7 @@ int fr_pton4(fr_ipaddr_t *out, char const *value, ssize_t inlen, bool resolve, b
 		 */
 		if ((value[0] == '*') && (value[1] == '\0')) {
 			out->ipaddr.ip4addr.s_addr = htonl(INADDR_ANY);
+
 		/*
 		 *	Convert things which are obviously integers to IP addresses
 		 *
@@ -250,9 +356,10 @@ int fr_pton4(fr_ipaddr_t *out, char const *value, ssize_t inlen, bool resolve, b
 		 */
 		} else if (is_integer(value) || ((value[0] == '0') && (value[1] == 'x'))) {
 			out->ipaddr.ip4addr.s_addr = htonl(strtoul(value, NULL, 0));
+
 		} else if (!resolve) {
 			if (inet_pton(AF_INET, value, &out->ipaddr.ip4addr.s_addr) <= 0) {
-				fr_strerror_printf("Failed to parse IPv4 address string \"%s\"", value);
+				fr_strerror_printf("Failed to parse IPv4 addreess string \"%s\"", value);
 				return -1;
 			}
 		} else if (ip_hton(out, AF_INET, value, fallback) < 0) return -1;
@@ -261,42 +368,33 @@ int fr_pton4(fr_ipaddr_t *out, char const *value, ssize_t inlen, bool resolve, b
 	}
 
 	/*
-	 *	Otherwise parse the prefix
-	 */
-	if ((size_t)(p - value) >= INET_ADDRSTRLEN) {
-		fr_strerror_printf("Invalid IPv4 address string \"%s\"", value);
-		return -1;
-	}
-
-	/*
 	 *	Copy the IP portion into a temporary buffer if we haven't already.
 	 */
 	if (inlen < 0) memcpy(buffer, value, p - value);
 	buffer[p - value] = '\0';
 
-	if (!resolve) {
-		if (inet_pton(AF_INET, buffer, &out->ipaddr.ip4addr.s_addr) <= 0) {
-			fr_strerror_printf("Failed to parse IPv4 address string \"%s\"", value);
-			return -1;
-		}
-	} else if (ip_hton(out, AF_INET, buffer, fallback) < 0) return -1;
+	if (ip_prefix_from_str(buffer, &out->ipaddr.ip4addr.s_addr) <= 0) {
+		fr_strerror_printf("Failed to parse IPv4 address string \"%s\"", value);
+		return -1;
+	}
 
-	prefix = strtoul(p + 1, &eptr, 10);
-	if (prefix > 32) {
+	mask = strtoul(p + 1, &eptr, 10);
+	if (mask > 32) {
 		fr_strerror_printf("Invalid IPv4 mask length \"%s\".  Should be between 0-32", p);
 		return -1;
 	}
+
 	if (eptr[0] != '\0') {
 		fr_strerror_printf("Failed to parse IPv4 address string \"%s\", "
 				   "got garbage after mask length \"%s\"", value, eptr);
 		return -1;
 	}
 
-	if (prefix < 32) {
-		out->ipaddr.ip4addr = fr_inaddr_mask(&out->ipaddr.ip4addr, prefix);
+	if (mask < 32) {
+		out->ipaddr.ip4addr = fr_inaddr_mask(&out->ipaddr.ip4addr, mask);
 	}
 
-	out->prefix = (uint8_t) prefix;
+	out->prefix = (uint8_t) mask;
 	out->af = AF_INET;
 
 	return 0;
@@ -511,12 +609,13 @@ int fr_pton_port(fr_ipaddr_t *out, uint16_t *port_out, char const *value, ssize_
 	 *	Host, IPv4 or IPv6 with no port
 	 */
 	q = memchr(p, ':', len);
-	if (!q || !memchr(p, '.', len)) return fr_pton(out, p, len, af, resolve);
+	if (!q) return fr_pton(out, p, len, af, resolve);
 
 	/*
 	 *	IPv4 or host, with port
 	 */
 	if (fr_pton(out, p, (q - p), af, resolve) < 0) return -1;
+
 do_port:
 	/*
 	 *	Valid ports are a maximum of 5 digits, so if the
@@ -1282,20 +1381,63 @@ int closefrom(int fd)
 {
 	int i;
 	int maxfd = 256;
+#ifdef HAVE_DIRENT_H
+	DIR *dir;
+#endif
+
+#ifdef F_CLOSEM
+	if (fcntl(fd, F_CLOSEM) == 0) {
+		return 0;
+	}
+#endif
+
+#ifdef F_MAXFD
+	maxfd = fcntl(fd, F_F_MAXFD);
+	if (maxfd >= 0) goto do_close;
+#endif
 
 #ifdef _SC_OPEN_MAX
 	maxfd = sysconf(_SC_OPEN_MAX);
 	if (maxfd < 0) {
-	  maxfd = 256;
+		maxfd = 256;
 	}
+#endif
+
+#ifdef HAVE_DIRENT_H
+	/*
+	 *	Use /proc/self/fd directory if it exists.
+	 */
+	dir = opendir(CLOSEFROM_DIR);
+	if (dir != NULL) {
+		long my_fd;
+		char *endp;
+		struct dirent *dp;
+
+		while ((dp = readdir(dir)) != NULL) {
+			my_fd = strtol(dp->d_name, &endp, 10);
+			if (my_fd <= 0) continue;
+
+			if (*endp) continue;
+
+			if (my_fd == dirfd(dir)) continue;
+
+			if ((my_fd >= fd) && (my_fd <= maxfd)) {
+				(void) close((int) my_fd);
+			}
+		}
+		(void) closedir(dir);
+		return 0;
+	}
+#endif
+
+#ifdef F_MAXFD
+do_close:
 #endif
 
 	if (fd > maxfd) return 0;
 
 	/*
 	 *	FIXME: return EINTR?
-	 *
-	 *	Use F_CLOSEM?
 	 */
 	for (i = fd; i < maxfd; i++) {
 		close(i);

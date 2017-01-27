@@ -10,7 +10,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#include <freeradius-devel/autoconf.h>	/* Needed for endian macros */
+#include <freeradius-devel/autoconf.h> /* Needed for endian macros */
 
 /*
  *	The ubiquitous stringify macros

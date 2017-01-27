@@ -1163,6 +1163,18 @@ static int CC_HINT(nonnull (1, 2, 4, 5 ,6)) do_mschap(rlm_mschap_t *inst, REQUES
 				return -648;
 			}
 
+			if (strcasestr(buffer, "Account locked out") ||
+			    strcasestr(buffer, "0xC0000234")) {
+				REDEBUG2("%s", buffer);
+				return -647;
+			}
+
+			if (strcasestr(buffer, "Account disabled") ||
+			    strcasestr(buffer, "0xC0000072")) {
+				REDEBUG2("%s", buffer);
+				return -691;
+			}
+
 			RDEBUG2("External script failed");
 			p = strchr(buffer, '\n');
 			if (p) *p = '\0';
@@ -1392,42 +1404,53 @@ static rlm_rcode_t mschap_error(rlm_mschap_t *inst, REQUEST *request, unsigned c
 	char		new_challenge[33], buffer[128];
 	char		*p;
 
-	if ((smb_ctrl && ((smb_ctrl->vp_integer & ACB_PW_EXPIRED) != 0)) || (mschap_result == -648)) {
+	if ((mschap_result == -648) ||
+	    (smb_ctrl && ((smb_ctrl->vp_integer & ACB_PW_EXPIRED) != 0))) {
 		REDEBUG("Password has expired.  User should retry authentication");
 		error = 648;
-		retry = inst->allow_retry ? 1 : 0;
+
+		/*
+		 *	A password change is NOT a retry!  We MUST have retry=0 here.
+		 */
+		retry = 0;
 		message = "Password expired";
 		rcode = RLM_MODULE_REJECT;
 
-	} else if (mschap_result < 0) {
-		REDEBUG("MS-CHAP2-Response is incorrect");
+		/*
+		 *	Account is disabled.
+		 *
+		 *	They're found, but they don't exist, so we
+		 *	return 'not found'.
+		 */
+	} else if ((mschap_result == -691) ||
+		   (smb_ctrl && (((smb_ctrl->vp_integer & ACB_DISABLED) != 0) ||
+				 ((smb_ctrl->vp_integer & (ACB_NORMAL|ACB_WSTRUST)) == 0)))) {
+		REDEBUG("SMB-Account-Ctrl (or ntlm_auth) "
+			"says that the account is disabled, "
+			"or is not a normal or workstation trust account");
 		error = 691;
-		retry = inst->allow_retry ? 1 : 0;
-		message = "Authentication failed";
-		rcode = RLM_MODULE_REJECT;
-	/*
-	 *	Account is disabled.
-	 *
-	 *	They're found, but they don't exist, so we
-	 *	return 'not found'.
-	 */
-	} else if (smb_ctrl && (((smb_ctrl->vp_integer & ACB_DISABLED) != 0) ||
-				((smb_ctrl->vp_integer & (ACB_NORMAL|ACB_WSTRUST)) == 0))) {
-		REDEBUG("SMB-Account-Ctrl says that the account is disabled, or is not a normal "
-			"or workstation trust account");
-		error = 691;
-		retry = 1;
+		retry = 0;
 		message = "Account disabled";
 		rcode = RLM_MODULE_NOTFOUND;
-	/*
-	 *	User is locked out.
-	 */
-	} else if (smb_ctrl && ((smb_ctrl->vp_integer & ACB_AUTOLOCK) != 0)) {
-		REDEBUG("SMB-Account-Ctrl says that the account is locked out");
+
+		/*
+		 *	User is locked out.
+		 */
+	} else if ((mschap_result == -647) ||
+		   (smb_ctrl && ((smb_ctrl->vp_integer & ACB_AUTOLOCK) != 0))) {
+		REDEBUG("SMB-Account-Ctrl (or ntlm_auth) "
+			"says that the account is locked out");
 		error = 647;
 		retry = 0;
 		message = "Account locked out";
 		rcode = RLM_MODULE_USERLOCK;
+
+	} else if (mschap_result < 0) {
+		REDEBUG("MS-CHAP2-Response is incorrect");
+		error = 691;
+		retry = inst->allow_retry;
+		message = "Authentication failed";
+		rcode = RLM_MODULE_REJECT;
 	}
 
 	if (rcode == RLM_MODULE_OK) return RLM_MODULE_OK;
@@ -1649,7 +1672,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		 */
 		uint8_t		new_nt_encrypted[516], old_nt_encrypted[NT_DIGEST_LENGTH];
 		VALUE_PAIR	*nt_enc=NULL;
-		int		seq, new_nt_enc_len=0;
+		int		seq, new_nt_enc_len;
 		uint8_t		*p;
 
 		RDEBUG("MS-CHAPv2 password change request received");
@@ -1657,7 +1680,9 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		if (cpw->vp_length != 68) {
 			REDEBUG("MS-CHAP2-CPW has the wrong format: length %zu != 68", cpw->vp_length);
 			return RLM_MODULE_INVALID;
-		} else if (cpw->vp_octets[0]!=7) {
+		}
+
+		if (cpw->vp_octets[0] != 7) {
 			REDEBUG("MS-CHAP2-CPW has the wrong format: code %d != 7", cpw->vp_octets[0]);
 			return RLM_MODULE_INVALID;
 		}
@@ -1670,6 +1695,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		 *  06:<mschapid>:00:02:<2nd chunk>
 		 *  06:<mschapid>:00:03:<3rd chunk>
 		 */
+		new_nt_enc_len = 0;
 		for (seq = 1; seq < 4; seq++) {
 			vp_cursor_t cursor;
 			int found = 0;
@@ -1683,11 +1709,17 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 				if (nt_enc->da->attr != PW_MSCHAP_NT_ENC_PW)
 					continue;
 
+				if (nt_enc->vp_length < 4) {
+					REDEBUG("MS-CHAP-NT-Enc-PW with invalid format");
+					return RLM_MODULE_INVALID;
+				}
+
 				if (nt_enc->vp_octets[0] != 6) {
 					REDEBUG("MS-CHAP-NT-Enc-PW with invalid format");
 					return RLM_MODULE_INVALID;
 				}
-				if (nt_enc->vp_octets[2]==0 && nt_enc->vp_octets[3]==seq) {
+
+				if ((nt_enc->vp_octets[2] == 0) && (nt_enc->vp_octets[3] == seq)) {
 					found = 1;
 					break;
 				}
@@ -1698,12 +1730,15 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 				return RLM_MODULE_INVALID;
 			}
 
-			/*
-			 * copy the data into the buffer
-			 */
+			if ((new_nt_enc_len + nt_enc->vp_length - 4) > sizeof(new_nt_encrypted)) {
+				REDEBUG("Unpacked MS-CHAP-NT-Enc-PW length > 516");
+				return RLM_MODULE_INVALID;
+			}
+
 			memcpy(new_nt_encrypted + new_nt_enc_len, nt_enc->vp_octets + 4, nt_enc->vp_length - 4);
 			new_nt_enc_len += nt_enc->vp_length - 4;
 		}
+
 		if (new_nt_enc_len != 516) {
 			REDEBUG("Unpacked MS-CHAP-NT-Enc-PW length != 516");
 			return RLM_MODULE_INVALID;
@@ -1729,7 +1764,6 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		RDEBUG2("Password change payload valid");
 
 		/* perform the actual password change */
-		rad_assert(nt_password);
 		if (do_mschap_cpw(inst, request, nt_password, new_nt_encrypted, old_nt_encrypted, auth_method) < 0) {
 			char buffer[128];
 

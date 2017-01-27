@@ -234,6 +234,31 @@ static ssize_t CC_HINT(nonnull) xlat_home_server(UNUSED void *instance, REQUEST 
 		return 0;
 	}
 
+	if (strcmp(fmt, "state") == 0) {
+		char const *state;
+
+		switch (request->home_server->state) {
+		case HOME_STATE_ALIVE:
+			state = "alive";
+			break;
+
+		case HOME_STATE_ZOMBIE:
+			state = "zombie";
+			break;
+
+		case HOME_STATE_IS_DEAD:
+			state = "dead";
+			break;
+
+		default:
+			state = "unknown";
+			break;
+		}
+
+		strlcpy(out, state, outlen);
+		return strlen(out);
+	}
+
 	return xlat_cs(request->home_server->cs, fmt, out, outlen);
 }
 
@@ -249,6 +274,20 @@ static ssize_t CC_HINT(nonnull) xlat_server_pool(UNUSED void *instance, REQUEST 
 
 		*out = '\0';
 		return 0;
+	}
+
+	if (strcmp(fmt, "state") == 0) {
+		char const *state;
+
+		if (request->home_pool->in_fallback) {
+			state = "fallback";
+
+		} else {
+			state = "alive";
+		}
+
+		strlcpy(out, state, outlen);
+		return strlen(out);
 	}
 
 	return xlat_cs(request->home_pool->cs, fmt, out, outlen);
@@ -683,7 +722,8 @@ home_server_t *home_server_afrom_cs(TALLOC_CTX *ctx, realm_config_t *rc, CONF_SE
 				goto error;
 			}
 
-			if ((home->type == HOME_TYPE_AUTH) && !home->ping_user_password) {
+			if (((home->type == HOME_TYPE_AUTH) ||
+			     (home->type == HOME_TYPE_AUTH_ACCT)) && !home->ping_user_password) {
 				cf_log_err_cs(cs, "You must supply a 'password' to enable status_check=request");
 				goto error;
 			}
@@ -903,7 +943,7 @@ CONF_SECTION *home_server_cs_afrom_client(CONF_SECTION *client)
 	if (cs) {
 		server = cf_section_dup(client, cs, "home_server", NULL, true);
 	} else {
-		server = cf_section_alloc(client, "home_server", NULL);
+		server = cf_section_alloc(client, "home_server", cf_section_name2(client));
 	}
 
 	if (!cs || (!cf_pair_find(cs, "ipaddr") && !cf_pair_find(cs, "ipv4addr") && !cf_pair_find(cs, "ipv6addr"))) {
@@ -2652,7 +2692,11 @@ home_server_t *home_server_ldb(char const *realmname,
 }
 
 
-home_server_t *home_server_find(fr_ipaddr_t *ipaddr, uint16_t port, int proto)
+home_server_t *home_server_find(fr_ipaddr_t *ipaddr, uint16_t port,
+#ifndef WITH_TCP
+				UNUSED
+#endif
+				int proto)
 {
 	home_server_t myhome;
 

@@ -635,10 +635,8 @@ static int radclient_init(TALLOC_CTX *ctx, rc_file_pair_t *files)
 					break;
 
 				default:
-					REDEBUG("Can't determine expected response to Status-Server request, specify "
-					        "a well known RADIUS port, or add a Response-Packet-Type attribute "
-					        "to the request of filter");
-					goto error;
+					request->filter_code = PW_CODE_UNDEFINED;
+					break;
 				}
 				break;
 
@@ -1114,7 +1112,7 @@ static int recv_one_packet(int wait_time)
 	 *	If we had an expected response code, check to see if the
 	 *	packet matched that.
 	 */
-	if (request->reply->code != request->filter_code) {
+	if ((request->filter_code != PW_CODE_UNDEFINED) && (request->reply->code != request->filter_code)) {
 		if (is_radius_code(request->reply->code)) {
 			REDEBUG("%s: Expected %s got %s", request->name, fr_packet_codes[request->filter_code],
 				fr_packet_codes[request->reply->code]);

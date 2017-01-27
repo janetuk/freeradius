@@ -54,10 +54,9 @@ RCSID("$Id$")
 /*
  *  Global variables.
  */
-char const	*progname = NULL;
 char const	*radacct_dir = NULL;
 char const	*radlog_dir = NULL;
-char const	*radlib_dir = NULL;
+
 bool		log_stripped_names;
 
 char const *radiusd_version = "FreeRADIUS Version " RADIUSD_VERSION_STRING
@@ -94,6 +93,7 @@ int main(int argc, char *argv[])
 	bool display_version = false;
 	int flag = 0;
 	int from_child[2] = {-1, -1};
+	char *p;
 	fr_state_t *state = NULL;
 
 	/*
@@ -107,16 +107,12 @@ int main(int argc, char *argv[])
 	set_auth_parameters(argc, argv);
 #endif
 
-	if ((progname = strrchr(argv[0], FR_DIR_SEP)) == NULL)
-		progname = argv[0];
-	else
-		progname++;
-
 #ifdef WIN32
 	{
 		WSADATA wsaData;
 		if (WSAStartup(MAKEWORD(2, 0), &wsaData)) {
-			fprintf(stderr, "%s: Unable to initialize socket library.\n", progname);
+			fprintf(stderr, "%s: Unable to initialize socket library.\n",
+				main_config.name);
 			exit(EXIT_FAILURE);
 		}
 	}
@@ -131,8 +127,14 @@ int main(int argc, char *argv[])
 	memset(&main_config, 0, sizeof(main_config));
 	main_config.myip.af = AF_UNSPEC;
 	main_config.port = 0;
-	main_config.name = "radiusd";
 	main_config.daemonize = true;
+
+	p = strrchr(argv[0], FR_DIR_SEP);
+	if (!p) {
+		main_config.name = argv[0];
+	} else {
+		main_config.name = p + 1;
+	}
 
 	/*
 	 *	Don't put output anywhere until we get told a little
@@ -177,7 +179,8 @@ int main(int argc, char *argv[])
 				default_log.fd = open(main_config.log_file,
 							    O_WRONLY | O_APPEND | O_CREAT, 0640);
 				if (default_log.fd < 0) {
-					fprintf(stderr, "radiusd: Failed to open log file %s: %s\n", main_config.log_file, fr_syserror(errno));
+					fprintf(stderr, "%s: Failed to open log file %s: %s\n",
+						main_config.name, main_config.log_file, fr_syserror(errno));
 					exit(EXIT_FAILURE);
 				}
 				fr_log_fp = fdopen(default_log.fd, "a");
@@ -185,7 +188,8 @@ int main(int argc, char *argv[])
 
 			case 'i':
 				if (ip_hton(&main_config.myip, AF_UNSPEC, optarg, false) < 0) {
-					fprintf(stderr, "radiusd: Invalid IP Address or hostname \"%s\"\n", optarg);
+					fprintf(stderr, "%s: Invalid IP Address or hostname \"%s\"\n",
+						main_config.name, optarg);
 					exit(EXIT_FAILURE);
 				}
 				flag |= 1;
@@ -210,7 +214,8 @@ int main(int argc, char *argv[])
 
 				port = strtoul(optarg, 0, 10);
 				if ((port == 0) || (port > UINT16_MAX)) {
-					fprintf(stderr, "radiusd: Invalid port number \"%s\"\n", optarg);
+					fprintf(stderr, "%s: Invalid port number \"%s\"\n",
+						main_config.name, optarg);
 					exit(EXIT_FAILURE);
 				}
 
@@ -264,7 +269,7 @@ int main(int argc, char *argv[])
 	 *  Mismatch between the binary and the libraries it depends on.
 	 */
 	if (fr_check_lib_magic(RADIUSD_MAGIC_NUMBER) < 0) {
-		fr_perror("radiusd");
+		fr_perror("%s", main_config.name);
 		exit(EXIT_FAILURE);
 	}
 
@@ -279,7 +284,8 @@ int main(int argc, char *argv[])
 #endif
 
 	if (flag && (flag != 0x03)) {
-		fprintf(stderr, "radiusd: The options -i and -p cannot be used individually.\n");
+		fprintf(stderr, "%s: The options -i and -p cannot be used individually.\n",
+			main_config.name);
 		exit(EXIT_FAILURE);
 	}
 
@@ -291,7 +297,8 @@ int main(int argc, char *argv[])
 	 */
 	if (main_config.memory_report) {
 		if (spawn_flag) {
-			fprintf(stderr, "radiusd: The server cannot produce memory reports (-M) in threaded mode\n");
+			fprintf(stderr, "%s: The server cannot produce memory reports (-M) in threaded mode\n",
+				main_config.name);
 			exit(EXIT_FAILURE);
 		}
 		talloc_enable_null_tracking();
@@ -303,13 +310,12 @@ int main(int argc, char *argv[])
 	 *  Better here, so it doesn't matter whether we get passed -xv or -vx.
 	 */
 	if (display_version) {
-		/* Don't print timestamps */
-		rad_debug_lvl += 2;
+		if (rad_debug_lvl == 0) rad_debug_lvl = 1;
 		fr_log_fp = stdout;
 		default_log.dst = L_DST_STDOUT;
 		default_log.fd = STDOUT_FILENO;
 
-		INFO("%s: %s", progname, radiusd_version);
+		INFO("%s: %s", main_config.name, radiusd_version);
 		version_print();
 		exit(EXIT_SUCCESS);
 	}
@@ -364,7 +370,7 @@ int main(int argc, char *argv[])
 		if (!panic_action) panic_action = main_config.panic_action;
 
 		if (panic_action && (fr_fault_setup(panic_action, argv[0]) < 0)) {
-			fr_perror("radiusd");
+			fr_perror("%s", main_config.name);
 			exit(EXIT_FAILURE);
 		}
 	}
@@ -661,7 +667,7 @@ static void NEVER_RETURNS usage(int status)
 {
 	FILE *output = status?stderr:stdout;
 
-	fprintf(output, "Usage: %s [options]\n", progname);
+	fprintf(output, "Usage: %s [options]\n", main_config.name);
 	fprintf(output, "Options:\n");
 	fprintf(output, "  -C            Check configuration and exit.\n");
 	fprintf(stderr, "  -d <raddb>    Set configuration directory (defaults to " RADDBDIR ").\n");

@@ -103,8 +103,8 @@ static CONF_PARSER tls_config[] = {
 	{ "keyfile", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT | PW_TYPE_DEPRECATED, rlm_ldap_t, tls_private_key_file), NULL }, // OK if it changes on HUP
 	{ "private_key_file", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT, rlm_ldap_t, tls_private_key_file), NULL }, // OK if it changes on HUP
 
-	{ "randfile", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT | PW_TYPE_DEPRECATED, rlm_ldap_t, tls_random_file), NULL },
-	{ "random_file", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT, rlm_ldap_t, tls_random_file), NULL },
+	{ "randfile", FR_CONF_OFFSET(PW_TYPE_FILE_EXISTS | PW_TYPE_DEPRECATED, rlm_ldap_t, tls_random_file), NULL },
+	{ "random_file", FR_CONF_OFFSET(PW_TYPE_FILE_EXISTS, rlm_ldap_t, tls_random_file), NULL },
 
 	/*
 	 *	LDAP Specific TLS attributes
@@ -213,7 +213,7 @@ static CONF_PARSER option_config[] = {
 
 
 static const CONF_PARSER module_config[] = {
-	{ "server", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_ldap_t, config_server), NULL },	/* Do not set to required */
+	{ "server", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_MULTI, rlm_ldap_t, config_server), NULL },	/* Do not set to required */
 	{ "port", FR_CONF_OFFSET(PW_TYPE_SHORT, rlm_ldap_t, port), NULL },
 
 	{ "identity", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_ldap_t, admin_identity), NULL },
@@ -865,7 +865,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 				return -1;
 			}
 
-			if (ldap_url->lud_dn) {
+			if (ldap_url->lud_dn && (ldap_url->lud_dn[0] != '\0')) {
 				cf_log_err_cs(conf, "Base DN cannot be specified via server URL");
 				goto ldap_url_error;
 			}
@@ -1166,6 +1166,11 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 				    LDAP_MAX_ATTRMAP) < 0)) {
 		return -1;
 	}
+
+	/*
+	 *	Set global options
+	 */
+	if (rlm_ldap_global_init(inst) < 0) goto error;
 
 	/*
 	 *	Initialize the socket pool.

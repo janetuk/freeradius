@@ -205,7 +205,7 @@ extern const FR_NAME_NUMBER dict_attr_types[];
 extern const size_t dict_attr_sizes[PW_TYPE_MAX][2];
 extern const int fr_attr_max_tlv;
 extern const int fr_attr_shift[];
-extern const int fr_attr_mask[];
+extern const unsigned int fr_attr_mask[];
 
 /** dictionary attribute
  *
@@ -487,6 +487,7 @@ DICT_ATTR const	*dict_attrbytype(unsigned int attr, unsigned int vendor,
 				 PW_TYPE type);
 DICT_ATTR const	*dict_attrbyparent(DICT_ATTR const *parent, unsigned int attr,
 					   unsigned int vendor);
+DICT_ATTR const *dict_parent(unsigned int attr, unsigned int vendor);
 int		dict_attr_child(DICT_ATTR const *parent,
 				unsigned int *pattr, unsigned int *pvendor);
 DICT_VALUE	*dict_valbyattr(unsigned int attr, unsigned int vendor, int val);
@@ -528,9 +529,9 @@ int		rad_pwdecode(char *encpw, size_t len, char const *secret,
 			     uint8_t const *vector);
 
 #define	FR_TUNNEL_PW_ENC_LENGTH(_x) (2 + 1 + _x + PAD(_x + 1, 16))
-int		rad_tunnel_pwencode(char *encpw, size_t *len, char const *secret,
+ssize_t		rad_tunnel_pwencode(char *encpw, size_t *len, char const *secret,
 				    uint8_t const *vector);
-int		rad_tunnel_pwdecode(uint8_t *encpw, size_t *len,
+ssize_t		rad_tunnel_pwdecode(uint8_t *encpw, size_t *len,
 				    char const *secret, uint8_t const *vector);
 int		rad_chap_encode(RADIUS_PACKET *packet, uint8_t *output,
 				int id, VALUE_PAIR *password);
@@ -696,13 +697,14 @@ extern uint32_t	fr_max_attributes; /* per incoming packet */
 extern char const *fr_packet_codes[FR_MAX_PACKET_CODE];
 #define is_radius_code(_x) ((_x > 0) && (_x < FR_MAX_PACKET_CODE))
 extern FILE	*fr_log_fp;
-void		rad_print_hex(RADIUS_PACKET *packet);
+void		rad_print_hex(RADIUS_PACKET const *packet);
 void		fr_printf_log(char const *, ...) CC_HINT(format (printf, 1, 2));
 
 /*
  *	Several handy miscellaneous functions.
  */
 int		fr_set_signal(int sig, sig_t func);
+int		fr_unset_signal(int sig);
 int		fr_link_talloc_ctx_free(TALLOC_CTX *parent, TALLOC_CTX *child);
 char const	*fr_inet_ntop(int af, void const *src);
 char const 	*ip_ntoa(char *, uint32_t);
