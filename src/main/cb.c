@@ -76,10 +76,27 @@ void cbtls_info(SSL const *s, int where, int ret)
  *	Fill in our 'info' with TLS data.
  */
 void cbtls_msg(int write_p, int msg_version, int content_type,
-	       void const *buf, size_t len,
+	       void const *inbuf, size_t len,
 	       SSL *ssl UNUSED, void *arg)
 {
+	uint8_t const *buf = inbuf;
 	tls_session_t *state = (tls_session_t *)arg;
+
+	/*
+	 *	OpenSSL 1.0.2 calls this function with 'pseudo'
+	 *	content types.  Which breaks our tracking of
+	 *	the SSL Session state.
+	 */
+	if ((msg_version == 0) && (content_type > UINT8_MAX)) {
+		DEBUG4("Ignoring cbtls_msg call with pseudo content type %i, version %i",
+		       content_type, msg_version);
+		return;
+	}
+
+	if ((write_p != 0) && (write_p != 1)) {
+		DEBUG4("Ignoring cbtls_msg call with invalid write_p %d", write_p);
+		return;
+	}
 
 	/*
 	 *	Work around bug #298, where we may be called with a NULL
@@ -87,19 +104,23 @@ void cbtls_msg(int write_p, int msg_version, int content_type,
 	 */
 	if (!state) return;
 
-	state->info.origin = (unsigned char)write_p;
-	state->info.content_type = (unsigned char)content_type;
+	/*
+	 *	0 - received (from peer)
+	 *	1 - sending (to peer)
+	 */
+	state->info.origin = write_p;
+	state->info.content_type = content_type;
 	state->info.record_len = len;
 	state->info.version = msg_version;
-	state->info.initialized = 1;
+	state->info.initialized = true;
 
 	if (content_type == SSL3_RT_ALERT) {
-		state->info.alert_level = ((unsigned char const *)buf)[0];
-		state->info.alert_description = ((unsigned char const *)buf)[1];
+		state->info.alert_level = buf[0];
+		state->info.alert_description = buf[1];
 		state->info.handshake_type = 0x00;
 
 	} else if (content_type == SSL3_RT_HANDSHAKE) {
-		state->info.handshake_type = ((unsigned char const *)buf)[0];
+		state->info.handshake_type = buf[0];
 		state->info.alert_level = 0x00;
 		state->info.alert_description = 0x00;
 

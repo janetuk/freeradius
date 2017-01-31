@@ -54,8 +54,7 @@ static const CONF_PARSER module_config[] = {
 	{ "key", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_ATTRIBUTE, rlm_sometimes_t, key), "User-Name" },
 	{ "start", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_sometimes_t, start), "0" },
 	{ "end", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_sometimes_t, end), "127" },
-
-	{ NULL, -1, 0, NULL, NULL }		/* end the list */
+	CONF_PARSER_TERMINATOR
 };
 
 static int mod_instantiate(CONF_SECTION *conf, void *instance)
@@ -95,7 +94,7 @@ static rlm_rcode_t sometimes_return(void *instance, RADIUS_PACKET *packet, RADIU
 	/*
 	 *	Hash based on the given key.  Usually User-Name.
 	 */
-	vp = pair_find_by_da(packet->vps, inst->da, TAG_ANY);
+	vp = fr_pair_find_by_da(packet->vps, inst->da, TAG_ANY);
 	if (!vp) return RLM_MODULE_NOOP;
 
 	hash = fr_hash(&vp->data, vp->vp_length);
@@ -168,30 +167,25 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_proxy(void *instance, REQUEST *requ
 
 extern module_t rlm_sometimes;
 module_t rlm_sometimes = {
-	RLM_MODULE_INIT,
-	"sometimes",
-	RLM_TYPE_HUP_SAFE,   	/* needed for radmin */
-	sizeof(rlm_sometimes_t),
-	module_config,
-	mod_instantiate,		/* instantiation */
-	NULL,				/* detach */
-	{
-		mod_sometimes_packet,	/* authentication */
-		mod_sometimes_packet,	/* authorization */
-		mod_sometimes_packet,	/* preaccounting */
-		mod_sometimes_packet,	/* accounting */
-		NULL,
+	.magic		= RLM_MODULE_INIT,
+	.name		= "sometimes",
+	.type		= RLM_TYPE_HUP_SAFE,   	/* needed for radmin */
+	.inst_size	= sizeof(rlm_sometimes_t),
+	.config		= module_config,
+	.instantiate	= mod_instantiate,
+	.methods = {
+		[MOD_AUTHENTICATE]	= mod_sometimes_packet,
+		[MOD_AUTHORIZE]		= mod_sometimes_packet,
+		[MOD_PREACCT]		= mod_sometimes_packet,
+		[MOD_ACCOUNTING]	= mod_sometimes_packet,
 #ifdef WITH_PROXY
-		mod_pre_proxy,		/* pre-proxy */
-		mod_post_proxy,		/* post-proxy */
-#else
-		NULL, NULL,
+		[MOD_PRE_PROXY]		= mod_pre_proxy,
+		[MOD_POST_PROXY]	= mod_post_proxy,
 #endif
-		mod_sometimes_reply	/* post-auth */
+		[MOD_POST_AUTH]		= mod_sometimes_reply,
 #ifdef WITH_COA
-		,
-		mod_sometimes_packet,	/* recv-coa */
-		mod_sometimes_reply	/* send-coa */
+		[MOD_RECV_COA]		= mod_sometimes_packet,
+		[MOD_SEND_COA]		= mod_sometimes_reply,
 #endif
 	},
 };

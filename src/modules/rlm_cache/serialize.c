@@ -104,6 +104,18 @@ int cache_serialize(TALLOC_CTX *ctx, char **out, rlm_cache_entry_t *c)
 		}
 	}
 
+	if (c->state) {
+		for (vp = fr_cursor_init(&cursor, &c->state);
+		     vp;
+		     vp = fr_cursor_next(&cursor)) {
+			pair = vp_aprints(pairs, vp, '\'');
+			if (!pair) goto error;
+
+			to_store = talloc_asprintf_append_buffer(to_store, "&session-state:%s\n", pair);
+			if (!to_store) goto error;
+		}
+	}
+
 finish:
 	talloc_free(pairs);
 	*out = to_store;
@@ -121,7 +133,7 @@ finish:
  */
 int cache_deserialize(rlm_cache_entry_t *c, char *in, ssize_t inlen)
 {
-	vp_cursor_t packet, control, reply;
+	vp_cursor_t packet, control, reply, state;
 
 	TALLOC_CTX *store = NULL;
 	char *p, *q;
@@ -134,11 +146,12 @@ int cache_deserialize(rlm_cache_entry_t *c, char *in, ssize_t inlen)
 	fr_cursor_init(&packet, &c->packet);
 	fr_cursor_init(&control, &c->control);
 	fr_cursor_init(&reply, &c->reply);
+	fr_cursor_init(&state, &c->state);
 
 	p = in;
 
 	while (((size_t)(p - in)) < (size_t)inlen) {
-		value_pair_map_t *map = NULL;
+		vp_map_t *map = NULL;
 		VALUE_PAIR *vp = NULL;
 		ssize_t len;
 
@@ -168,15 +181,15 @@ int cache_deserialize(rlm_cache_entry_t *c, char *in, ssize_t inlen)
 		}
 
 		/*
-		 *	Convert literal to a type appropriate for
-		 *	the VP.
+		 *	Convert literal to a type appropriate for the VP.
 		 */
-		if (!tmpl_cast_in_place(map->rhs, map->lhs->tmpl_da->type, map->lhs->tmpl_da)) goto error;
+		if (tmpl_cast_in_place(map->rhs, map->lhs->tmpl_da->type, map->lhs->tmpl_da) < 0) goto error;
 
-		vp = pairalloc(c, map->lhs->tmpl_da);
+		vp = fr_pair_afrom_da(c, map->lhs->tmpl_da);
 		len = value_data_copy(vp, &vp->data, map->rhs->tmpl_data_type,
 				      &map->rhs->tmpl_data_value, map->rhs->tmpl_data_length);
 		if (len < 0) goto error;
+		vp->vp_length = len;
 
 		/*
 		 *	Pull out the special attributes, and set the
@@ -208,6 +221,10 @@ int cache_deserialize(rlm_cache_entry_t *c, char *in, ssize_t inlen)
 
 		case PAIR_LIST_REPLY:
 			fr_cursor_insert(&reply, vp);
+			break;
+
+		case PAIR_LIST_STATE:
+			fr_cursor_insert(&state, vp);
 			break;
 
 		default:

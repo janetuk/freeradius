@@ -110,7 +110,10 @@ if (&Tmp-String-0 =~ /^foo$/) {
 }
 
 # compiled - ref - non-multiline
-if (&Tmp-String-0 !~ /^foo\nbar$/) {
+
+# Not all POSIX implementations support the \n character classes
+# so only run this test if the server was built with libpcre.
+if (("${feature.regex-pcre}" == 'yes') && (&Tmp-String-0 !~ /^foo\nbar$/)) {
 	update reply {
 		Filter-Id += 'Fail 16'
 	}

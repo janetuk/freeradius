@@ -30,6 +30,9 @@ typedef struct rlm_eap_peap_t {
 	fr_tls_server_conf_t *tls_conf;
 	char const *default_method_name;	//!< Default tunneled EAP type.
 	int default_method;
+
+	char const *inner_eap_module;		//!< module name for inner EAP
+	int auth_type_eap;
 	bool use_tunneled_reply;		//!< Use the reply attributes from the tunneled session in
 						//!< the non-tunneled reply to the client.
 
@@ -50,7 +53,9 @@ typedef struct rlm_eap_peap_t {
 static CONF_PARSER module_config[] = {
 	{ "tls", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_peap_t, tls_conf_name), NULL },
 
-	{ "default_method", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_peap_t, default_method_name), "mschapv2" },
+	{ "default_eap_type", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_peap_t, default_method_name), "mschapv2" },
+
+	{ "inner_eap_module", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_peap_t, inner_eap_module), NULL },
 
 	{ "copy_request_to_tunnel", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_peap_t, copy_request_to_tunnel), "no" },
 
@@ -68,16 +73,17 @@ static CONF_PARSER module_config[] = {
 
 	{ "soh_virtual_server", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_peap_t, soh_virtual_server), NULL },
 
-	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
+	CONF_PARSER_TERMINATOR
 };
 
 
 /*
  *	Attach the module.
  */
-static int eappeap_attach(CONF_SECTION *cs, void **instance)
+static int mod_instantiate(CONF_SECTION *cs, void **instance)
 {
 	rlm_eap_peap_t		*inst;
+	DICT_VALUE const	*dv;
 
 	*instance = inst = talloc_zero(cs, rlm_eap_peap_t);
 	if (!inst) return -1;
@@ -86,6 +92,11 @@ static int eappeap_attach(CONF_SECTION *cs, void **instance)
 	 *	Parse the configuration attributes.
 	 */
 	if (cf_section_parse(cs, inst, module_config) < 0) {
+		return -1;
+	}
+
+	if (!inst->virtual_server) {
+		ERROR("rlm_eap_peap: A 'virtual_server' MUST be defined for security");
 		return -1;
 	}
 
@@ -109,6 +120,19 @@ static int eappeap_attach(CONF_SECTION *cs, void **instance)
 	if (!inst->tls_conf) {
 		ERROR("rlm_eap_peap: Failed initializing SSL context");
 		return -1;
+	}
+
+	/*
+	 *	Don't expose this if we don't need it.
+	 */
+	if (!inst->inner_eap_module) inst->inner_eap_module = "eap";
+
+	dv = dict_valbyname(PW_AUTH_TYPE, 0, inst->inner_eap_module);
+	if (!dv) {
+		WARN("Failed to find 'Auth-Type %s' section in virtual server %s.  The server cannot proxy inner-tunnel EAP packets.",
+		     inst->inner_eap_module, inst->virtual_server);
+	} else {
+		inst->auth_type_eap = dv->value;
 	}
 
 	return 0;
@@ -140,7 +164,7 @@ static peap_tunnel_t *peap_alloc(TALLOC_CTX *ctx, rlm_eap_peap_t *inst)
 /*
  *	Send an initial eap-tls request to the peer, using the libeap functions.
  */
-static int eappeap_initiate(void *type_arg, eap_handler_t *handler)
+static int mod_session_init(void *type_arg, eap_handler_t *handler)
 {
 	int		status;
 	tls_session_t	*ssn;
@@ -152,7 +176,6 @@ static int eappeap_initiate(void *type_arg, eap_handler_t *handler)
 	inst = type_arg;
 
 	handler->tls = true;
-	handler->finished = false;
 
 	/*
 	 *	Check if we need a client certificate.
@@ -162,7 +185,7 @@ static int eappeap_initiate(void *type_arg, eap_handler_t *handler)
 	 * EAP-TLS-Require-Client-Cert attribute will override
 	 * the require_client_cert configuration option.
 	 */
-	vp = pairfind(handler->request->config_items, PW_EAP_TLS_REQUIRE_CLIENT_CERT, 0, TAG_ANY);
+	vp = fr_pair_find_by_num(handler->request->config, PW_EAP_TLS_REQUIRE_CLIENT_CERT, 0, TAG_ANY);
 	if (vp) {
 		client_cert = vp->vp_integer ? true : false;
 	} else {
@@ -197,22 +220,24 @@ static int eappeap_initiate(void *type_arg, eap_handler_t *handler)
 	 *	so rather than hoping the user figures it out,
 	 *	we force it here.
 	 */
-	ssn->length_flag = 0;
+	ssn->length_flag = false;
 
 	/*
 	 *	TLS session initialization is over.  Now handle TLS
 	 *	related handshaking or application data.
 	 */
 	status = eaptls_start(handler->eap_ds, ssn->peap_flag);
-	RDEBUG2("Start returned %d", status);
-	if (status == 0) {
-		return 0;
+	if ((status == FR_TLS_INVALID) || (status == FR_TLS_FAIL)) {
+		REDEBUG("[eaptls start] = %s", fr_int2str(fr_tls_status_table, status, "<INVALID>"));
+	} else {
+		RDEBUG2("[eaptls start] = %s", fr_int2str(fr_tls_status_table, status, "<INVALID>"));
 	}
+	if (status == 0) return 0;
 
 	/*
 	 *	The next stage to process the packet.
 	 */
-	handler->stage = AUTHENTICATE;
+	handler->stage = PROCESS;
 
 	return 1;
 }
@@ -220,7 +245,7 @@ static int eappeap_initiate(void *type_arg, eap_handler_t *handler)
 /*
  *	Do authentication, by letting EAP-TLS do most of the work.
  */
-static int mod_authenticate(void *arg, eap_handler_t *handler)
+static int mod_process(void *arg, eap_handler_t *handler)
 {
 	int rcode;
 	fr_tls_status_t status;
@@ -238,47 +263,48 @@ static int mod_authenticate(void *arg, eap_handler_t *handler)
 	}
 
 	status = eaptls_process(handler);
-	RDEBUG2("eaptls_process returned %d\n", status);
+	if ((status == FR_TLS_INVALID) || (status == FR_TLS_FAIL)) {
+		REDEBUG("[eaptls process] = %s", fr_int2str(fr_tls_status_table, status, "<INVALID>"));
+	} else {
+		RDEBUG2("[eaptls process] = %s", fr_int2str(fr_tls_status_table, status, "<INVALID>"));
+	}
+
 	switch (status) {
-		/*
-		 *	EAP-TLS handshake was successful, tell the
-		 *	client to keep talking.
-		 *
-		 *	If this was EAP-TLS, we would just return
-		 *	an EAP-TLS-Success packet here.
-		 */
+	/*
+	 *	EAP-TLS handshake was successful, tell the
+	 *	client to keep talking.
+	 *
+	 *	If this was EAP-TLS, we would just return
+	 *	an EAP-TLS-Success packet here.
+	 */
 	case FR_TLS_SUCCESS:
-		RDEBUG2("FR_TLS_SUCCESS");
 		peap->status = PEAP_STATUS_TUNNEL_ESTABLISHED;
 		break;
 
-		/*
-		 *	The TLS code is still working on the TLS
-		 *	exchange, and it's a valid TLS request.
-		 *	do nothing.
-		 */
+	/*
+	 *	The TLS code is still working on the TLS
+	 *	exchange, and it's a valid TLS request.
+	 *	do nothing.
+	 */
 	case FR_TLS_HANDLED:
-	  /*
-	   *	FIXME: If the SSL session is established, grab the state
-	   *	and EAP id from the inner tunnel, and update it with
-	   *	the expected EAP id!
-	   */
-		RDEBUG2("FR_TLS_HANDLED");
+		/*
+		 *	FIXME: If the SSL session is established, grab the state
+		 *	and EAP id from the inner tunnel, and update it with
+		 *	the expected EAP id!
+		 */
 		return 1;
 
-		/*
-		 *	Handshake is done, proceed with decoding tunneled
-		 *	data.
-		 */
+	/*
+	 *	Handshake is done, proceed with decoding tunneled
+	 *	data.
+	 */
 	case FR_TLS_OK:
-		RDEBUG2("FR_TLS_OK");
 		break;
 
 		/*
 		 *	Anything else: fail.
 		 */
 	default:
-		RDEBUG2("FR_TLS_OTHERS");
 		return 0;
 	}
 
@@ -299,7 +325,7 @@ static int mod_authenticate(void *arg, eap_handler_t *handler)
 	/*
 	 *	Process the PEAP portion of the request.
 	 */
-	rcode = eappeap_process(handler, tls_session);
+	rcode = eappeap_process(handler, tls_session, inst->auth_type_eap);
 	switch (rcode) {
 	case RLM_MODULE_REJECT:
 		eaptls_fail(handler, 0);
@@ -318,14 +344,14 @@ static int mod_authenticate(void *arg, eap_handler_t *handler)
 		if (peap->soh_reply_vps) {
 			RDEBUG2("Using saved attributes from the SoH reply");
 			rdebug_pair_list(L_DBG_LVL_2, request, peap->soh_reply_vps, NULL);
-			pairfilter(handler->request->reply,
+			fr_pair_list_mcopy_by_num(handler->request->reply,
 				  &handler->request->reply->vps,
 				  &peap->soh_reply_vps, 0, 0, TAG_ANY);
 		}
 		if (peap->accept_vps) {
 			RDEBUG2("Using saved attributes from the original Access-Accept");
 			rdebug_pair_list(L_DBG_LVL_2, request, peap->accept_vps, NULL);
-			pairfilter(handler->request->reply,
+			fr_pair_list_mcopy_by_num(handler->request->reply,
 				  &handler->request->reply->vps,
 				  &peap->accept_vps, 0, 0, TAG_ANY);
 		} else if (peap->use_tunneled_reply) {
@@ -364,10 +390,8 @@ static int mod_authenticate(void *arg, eap_handler_t *handler)
  */
 extern rlm_eap_module_t rlm_eap_peap;
 rlm_eap_module_t rlm_eap_peap = {
-	"eap_peap",
-	eappeap_attach,			/* attach */
-	eappeap_initiate,		/* Start the initial request */
-	NULL,				/* authorization */
-	mod_authenticate,		/* authentication */
-	NULL				/* detach */
+	.name		= "eap_peap",
+	.instantiate	= mod_instantiate,	/* Create new submodule instance */
+	.session_init	= mod_session_init,	/* Initialise a new EAP session */
+	.process	= mod_process		/* Process next round of EAP method */
 };

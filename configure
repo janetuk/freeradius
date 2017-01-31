@@ -2417,14 +2417,12 @@ ac_config_headers="$ac_config_headers src/include/autoconf.h"
 
 
 
-RADIUSD_MAJOR_VERSION=`cat VERSION | sed 's/\..*//'`
-RADIUSD_MINOR_VERSION=`cat VERSION | sed 's/^[^\.]*\.//' | sed 's/\..*$//'`
-RADIUSD_INCRM_VERSION=`cat VERSION | sed 's/^.*\..*\.//' | sed 's/[\.-].*$//'`
 
-RADIUSD_VERSION=`echo | awk -v major="$RADIUSD_MAJOR_VERSION" \
--v minor="$RADIUSD_MINOR_VERSION" \
--v incrm="$RADIUSD_INCRM_VERSION" \
-'{ printf "%02i%02i%02i", major, minor, incrm }'`
+RADIUSD_MAJOR_VERSION=`cat VERSION | cut -f1 -d.`
+RADIUSD_MINOR_VERSION=`cat VERSION | cut -f2 -d.`
+RADIUSD_INCRM_VERSION=`cat VERSION | cut -f3 -d. | sed 's/[\.-].*$//'`
+
+RADIUSD_VERSION=`printf "%02i%02i%02i" $RADIUSD_MAJOR_VERSION $RADIUSD_MINOR_VERSION $RADIUSD_INCRM_VERSION`
 
 RADIUSD_VERSION_STRING=`cat VERSION`
 
@@ -4786,11 +4784,11 @@ $as_echo "$ac_cv_c_bigendian" >&6; }
  case $ac_cv_c_bigendian in #(
    yes)
 
-$as_echo "#define RADIUS_BIG_ENDIAN 1" >>confdefs.h
+$as_echo "#define FR_BIG_ENDIAN 1" >>confdefs.h
 ;; #(
    no)
 
-$as_echo "#define RADIUS_LITTLE_ENDIAN 1" >>confdefs.h
+$as_echo "#define FR_LITTLE_ENDIAN 1" >>confdefs.h
 
  ;; #(
    universal)
@@ -5650,8 +5648,8 @@ fi
 
 
 missing_dir=`cd $ac_aux_dir && pwd`
-# expand $ac_aux_dir to an absolute path
-am_aux_dir=`cd $ac_aux_dir && pwd`
+# Expand $ac_aux_dir to an absolute path.
+am_aux_dir=`cd "$ac_aux_dir" && pwd`
 
 if test x"${MISSING+set}" != xset; then
   case $am_aux_dir in
@@ -5662,12 +5660,12 @@ if test x"${MISSING+set}" != xset; then
   esac
 fi
 # Use eval to expand $SHELL
-if eval "$MISSING --run true"; then
-  am_missing_run="$MISSING --run "
+if eval "$MISSING --is-lightweight"; then
+  am_missing_run="$MISSING "
 else
   am_missing_run=
-  { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: \`missing' script is too old or missing" >&5
-$as_echo "$as_me: WARNING: \`missing' script is too old or missing" >&2;}
+  { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: 'missing' script is too old or missing" >&5
+$as_echo "$as_me: WARNING: 'missing' script is too old or missing" >&2;}
 fi
 
 
@@ -6047,7 +6045,8 @@ fi
 done
 
 
-                { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pthread_create in -lpthread" >&5
+                if test "x$WITH_THREADS" != "xno"; then
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pthread_create in -lpthread" >&5
 $as_echo_n "checking for pthread_create in -lpthread... " >&6; }
 if ${ac_cv_lib_pthread_pthread_create+:} false; then :
   $as_echo_n "(cached) " >&6
@@ -6085,12 +6084,67 @@ fi
 $as_echo "$ac_cv_lib_pthread_pthread_create" >&6; }
 if test "x$ac_cv_lib_pthread_pthread_create" = xyes; then :
 
-      CFLAGS="$CFLAGS -D_REENTRANT -D_POSIX_PTHREAD_SEMANTICS"
-      LIBS="-lpthread $LIBS"
+        HAVE_LPTHREAD='yes'
+        CFLAGS="$CFLAGS -D_REENTRANT -D_POSIX_PTHREAD_SEMANTICS"
+        LIBS="-lpthread $LIBS"
 
+
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for the compiler flag \"-pthread\"" >&5
+$as_echo_n "checking for the compiler flag \"-pthread\"... " >&6; }
+if ${ax_cv_cc_pthread_flag+:} false; then :
+  $as_echo_n "(cached) " >&6
 else
 
-                              { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pthread_create in -lc_r" >&5
+
+    CFLAGS_SAVED=$CFLAGS
+    CFLAGS="$CFLAGS -Werror -pthread"
+
+    ac_ext=c
+ac_cpp='$CPP $CPPFLAGS'
+ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CC -o conftest$ac_exeext $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_c_compiler_gnu
+
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+int
+main ()
+{
+return 0;
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_compile "$LINENO"; then :
+  ax_cv_cc_pthread_flag="yes"
+else
+  ax_cv_cc_pthread_flag="no"
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+    ac_ext=c
+ac_cpp='$CPP $CPPFLAGS'
+ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CC -o conftest$ac_exeext $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_c_compiler_gnu
+
+
+    CFLAGS="$CFLAGS_SAVED"
+
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ax_cv_cc_pthread_flag" >&5
+$as_echo "$ax_cv_cc_pthread_flag" >&6; }
+
+        if test "x$ax_cv_cc_pthread_flag" != 'xyes'; then
+          CFLAGS="$CFLAGS -pthread"
+        fi
+
+
+fi
+
+
+                        if test "x$HAVE_LPTHREAD" != "xyes"; then
+      { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pthread_create in -lc_r" >&5
 $as_echo_n "checking for pthread_create in -lc_r... " >&6; }
 if ${ac_cv_lib_c_r_pthread_create+:} false; then :
   $as_echo_n "(cached) " >&6
@@ -6127,19 +6181,69 @@ fi
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_c_r_pthread_create" >&5
 $as_echo "$ac_cv_lib_c_r_pthread_create" >&6; }
 if test "x$ac_cv_lib_c_r_pthread_create" = xyes; then :
-   CFLAGS="$CFLAGS -pthread -D_THREAD_SAFE"
+
+          CFLAGS="$CFLAGS -D_THREAD_SAFE"
+
+
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for the compiler flag \"-pthread\"" >&5
+$as_echo_n "checking for the compiler flag \"-pthread\"... " >&6; }
+if ${ax_cv_cc_pthread_flag+:} false; then :
+  $as_echo_n "(cached) " >&6
 else
 
-          WITH_THREADS="no"
-          fail=-lpthread
 
+    CFLAGS_SAVED=$CFLAGS
+    CFLAGS="$CFLAGS -Werror -pthread"
+
+    ac_ext=c
+ac_cpp='$CPP $CPPFLAGS'
+ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CC -o conftest$ac_exeext $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_c_compiler_gnu
+
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+int
+main ()
+{
+return 0;
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_compile "$LINENO"; then :
+  ax_cv_cc_pthread_flag="yes"
+else
+  ax_cv_cc_pthread_flag="no"
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+    ac_ext=c
+ac_cpp='$CPP $CPPFLAGS'
+ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
+ac_link='$CC -o conftest$ac_exeext $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
+ac_compiler_gnu=$ac_cv_c_compiler_gnu
+
+
+    CFLAGS="$CFLAGS_SAVED"
+
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ax_cv_cc_pthread_flag" >&5
+$as_echo "$ax_cv_cc_pthread_flag" >&6; }
+
+          if test "x$ax_cv_cc_pthread_flag" != 'xyes'; then
+            LIBS="-lc_r $LIBS"
+          else
+            CFLAGS="$CFLAGS -pthread"
+          fi
+
+else
+   fail=-lc_r or -lpthread
 
 fi
 
-
-
-fi
-
+    fi
+  fi
 
   if test "x$WITH_THREADS" != "xyes"; then
     { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: silently not building with thread support." >&5
@@ -7851,50 +7955,50 @@ fi
 
 
 for ac_header in \
-  dlfcn.h \
-  unistd.h \
-  crypt.h \
-  errno.h \
-  resource.h \
-  sys/resource.h \
-  getopt.h \
-  malloc.h \
-  utmp.h \
-  utmpx.h \
-  signal.h \
-  sys/select.h \
-  syslog.h \
-  inttypes.h \
-  stdint.h \
-  stdbool.h \
-  stdio.h \
-  netdb.h \
-  semaphore.h \
   arpa/inet.h \
-  netinet/in.h \
-  sys/types.h \
-  sys/socket.h \
-  winsock.h \
-  utime.h \
-  sys/time.h \
-  sys/wait.h \
-  sys/security.h \
+  crypt.h \
+  dlfcn.h \
+  errno.h \
   fcntl.h \
+  features.h \
+  fnmatch.h \
+  getopt.h \
+  glob.h \
+  grp.h \
+  inttypes.h \
+  limits.h \
+  malloc.h \
+  netdb.h \
+  netinet/in.h \
+  prot.h \
+  pwd.h \
+  resource.h \
+  semaphore.h \
+  sia.h \
+  siad.h \
+  signal.h \
+  stdbool.h \
+  stddef.h \
+  stdint.h \
+  stdio.h \
+  sys/event.h \
   sys/fcntl.h \
   sys/prctl.h \
   sys/ptrace.h \
+  sys/resource.h \
+  sys/security.h \
+  sys/select.h \
+  sys/socket.h \
+  sys/time.h \
+  sys/types.h \
   sys/un.h \
-  glob.h \
-  prot.h \
-  pwd.h \
-  grp.h \
-  stddef.h \
-  fnmatch.h \
-  sia.h \
-  siad.h \
-  features.h \
-  limits.h \
-  sys/event.h
+  sys/wait.h \
+  syslog.h \
+  unistd.h \
+  utime.h \
+  utmp.h \
+  utmpx.h \
+  winsock.h
 
 do :
   as_ac_Header=`$as_echo "ac_cv_header_$ac_header" | $as_tr_sh`
@@ -8567,6 +8671,7 @@ $as_echo "#define HAVE_OPENSSL_SSL_H 1" >>confdefs.h
       openssl/md5.h \
       openssl/md4.h \
       openssl/sha.h \
+      openssl/ssl.h \
       openssl/ocsp.h \
       openssl/engine.h
 do :
@@ -8626,10 +8731,11 @@ rm -f conftest*
                 { $as_echo "$as_me:${as_lineno-$LINENO}: checking OpenSSL library and header version consistency" >&5
 $as_echo_n "checking OpenSSL library and header version consistency... " >&6; }
     if test "$cross_compiling" = yes; then :
-  { { $as_echo "$as_me:${as_lineno-$LINENO}: error: in \`$ac_pwd':" >&5
-$as_echo "$as_me: error: in \`$ac_pwd':" >&2;}
-as_fn_error $? "cannot run test program while cross compiling
-See \`config.log' for more details" "$LINENO" 5; }
+
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: cross-compiling (assuming yes)" >&5
+$as_echo "cross-compiling (assuming yes)" >&6; }
+
+
 else
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
@@ -8668,7 +8774,6 @@ $as_echo "$as_me: error: in \`$ac_pwd':" >&2;}
 as_fn_error $? "OpenSSL library version does not match header version
 See \`config.log' for more details" "$LINENO" 5; }
 
-
 fi
 rm -f core *.core core.conftest.* gmon.out bb.out conftest$ac_exeext \
   conftest.$ac_objext conftest.beam conftest.$ac_ext
@@ -8682,6 +8787,17 @@ fi
 
 
   export OPENSSL_LIBS OPENSSL_LDFLAGS OPENSSL_CPPFLAGS
+  for ac_func in SSL_get_client_random
+do :
+  ac_fn_c_check_func "$LINENO" "SSL_get_client_random" "ac_cv_func_SSL_get_client_random"
+if test "x$ac_cv_func_SSL_get_client_random" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_SSL_GET_CLIENT_RANDOM 1
+_ACEOF
+ SSL_get_server_random
+fi
+done
+
 fi
 
 if test "x$PCAP_LIBS" = x; then
@@ -9818,44 +9934,50 @@ rm -f core conftest.err conftest.$ac_objext \
     conftest$ac_exeext conftest.$ac_ext
 
 for ac_func in \
-  getopt_long \
-  fcntl \
-  strsignal \
-  sigaction \
-  sigprocmask \
-  pthread_sigmask \
-  snprintf \
-  vsnprintf \
-  setsid \
-  strncasecmp \
-  strcasecmp \
-  localtime_r \
+  bindat \
+  clock_gettime \
+  closefrom \
   ctime_r \
-  gmtime_r \
-  strsep \
-  inet_aton \
-  inet_pton \
-  inet_ntop \
-  mallopt \
-  setlinebuf \
-  setvbuf \
-  getusershell \
-  initgroups \
+  dladdr \
+  fcntl \
+  fopencookie \
+  funopen \
   getaddrinfo \
   getnameinfo \
-  closefrom \
-  gettimeofday \
+  getopt_long \
   getpeereid \
-  setuid \
-  setresuid \
   getresuid \
+  gettimeofday \
+  getusershell \
+  gmtime_r \
+  if_indextoname \
+  inet_aton \
+  inet_ntop \
+  inet_pton \
+  initgroups \
+  kqueue \
+  localtime_r \
+  mallopt \
+  mkdirat \
+  openat \
+  pthread_sigmask \
+  setlinebuf \
+  setresuid \
+  setsid \
+  setuid \
+  setvbuf \
+  sigaction \
+  sigprocmask \
+  snprintf \
+  strcasecmp \
   strlcat \
   strlcpy \
-  kqueue \
-  openat \
-  mkdirat \
+  strncasecmp \
+  strsep \
+  strsignal \
   unlinkat \
-  bindat
+  vdprintf \
+  vsnprintf
 
 do :
   as_ac_var=`$as_echo "ac_cv_func_$ac_func" | $as_tr_sh`
@@ -10321,7 +10443,7 @@ fi
 $as_echo "$ax_cv_cc_weverything_flag" >&6; }
 
   if test "x$ax_cv_cc_weverything_flag" = "xyes"; then
-    devflags="$devflags -Weverything -Wformat=2 -Wno-padded -Wno-gnu-zero-variadic-macro-arguments -Wno-shorten-64-to-32 -Wno-sign-conversion -Wno-conversion -Wno-switch-enum -Wno-gnu-statement-expression -Wno-extended-offsetof -Wno-cast-align -Wno-documentation-unknown-command -Wno-covered-switch-default -Wno-packed -DWITH_VERIFY_PTR=1"
+    devflags="$devflags -W -Weverything -Wformat=2 -Wno-missing-field-initializers -Wno-date-time -Wno-padded -Wno-gnu-zero-variadic-macro-arguments -Wno-shorten-64-to-32 -Wno-sign-conversion -Wno-conversion -Wno-switch-enum -Wno-gnu-statement-expression -Wno-extended-offsetof -Wno-cast-align -Wno-documentation-unknown-command -Wno-covered-switch-default -Wno-packed -DWITH_VERIFY_PTR=1"
   else
     if test "x$GCC" = "xyes"; then
       devflags="$devflags -Wshadow -Wpointer-arith -Wcast-qual -Wcast-align -Wwrite-strings -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations -Wnested-externs -W -Wredundant-decls -Wundef -Wformat-y2k -Wno-format-extra-args -Wno-format-zero-length -Wno-cast-align -Wformat-nonliteral -Wformat-security -Wformat=2 -DWITH_VERIFY_PTR=1"
@@ -10474,30 +10596,42 @@ $as_echo "#define TLS_STORAGE_CLASS _Thread_local" >>confdefs.h
 
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking for __builtin_choose_expr support in compiler" >&5
 $as_echo_n "checking for __builtin_choose_expr support in compiler... " >&6; }
-  if test "$cross_compiling" = yes; then :
-  have_builtin_choose_expr=no
+if ${ax_cv_cc_builtin_choose_expr+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+
+    if test "$cross_compiling" = yes; then :
+  { { $as_echo "$as_me:${as_lineno-$LINENO}: error: in \`$ac_pwd':" >&5
+$as_echo "$as_me: error: in \`$ac_pwd':" >&2;}
+as_fn_error $? "cannot run test program while cross compiling
+See \`config.log' for more details" "$LINENO" 5; }
 else
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
-        int main(int argc, char **argv) {
-          return __builtin_choose_expr(0, 1, 0);
-        }
+
+          int main(int argc, char **argv) {
+            if ((argc < 0) || !argv) return 1; /* -Werror=unused-parameter */
+            return __builtin_choose_expr(0, 1, 0);
+          }
 
 
 _ACEOF
 if ac_fn_c_try_run "$LINENO"; then :
-  have_builtin_choose_expr=yes
+  ax_cv_cc_builtin_choose_expr=yes
 else
-  have_builtin_choose_expr=no
+  ax_cv_cc_builtin_choose_expr=no
+
 fi
 rm -f core *.core core.conftest.* gmon.out bb.out conftest$ac_exeext \
   conftest.$ac_objext conftest.beam conftest.$ac_ext
 fi
 
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $have_builtin_choose_expr" >&5
-$as_echo "$have_builtin_choose_expr" >&6; }
-  if test "x$have_builtin_choose_expr" = "xyes"; then
+
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ax_cv_cc_builtin_choose_expr" >&5
+$as_echo "$ax_cv_cc_builtin_choose_expr" >&6; }
+  if test "x$ax_cv_cc_builtin_choose_expr" = "xyes"; then
 
 $as_echo "#define HAVE_BUILTIN_CHOOSE_EXPR 1" >>confdefs.h
 
@@ -10506,30 +10640,42 @@ $as_echo "#define HAVE_BUILTIN_CHOOSE_EXPR 1" >>confdefs.h
 
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking for __builtin_types_compatible_p support in compiler" >&5
 $as_echo_n "checking for __builtin_types_compatible_p support in compiler... " >&6; }
-  if test "$cross_compiling" = yes; then :
-  have_builtin_types_compatible_p=no
+if ${ax_cv_cc_builtin_types_compatible_p+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+
+    if test "$cross_compiling" = yes; then :
+  { { $as_echo "$as_me:${as_lineno-$LINENO}: error: in \`$ac_pwd':" >&5
+$as_echo "$as_me: error: in \`$ac_pwd':" >&2;}
+as_fn_error $? "cannot run test program while cross compiling
+See \`config.log' for more details" "$LINENO" 5; }
 else
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
-        int main(int argc, char **argv) {
-          return !(__builtin_types_compatible_p(char *, char *));
-        }
+
+          int main(int argc, char **argv) {
+            if ((argc < 0) || !argv) return 1; /* -Werror=unused-parameter */
+            return !(__builtin_types_compatible_p(char *, char *));
+          }
 
 
 _ACEOF
 if ac_fn_c_try_run "$LINENO"; then :
-  have_builtin_types_compatible_p=yes
+  ax_cv_cc_builtin_types_compatible_p=yes
 else
-  have_builtin_types_compatible_p=no
+  ax_cv_cc_builtin_types_compatible_p=no
+
 fi
 rm -f core *.core core.conftest.* gmon.out bb.out conftest$ac_exeext \
   conftest.$ac_objext conftest.beam conftest.$ac_ext
 fi
 
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $have_builtin_types_compatible_p" >&5
-$as_echo "$have_builtin_types_compatible_p" >&6; }
-  if test "x$have_builtin_types_compatible_p" = "xyes"; then
+
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ax_cv_cc_builtin_types_compatible_p" >&5
+$as_echo "$ax_cv_cc_builtin_types_compatible_p" >&6; }
+  if test "x$ax_cv_cc_builtin_types_compatible_p" = "xyes"; then
 
 $as_echo "#define HAVE_BUILTIN_TYPES_COMPATIBLE_P 1" >>confdefs.h
 
@@ -10538,32 +10684,92 @@ $as_echo "#define HAVE_BUILTIN_TYPES_COMPATIBLE_P 1" >>confdefs.h
 
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking for __builtin_bswap64 support in compiler" >&5
 $as_echo_n "checking for __builtin_bswap64 support in compiler... " >&6; }
-  if test "$cross_compiling" = yes; then :
-  have_builtin_bswap64=no
+if ${ax_cv_cc_builtin_bswap64+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+
+    if test "$cross_compiling" = yes; then :
+  { { $as_echo "$as_me:${as_lineno-$LINENO}: error: in \`$ac_pwd':" >&5
+$as_echo "$as_me: error: in \`$ac_pwd':" >&2;}
+as_fn_error $? "cannot run test program while cross compiling
+See \`config.log' for more details" "$LINENO" 5; }
 else
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
-        int main(int argc, char **argv) {
-          return (__builtin_bswap64(0));
-        }
+
+          int main(int argc, char **argv) {
+            if ((argc < 0) || !argv) return 1; /* -Werror=unused-parameter */
+            return (__builtin_bswap64(0));
+          }
 
 
 _ACEOF
 if ac_fn_c_try_run "$LINENO"; then :
-  have_builtin_bswap64=yes
+  ax_cv_cc_builtin_bswap64=yes
 else
-  have_builtin_bswap64=no
+  ax_cv_cc_builtin_bswap64=no
+
 fi
 rm -f core *.core core.conftest.* gmon.out bb.out conftest$ac_exeext \
   conftest.$ac_objext conftest.beam conftest.$ac_ext
 fi
 
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $have_builtin_bswap64" >&5
-$as_echo "$have_builtin_bswap64" >&6; }
-  if test "x$have_builtin_bswap64" = "xyes"; then
+
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ax_cv_cc_builtin_bswap64" >&5
+$as_echo "$ax_cv_cc_builtin_bswap64" >&6; }
+  if test "x$ax_cv_cc_builtin_bswap64" = "xyes"; then
 
 $as_echo "#define HAVE_BUILTIN_BSWAP_64 1" >>confdefs.h
+
+  fi
+
+
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for __attribute__((__bounded__)) support in compiler" >&5
+$as_echo_n "checking for __attribute__((__bounded__)) support in compiler... " >&6; }
+if ${ax_cv_cc_bounded_attribute+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+
+    CFLAGS_SAVED=$CFLAGS
+    CFLAGS="$CFLAGS -Werror"
+    if test "$cross_compiling" = yes; then :
+  { { $as_echo "$as_me:${as_lineno-$LINENO}: error: in \`$ac_pwd':" >&5
+$as_echo "$as_me: error: in \`$ac_pwd':" >&2;}
+as_fn_error $? "cannot run test program while cross compiling
+See \`config.log' for more details" "$LINENO" 5; }
+else
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+
+          void test(char *buff) __attribute__ ((__bounded__ (__string__, 1, 1)));
+          int main(int argc, char **argv) {
+            if ((argc < 0) || !argv) return 1; /* -Werror=unused-parameter */
+            return 0;
+          }
+
+
+_ACEOF
+if ac_fn_c_try_run "$LINENO"; then :
+  ax_cv_cc_bounded_attribute=yes
+else
+  ax_cv_cc_bounded_attribute=no
+
+fi
+rm -f core *.core core.conftest.* gmon.out bb.out conftest$ac_exeext \
+  conftest.$ac_objext conftest.beam conftest.$ac_ext
+fi
+
+    CFLAGS="$CFLAGS_SAVED"
+
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ax_cv_cc_bounded_attribute" >&5
+$as_echo "$ax_cv_cc_bounded_attribute" >&6; }
+  if test "x$ax_cv_cc_bounded_attribute" = "xyes"; then
+
+$as_echo "#define HAVE_ATTRIBUTE_BOUNDED 1" >>confdefs.h
 
   fi
 

@@ -50,6 +50,38 @@ static long ssl_built = OPENSSL_VERSION_NUMBER;
  */
 int ssl_check_consistency(void)
 {
+	long ssl_linked;
+	
+	return 0; /* Painless Security customization */
+
+	ssl_linked = SSLeay();
+
+	/*
+	 *	Status mismatch always triggers error.
+	 */
+	if ((ssl_linked & 0x0000000f) != (ssl_built & 0x0000000f)) {
+	mismatch:
+		ERROR("libssl version mismatch.  built: %lx linked: %lx",
+		      (unsigned long) ssl_built,
+		      (unsigned long) ssl_linked);
+
+		return -1;
+	}
+
+	/*
+	 *	Use the OpenSSH approach and relax fix checks after version
+	 *	1.0.0 and only allow moving backwards within a patch
+	 *	series.
+	 */
+	if (ssl_built & 0xf0000000) {
+		if ((ssl_built & 0xfffff000) != (ssl_linked & 0xfffff000) ||
+		    (ssl_built & 0x00000ff0) > (ssl_linked & 0x00000ff0)) goto mismatch;
+	/*
+	 *	Before 1.0.0 we require the same major minor and fix version
+	 *	and ignore the patch number.
+	 */
+	} else if ((ssl_built & 0xfffff000) != (ssl_linked & 0xfffff000)) goto mismatch;
+
 	return 0;
 }
 
@@ -466,7 +498,7 @@ void version_print(void)
 	CONF_ITEM *ci;
 	CONF_PAIR *cp;
 
-	if (DEBUG_ENABLED2) {
+	if (DEBUG_ENABLED3) {
 		int max = 0, len;
 
 		MEM(features = cf_section_alloc(NULL, "feature", NULL));
@@ -475,7 +507,7 @@ void version_print(void)
 		MEM(versions = cf_section_alloc(NULL, "version", NULL));
 		version_init_numbers(versions);
 
-		DEBUG3("Server was built with: ");
+		DEBUG2("Server was built with: ");
 
 		for (ci = cf_item_find_next(features, NULL);
 		     ci;
@@ -500,13 +532,13 @@ void version_print(void)
 			cp = cf_item_to_pair(ci);
 			attr = cf_pair_attr(cp);
 
-			DEBUG3("  %s%.*s : %s", attr,
+			DEBUG2("  %s%.*s : %s", attr,
 			       (int)(max - talloc_array_length(attr)), spaces,  cf_pair_value(cp));
 		}
 
 		talloc_free(features);
 
-		DEBUG3("Server core libs:");
+		DEBUG2("Server core libs:");
 
 		for (ci = cf_item_find_next(versions, NULL);
 		     ci;
@@ -516,36 +548,38 @@ void version_print(void)
 			cp = cf_item_to_pair(ci);
 			attr = cf_pair_attr(cp);
 
-			DEBUG3("  %s%.*s : %s", attr,
+			DEBUG2("  %s%.*s : %s", attr,
 			       (int)(max - talloc_array_length(attr)), spaces,  cf_pair_value(cp));
 		}
 
 		talloc_free(versions);
 
-		DEBUG3("Endianess:");
-#if defined(RADIUS_LITTLE_ENDIAN)
-		DEBUG3("  little");
-#elif defined(RADIUS_BIG_ENDIAN)
-		DEBUG3("  big");
+		DEBUG2("Endianness:");
+#if defined(FR_LITTLE_ENDIAN)
+		DEBUG2("  little");
+#elif defined(FR_BIG_ENDIAN)
+		DEBUG2("  big");
 #else
-		DEBUG3("  unknown");
+		DEBUG2("  unknown");
 #endif
 
-		DEBUG3("Compilation flags:");
+		DEBUG2("Compilation flags:");
 #ifdef BUILT_WITH_CPPFLAGS
-		DEBUG3("  cppflags : " BUILT_WITH_CPPFLAGS);
+		DEBUG2("  cppflags : " BUILT_WITH_CPPFLAGS);
 #endif
 #ifdef BUILT_WITH_CFLAGS
-		DEBUG3("  cflags   : " BUILT_WITH_CFLAGS);
+		DEBUG2("  cflags   : " BUILT_WITH_CFLAGS);
 #endif
 #ifdef BUILT_WITH_LDFLAGS
-		DEBUG3("  ldflags  : " BUILT_WITH_LDFLAGS);
+		DEBUG2("  ldflags  : " BUILT_WITH_LDFLAGS);
 #endif
 #ifdef BUILT_WITH_LIBS
-		DEBUG3("  libs     : " BUILT_WITH_LIBS);
+		DEBUG2("  libs     : " BUILT_WITH_LIBS);
 #endif
+		DEBUG2("  ");
 	}
-	INFO("Copyright (C) 1999-2015 The FreeRADIUS server project and contributors");
+	INFO("FreeRADIUS Version " RADIUSD_VERSION_STRING);
+	INFO("Copyright (C) 1999-2016 The FreeRADIUS server project and contributors");
 	INFO("There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A");
 	INFO("PARTICULAR PURPOSE");
 	INFO("You may redistribute copies of FreeRADIUS under the terms of the");

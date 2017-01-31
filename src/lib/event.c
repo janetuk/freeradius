@@ -6,8 +6,7 @@
  *
  *   This library is free software; you can redistribute it and/or
  *   modify it under the terms of the GNU Lesser General Public
- *   the Free Software Foundation; either version 2 of the License, or (at
- *   your option) any later version. either
+ *   License as published by the Free Software Foundation; either
  *   version 2.1 of the License, or (at your option) any later version.
  *
  *   This library is distributed in the hope that it will be useful,
@@ -227,9 +226,28 @@ int fr_event_insert(fr_event_list_t *el, fr_event_callback_t callback, void *ctx
 		return 0;
 	}
 
-	if (*parent) fr_event_delete(el, parent);
+	/*
+	 *	If there is an event, re-use it instead of freeing it
+	 *	and allocating a new one.
+	 */
+	if (*parent) {
+		int ret;
 
-	ev = talloc_zero(el, fr_event_t);
+#ifndef NDEBUG
+		ev = talloc_get_type_abort(*parent, fr_event_t);
+#else
+		ev = *parent;
+#endif
+
+		ret = fr_heap_extract(el->times, ev);
+		fr_assert(ret == 1);	/* events MUST be in the heap */
+
+		memset(ev, 0, sizeof(*ev));
+	} else {
+		ev = talloc_zero(el, fr_event_t);
+		if (!ev) return 0;
+	}
+
 	ev->callback = callback;
 	ev->ctx = ctx;
 	ev->when = *when;
@@ -286,7 +304,7 @@ int fr_event_run(fr_event_list_t *el, struct timeval *when)
 	/*
 	 *	Delete the event before calling it.
 	 */
-	fr_event_delete(el, &ev);
+	fr_event_delete(el, ev->parent);
 
 	callback(ctx);
 	return 1;

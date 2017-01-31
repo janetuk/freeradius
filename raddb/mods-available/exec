@@ -17,7 +17,7 @@
 #
 #  The RADIUS attributes from the user request will be placed
 #  into environment variables of the executed program, as
-#  described in "man unlang" and in doc/variables.txt
+#  described in "man unlang" and in doc/configuration/variables.rst
 #
 #  See also "echo" for more sample configuration.
 #
@@ -25,6 +25,5 @@ exec {
 	wait = no
 	input_pairs = request
 	shell_escape = yes
-	output = none
 	timeout = 10
 }

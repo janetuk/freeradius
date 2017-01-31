@@ -74,8 +74,8 @@ struct fr_cond_t {
 
 	CONF_ITEM const *ci;
 	union {
-		value_pair_map_t *map;
-		value_pair_tmpl_t *vpt;
+		vp_map_t *map;
+		vp_tmpl_t *vpt;
 		fr_cond_t  	*child;
 	} data;
 

@@ -42,17 +42,15 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 
 static CONF_PARSER module_config[] = {
 	{ "tls", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_tls_t, tls_conf_name), NULL },
-
 	{ "virtual_server", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_tls_t, virtual_server), NULL },
-
-	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
+	CONF_PARSER_TERMINATOR
 };
 
 
 /*
  *	Attach the EAP-TLS module.
  */
-static int eaptls_attach(CONF_SECTION *cs, void **instance)
+static int mod_instantiate(CONF_SECTION *cs, void **instance)
 {
 	rlm_eap_tls_t		*inst;
 
@@ -80,7 +78,7 @@ static int eaptls_attach(CONF_SECTION *cs, void **instance)
 /*
  *	Send an initial eap-tls request to the peer, using the libeap functions.
  */
-static int eaptls_initiate(void *type_arg, eap_handler_t *handler)
+static int mod_session_init(void *type_arg, eap_handler_t *handler)
 {
 	int		status;
 	tls_session_t	*ssn;
@@ -90,7 +88,6 @@ static int eaptls_initiate(void *type_arg, eap_handler_t *handler)
 	inst = type_arg;
 
 	handler->tls = true;
-	handler->finished = false;
 
 	/*
 	 *	EAP-TLS always requires a client certificate.
@@ -112,15 +109,17 @@ static int eaptls_initiate(void *type_arg, eap_handler_t *handler)
 	 *	related handshaking or application data.
 	 */
 	status = eaptls_start(handler->eap_ds, ssn->peap_flag);
-	RDEBUG2("Start returned %d", status);
-	if (status == 0) {
-		return 0;
+	if ((status == FR_TLS_INVALID) || (status == FR_TLS_FAIL)) {
+		REDEBUG("[eaptls start] = %s", fr_int2str(fr_tls_status_table, status, "<INVALID>"));
+	} else {
+		RDEBUG2("[eaptls start] = %s", fr_int2str(fr_tls_status_table, status, "<INVALID>"));
 	}
+	if (status == 0) return 0;
 
 	/*
 	 *	The next stage to process the packet.
 	 */
-	handler->stage = AUTHENTICATE;
+	handler->stage = PROCESS;
 
 	return 1;
 }
@@ -128,7 +127,7 @@ static int eaptls_initiate(void *type_arg, eap_handler_t *handler)
 /*
  *	Do authentication, by letting EAP-TLS do most of the work.
  */
-static int CC_HINT(nonnull) mod_authenticate(void *type_arg, eap_handler_t *handler)
+static int CC_HINT(nonnull) mod_process(void *type_arg, eap_handler_t *handler)
 {
 	fr_tls_status_t	status;
 	tls_session_t *tls_session = (tls_session_t *) handler->opaque;
@@ -137,18 +136,21 @@ static int CC_HINT(nonnull) mod_authenticate(void *type_arg, eap_handler_t *hand
 
 	inst = type_arg;
 
-	RDEBUG2("Authenticate");
-
 	status = eaptls_process(handler);
-	RDEBUG2("eaptls_process returned %d\n", status);
+	if ((status == FR_TLS_INVALID) || (status == FR_TLS_FAIL)) {
+		REDEBUG("[eaptls process] = %s", fr_int2str(fr_tls_status_table, status, "<INVALID>"));
+	} else {
+		RDEBUG2("[eaptls process] = %s", fr_int2str(fr_tls_status_table, status, "<INVALID>"));
+	}
+
 	switch (status) {
-		/*
-		 *	EAP-TLS handshake was successful, return an
-		 *	EAP-TLS-Success packet here.
-		 *
-		 *	If a virtual server was configured, check that
-		 *	it accepts the certificates, too.
-		 */
+	/*
+	 *	EAP-TLS handshake was successful, return an
+	 *	EAP-TLS-Success packet here.
+	 *
+	 *	If a virtual server was configured, check that
+	 *	it accepts the certificates, too.
+	 */
 	case FR_TLS_SUCCESS:
 		if (inst->virtual_server) {
 			VALUE_PAIR *vp;
@@ -158,25 +160,25 @@ static int CC_HINT(nonnull) mod_authenticate(void *type_arg, eap_handler_t *hand
 			fake = request_alloc_fake(request);
 			rad_assert(!fake->packet->vps);
 
-			fake->packet->vps = paircopy(fake->packet, request->packet->vps);
+			fake->packet->vps = fr_pair_list_copy(fake->packet, request->packet->vps);
 
 			/* set the virtual server to use */
-			if ((vp = pairfind(request->config_items, PW_VIRTUAL_SERVER, 0, TAG_ANY)) != NULL) {
+			if ((vp = fr_pair_find_by_num(request->config, PW_VIRTUAL_SERVER, 0, TAG_ANY)) != NULL) {
 				fake->server = vp->vp_strvalue;
 			} else {
 				fake->server = inst->virtual_server;
 			}
 
-			RDEBUG("Processing EAP-TLS Certificate check:");
+			RDEBUG2("Validating certificate");
 			rad_virtual_server(fake);
 
 			/* copy the reply vps back to our reply */
-			pairfilter(request->reply, &request->reply->vps,
+			fr_pair_list_mcopy_by_num(request->reply, &request->reply->vps,
 				  &fake->reply->vps, 0, 0, TAG_ANY);
 
 			/* reject if virtual server didn't return accept */
 			if (fake->reply->code != PW_CODE_ACCESS_ACCEPT) {
-				RDEBUG2("Certificates were rejected by the virtual server");
+				RDEBUG2("Certificate rejected by the virtual server");
 				talloc_free(fake);
 				eaptls_fail(handler, 0);
 				return 0;
@@ -202,7 +204,7 @@ static int CC_HINT(nonnull) mod_authenticate(void *type_arg, eap_handler_t *hand
 	case FR_TLS_OK:
 		RDEBUG2("Received unexpected tunneled data after successful handshake");
 #ifndef NDEBUG
-		if ((debug_flag > 2) && fr_log_fp) {
+		if ((rad_debug_lvl > 2) && fr_log_fp) {
 			unsigned int i;
 			unsigned int data_len;
 			unsigned char buffer[1024];
@@ -247,10 +249,8 @@ static int CC_HINT(nonnull) mod_authenticate(void *type_arg, eap_handler_t *hand
  */
 extern rlm_eap_module_t rlm_eap_tls;
 rlm_eap_module_t rlm_eap_tls = {
-	"eap_tls",
-	eaptls_attach,			/* attach */
-	eaptls_initiate,		/* Start the initial request */
-	NULL,				/* authorization */
-	mod_authenticate,		/* authentication */
-	NULL				/* detach */
+	.name		= "eap_tls",
+	.instantiate	= mod_instantiate,	/* Create new submodule instance */
+	.session_init	= mod_session_init,	/* Initialise a new EAP session */
+	.process	= mod_process		/* Process next round of EAP method */
 };

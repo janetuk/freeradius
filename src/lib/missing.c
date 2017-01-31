@@ -6,8 +6,7 @@
  *
  *   This library is free software; you can redistribute it and/or
  *   modify it under the terms of the GNU Lesser General Public
- *   the Free Software Foundation; either version 2 of the License, or (at
- *   your option) any later version. either
+ *   License as published by the Free Software Foundation; either
  *   version 2.1 of the License, or (at your option) any later version.
  *
  *   This library is distributed in the hope that it will be useful,
@@ -192,6 +191,29 @@ struct tm *gmtime_r(time_t const *l_clock, struct tm *result)
 }
 #endif
 
+#ifndef HAVE_VDPRINTF
+int vdprintf (int fd, char const *format, va_list args)
+{
+	int     ret;
+	FILE    *fp;
+	int	dup_fd;
+
+	dup_fd = dup(fd);
+	if (dup_fd < 0) return -1;
+
+	fp = fdopen(fd, "w");
+	if (!fp) {
+		close(dup_fd);
+		return -1;
+	}
+
+	ret = vfprintf(fp, format, args);
+	fclose(fp);	/* Also closes dup_fd */
+
+	return ret;
+}
+#endif
+
 #ifndef HAVE_GETTIMEOFDAY
 #ifdef WIN32
 /*
@@ -274,7 +296,7 @@ ntp2timeval(struct timeval *tv, char const *ntp)
 	tv->tv_usec = usec / 4295; /* close enough */
 }
 
-#if !defined(HAVE_128BIT_INTEGERS) && defined(RADIUS_LITTLE_ENDIAN)
+#if !defined(HAVE_128BIT_INTEGERS) && defined(FR_LITTLE_ENDIAN)
 /** Swap byte order of 128 bit integer
  *
  * @param num 128bit integer to swap.
@@ -337,3 +359,23 @@ char *talloc_typed_asprintf(void const *t, char const *fmt, ...)
 
 	return n;
 }
+
+/** Binary safe strndup function
+ *
+ * @param[in] t The talloc context o allocate new buffer in.
+ * @param[in] in String to dup, may contain embedded '\0'.
+ * @param[in] inlen Number of bytes to dup.
+ * @return duped string.
+ */
+char *talloc_bstrndup(void const *t, char const *in, size_t inlen)
+{
+	char *p;
+
+	p = talloc_array(t, char, inlen + 1);
+	if (!p) return NULL;
+	memcpy(p, in, inlen);
+	p[inlen] = '\0';
+
+	return p;
+}
+

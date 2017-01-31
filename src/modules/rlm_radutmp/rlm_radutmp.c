@@ -66,7 +66,7 @@ static const CONF_PARSER module_config[] = {
 	{ "permissions", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_radutmp_t, permission), "0644" },
 	{ "callerid", FR_CONF_OFFSET(PW_TYPE_BOOLEAN | PW_TYPE_DEPRECATED, rlm_radutmp_t, caller_id_ok), NULL },
 	{ "caller_id", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_radutmp_t, caller_id_ok), "no" },
-	{ NULL, -1, 0, NULL, NULL }		/* end the list */
+	CONF_PARSER_TERMINATOR
 };
 
 
@@ -174,7 +174,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 	/*
 	 *	Which type is this.
 	 */
-	if ((vp = pairfind(request->packet->vps, PW_ACCT_STATUS_TYPE, 0, TAG_ANY)) == NULL) {
+	if ((vp = fr_pair_find_by_num(request->packet->vps, PW_ACCT_STATUS_TYPE, 0, TAG_ANY)) == NULL) {
 		RDEBUG("No Accounting-Status-Type record");
 		return RLM_MODULE_NOOP;
 	}
@@ -197,10 +197,10 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 		int check1 = 0;
 		int check2 = 0;
 
-		if ((vp = pairfind(request->packet->vps, PW_ACCT_SESSION_TIME, 0, TAG_ANY))
+		if ((vp = fr_pair_find_by_num(request->packet->vps, PW_ACCT_SESSION_TIME, 0, TAG_ANY))
 		     == NULL || vp->vp_date == 0)
 			check1 = 1;
-		if ((vp = pairfind(request->packet->vps, PW_ACCT_SESSION_ID, 0, TAG_ANY))
+		if ((vp = fr_pair_find_by_num(request->packet->vps, PW_ACCT_SESSION_ID, 0, TAG_ANY))
 		     != NULL && vp->vp_length == 8 &&
 		     memcmp(vp->vp_strvalue, "00000000", 8) == 0)
 			check2 = 1;
@@ -639,11 +639,11 @@ static rlm_rcode_t CC_HINT(nonnull) mod_checksimul(void *instance, REQUEST *requ
 	/*
 	 *	Setup some stuff, like for MPP detection.
 	 */
-	if ((vp = pairfind(request->packet->vps, PW_FRAMED_IP_ADDRESS, 0, TAG_ANY)) != NULL) {
+	if ((vp = fr_pair_find_by_num(request->packet->vps, PW_FRAMED_IP_ADDRESS, 0, TAG_ANY)) != NULL) {
 		ipno = vp->vp_ipaddr;
 	}
 
-	if ((vp = pairfind(request->packet->vps, PW_CALLING_STATION_ID, 0, TAG_ANY)) != NULL) {
+	if ((vp = fr_pair_find_by_num(request->packet->vps, PW_CALLING_STATION_ID, 0, TAG_ANY)) != NULL) {
 		call_num = vp->vp_strvalue;
 	}
 
@@ -741,30 +741,18 @@ static rlm_rcode_t CC_HINT(nonnull) mod_checksimul(void *instance, REQUEST *requ
 /* globally exported name */
 extern module_t rlm_radutmp;
 module_t rlm_radutmp = {
-	RLM_MODULE_INIT,
-	"radutmp",
-	RLM_TYPE_THREAD_UNSAFE | RLM_TYPE_HUP_SAFE,   	/* type */
-	sizeof(rlm_radutmp_t),
-	module_config,
-	NULL,			       /* instantiation */
-	NULL,			       /* detach */
-	{
-		NULL,		 /* authentication */
-		NULL,		 /* authorization */
-		NULL,		 /* preaccounting */
+	.magic		= RLM_MODULE_INIT,
+	.name		= "radutmp",
+	.type		= RLM_TYPE_THREAD_UNSAFE | RLM_TYPE_HUP_SAFE,
+	.inst_size	= sizeof(rlm_radutmp_t),
+	.config		= module_config,
+	.methods = {
 #ifdef WITH_ACCOUNTING
-		mod_accounting,   /* accounting */
-#else
-		NULL,
+		[MOD_ACCOUNTING]	= mod_accounting,
 #endif
 #ifdef WITH_SESSION_MGMT
-		mod_checksimul,	/* checksimul */
-#else
-		NULL,
+		[MOD_SESSION]		= mod_checksimul
 #endif
-		NULL,			/* pre-proxy */
-		NULL,			/* post-proxy */
-		NULL			/* post-auth */
 	},
 };
 

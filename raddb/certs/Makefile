@@ -9,7 +9,7 @@
 #
 ######################################################################
 
-DH_KEY_SIZE	= 1024
+DH_KEY_SIZE	= 2048
 
 #
 #  Set the passwords
@@ -22,7 +22,7 @@ DH_KEY_SIZE	= 1024
 #
 ######################################################################
 .PHONY: all
-all: index.txt serial dh random server ca client
+all: index.txt serial dh server ca client
 
 .PHONY: client
 client: client.pem
@@ -32,6 +32,9 @@ ca: ca.der
 
 .PHONY: server
 server: server.pem server.vrfy
+
+.PHONY: verify
+verify: server.vrfy client.vrfy
 
 passwords.mk: server.cnf ca.cnf client.cnf
 	@echo "PASSWORD_SERVER	= '$(shell grep output_password server.cnf | sed 's/.*=//;s/^ *//')'"		> $@
@@ -46,7 +49,7 @@ passwords.mk: server.cnf ca.cnf client.cnf
 #
 ######################################################################
 dh:
-	openssl dhparam -out dh $(DH_KEY_SIZE)
+	openssl gendh -out dh -2 $(DH_KEY_SIZE)
 
 ######################################################################
 #
@@ -118,13 +121,6 @@ index.txt:
 serial:
 	@echo '01' > serial
 
-random:
-	@if [ -c /dev/urandom ] ; then \
-		ln -sf /dev/urandom random; \
-	else \
-		date > ./random; \
-	fi
-
 print:
 	openssl x509 -text -in server.crt
 
@@ -139,4 +135,4 @@ clean:
 #
 destroycerts:
 	rm -f *~ dh *.csr *.crt *.p12 *.der *.pem *.key index.txt* \
-			serial* random *\.0 *\.1
+			serial*  *\.0 *\.1

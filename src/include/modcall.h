@@ -21,7 +21,7 @@ extern "C" {
  */
 typedef struct modcallable modcallable;
 
-int modcall_fixup_update(value_pair_map_t *map, void *ctx);
+int modcall_fixup_update(vp_map_t *map, void *ctx);
 
 int modcall(rlm_components_t component, modcallable *c, REQUEST *request);
 
@@ -45,6 +45,8 @@ bool modcall_pass2(modcallable *mc);
 void add_to_modcallable(modcallable *parent, modcallable *this);
 
 void modcall_debug(modcallable *mc, int depth);
+
+int modcall_pass2_condition(fr_cond_t *c);
 
 #ifdef __cplusplus
 }

@@ -5,8 +5,7 @@
  *
  *   This library is free software; you can redistribute it and/or
  *   modify it under the terms of the GNU Lesser General Public
- *   the Free Software Foundation; either version 2 of the License, or (at
- *   your option) any later version. either
+ *   License as published by the Free Software Foundation; either
  *   version 2.1 of the License, or (at your option) any later version.
  *
  *   This library is distributed in the hope that it will be useful,
@@ -30,6 +29,29 @@ RCSID("$Id$")
 #include <fcntl.h>
 #include <grp.h>
 #include <pwd.h>
+#include <sys/uio.h>
+
+#ifdef HAVE_DIRENT_H
+#include <dirent.h>
+
+/*
+ *	Some versions of Linux don't have closefrom(), but they will
+ *	have /proc.
+ *
+ *	BSD systems will generally have closefrom(), but not proc.
+ *
+ *	OSX doesn't have closefrom() or /proc/self/fd, but it does
+ *	have /dev/fd
+ */
+#ifdef __linux__
+#define CLOSEFROM_DIR "/proc/self/fd"
+#elif defined(__APPLE__)
+#define CLOSEFROM_DIR "/dev/fd"
+#else
+#undef HAVE_DIRENT_H
+#endif
+
+#endif
 
 #define FR_PUT_LE16(a, val)\
 	do {\
@@ -39,7 +61,7 @@ RCSID("$Id$")
 
 bool	fr_dns_lookups = false;	    /* IP -> hostname lookups? */
 bool    fr_hostname_lookups = true; /* hostname -> IP lookups? */
-int	fr_debug_flag = 0;
+int	fr_debug_lvl = 0;
 
 static char const *months[] = {
 	"jan", "feb", "mar", "apr", "may", "jun",
@@ -78,6 +100,28 @@ int fr_set_signal(int sig, sig_t func)
 	}
 #endif
 	return 0;
+}
+
+/** Uninstall a signal for a specific handler
+ *
+ * man sigaction says these are fine to call from a signal handler.
+ *
+ * @param sig SIGNAL
+ */
+int fr_unset_signal(int sig)
+{
+#ifdef HAVE_SIGACTION
+        struct sigaction act;
+
+        memset(&act, 0, sizeof(act));
+        act.sa_flags = 0;
+        sigemptyset(&act.sa_mask);
+        act.sa_handler = SIG_DFL;
+
+        return sigaction(sig, &act, NULL);
+#else
+        return signal(sig, SIG_DFL);
+#endif
 }
 
 static int _fr_trigger_talloc_ctx_free(fr_talloc_link_t *trigger)
@@ -198,6 +242,66 @@ char const *ip_ntoa(char *buffer, uint32_t ipaddr)
 	return buffer;
 }
 
+/*
+ *	Parse decimal digits until we run out of decimal digits.
+ */
+static int ip_octet_from_str(char const *str, uint32_t *poctet)
+{
+	uint32_t octet;
+	char const *p = str;
+
+	if ((*p < '0') || (*p > '9')) {
+		return -1;
+	}
+
+	octet = 0;
+
+	while ((*p >= '0') && (*p <= '9')) {
+		octet *= 10;
+		octet += *p - '0';
+		p++;
+
+		if (octet > 255) return -1;
+	}
+
+
+	*poctet = octet;
+	return p - str;
+}
+
+static int ip_prefix_from_str(char const *str, uint32_t *paddr)
+{
+	int shift, length;
+	uint32_t octet;
+	uint32_t addr;
+	char const *p = str;
+
+	addr = 0;
+
+	for (shift = 24; shift >= 0; shift -= 8) {
+		length = ip_octet_from_str(p, &octet);
+		if (length <= 0) return -1;
+
+		addr |= octet << shift;
+		p += length;
+
+		/*
+		 *	EOS or / means we're done.
+		 */
+		if (!*p || (*p == '/')) break;
+
+		/*
+		 *	We require dots between octets.
+		 */
+		if (*p != '.') return -1;
+		p++;
+	}
+
+	*paddr = htonl(addr);
+	return p - str;
+}
+
+
 /** Parse an IPv4 address or IPv4 prefix in presentation format (and others)
  *
  * @param out Where to write the ip address value.
@@ -210,7 +314,7 @@ char const *ip_ntoa(char *buffer, uint32_t ipaddr)
 int fr_pton4(fr_ipaddr_t *out, char const *value, ssize_t inlen, bool resolve, bool fallback)
 {
 	char *p;
-	unsigned int prefix;
+	unsigned int mask;
 	char *eptr;
 
 	/* Dotted quad + / + [0-9]{1,2} */
@@ -226,9 +330,11 @@ int fr_pton4(fr_ipaddr_t *out, char const *value, ssize_t inlen, bool resolve, b
 		}
 		memcpy(buffer, value, inlen);
 		buffer[inlen] = '\0';
+		value = buffer;
 	}
 
 	p = strchr(value, '/');
+
 	/*
 	 *	192.0.2.2 is parsed as if it was /32
 	 */
@@ -241,6 +347,7 @@ int fr_pton4(fr_ipaddr_t *out, char const *value, ssize_t inlen, bool resolve, b
 		 */
 		if ((value[0] == '*') && (value[1] == '\0')) {
 			out->ipaddr.ip4addr.s_addr = htonl(INADDR_ANY);
+
 		/*
 		 *	Convert things which are obviously integers to IP addresses
 		 *
@@ -249,9 +356,10 @@ int fr_pton4(fr_ipaddr_t *out, char const *value, ssize_t inlen, bool resolve, b
 		 */
 		} else if (is_integer(value) || ((value[0] == '0') && (value[1] == 'x'))) {
 			out->ipaddr.ip4addr.s_addr = htonl(strtoul(value, NULL, 0));
+
 		} else if (!resolve) {
 			if (inet_pton(AF_INET, value, &out->ipaddr.ip4addr.s_addr) <= 0) {
-				fr_strerror_printf("Failed to parse IPv4 address string \"%s\"", value);
+				fr_strerror_printf("Failed to parse IPv4 addreess string \"%s\"", value);
 				return -1;
 			}
 		} else if (ip_hton(out, AF_INET, value, fallback) < 0) return -1;
@@ -260,42 +368,33 @@ int fr_pton4(fr_ipaddr_t *out, char const *value, ssize_t inlen, bool resolve, b
 	}
 
 	/*
-	 *	Otherwise parse the prefix
-	 */
-	if ((size_t)(p - value) >= INET_ADDRSTRLEN) {
-		fr_strerror_printf("Invalid IPv4 address string \"%s\"", value);
-		return -1;
-	}
-
-	/*
 	 *	Copy the IP portion into a temporary buffer if we haven't already.
 	 */
 	if (inlen < 0) memcpy(buffer, value, p - value);
 	buffer[p - value] = '\0';
 
-	if (!resolve) {
-		if (inet_pton(AF_INET, buffer, &out->ipaddr.ip4addr.s_addr) <= 0) {
-			fr_strerror_printf("Failed to parse IPv4 address string \"%s\"", value);
-			return -1;
-		}
-	} else if (ip_hton(out, AF_INET, buffer, fallback) < 0) return -1;
+	if (ip_prefix_from_str(buffer, &out->ipaddr.ip4addr.s_addr) <= 0) {
+		fr_strerror_printf("Failed to parse IPv4 address string \"%s\"", value);
+		return -1;
+	}
 
-	prefix = strtoul(p + 1, &eptr, 10);
-	if (prefix > 32) {
+	mask = strtoul(p + 1, &eptr, 10);
+	if (mask > 32) {
 		fr_strerror_printf("Invalid IPv4 mask length \"%s\".  Should be between 0-32", p);
 		return -1;
 	}
+
 	if (eptr[0] != '\0') {
 		fr_strerror_printf("Failed to parse IPv4 address string \"%s\", "
 				   "got garbage after mask length \"%s\"", value, eptr);
 		return -1;
 	}
 
-	if (prefix < 32) {
-		out->ipaddr.ip4addr = fr_inaddr_mask(&out->ipaddr.ip4addr, prefix);
+	if (mask < 32) {
+		out->ipaddr.ip4addr = fr_inaddr_mask(&out->ipaddr.ip4addr, mask);
 	}
 
-	out->prefix = (uint8_t) prefix;
+	out->prefix = (uint8_t) mask;
 	out->af = AF_INET;
 
 	return 0;
@@ -329,6 +428,7 @@ int fr_pton6(fr_ipaddr_t *out, char const *value, ssize_t inlen, bool resolve, b
 		}
 		memcpy(buffer, value, inlen);
 		buffer[inlen] = '\0';
+		value = buffer;
 	}
 
 	p = strchr(value, '/');
@@ -395,25 +495,29 @@ int fr_pton6(fr_ipaddr_t *out, char const *value, ssize_t inlen, bool resolve, b
 
 /** Simple wrapper to decide whether an IP value is v4 or v6 and call the appropriate parser.
  *
- * @param out Where to write the ip address value.
- * @param value to parse.
- * @param inlen Length of value, if value is \0 terminated inlen may be -1.
- * @param resolve If true and value doesn't look like an IP address, try and resolve value as a hostname.
- * @return 0 if ip address was parsed successfully, else -1 on error.
+ * @param[out] out Where to write the ip address value.
+ * @param[in] value to parse.
+ * @param[in] inlen Length of value, if value is \0 terminated inlen may be -1.
+ * @param[in] resolve If true and value doesn't look like an IP address, try and resolve value as a
+ *	hostname.
+ * @param[in] af If the address type is not obvious from the format, and resolve is true, the DNS
+ *	record (A or AAAA) we require.  Also controls which parser we pass the address to if
+ *	we have no idea what it is.
+ * @return
+ *	- 0 if ip address was parsed successfully.
+ *	- -1 on failure.
  */
-int fr_pton(fr_ipaddr_t *out, char const *value, ssize_t inlen, bool resolve)
+int fr_pton(fr_ipaddr_t *out, char const *value, ssize_t inlen, int af, bool resolve)
 {
 	size_t len, i;
 
 	len = (inlen >= 0) ? (size_t)inlen : strlen(value);
 	for (i = 0; i < len; i++) switch (value[i]) {
 	/*
-	 *	Chars illegal in domain names and IPv4 addresses.
+	 *	':' is illegal in domain names and IPv4 addresses.
 	 *	Must be v6 and cannot be a domain.
 	 */
 	case ':':
-	case '[':
-	case ']':
 		return fr_pton6(out, value, inlen, false, false);
 
 	/*
@@ -429,8 +533,24 @@ int fr_pton(fr_ipaddr_t *out, char const *value, ssize_t inlen, bool resolve)
 		 *	Use A record in preference to AAAA record.
 		 */
 		if ((value[i] < '0') || (value[i] > '9')) {
-			if (!resolve) return -1;
-			return fr_pton4(out, value, inlen, true, true);
+			if (!resolve) {
+				fr_strerror_printf("Not IPv4/6 address, and asked not to resolve");
+				return -1;
+			}
+			switch (af) {
+			case AF_UNSPEC:
+				return fr_pton4(out, value, inlen, resolve, true);
+
+			case AF_INET:
+				return fr_pton4(out, value, inlen, resolve, false);
+
+			case AF_INET6:
+				return fr_pton6(out, value, inlen, resolve, false);
+
+			default:
+				fr_strerror_printf("Invalid address family %i", af);
+				return -1;
+			}
 		}
 		break;
 	}
@@ -440,6 +560,87 @@ int fr_pton(fr_ipaddr_t *out, char const *value, ssize_t inlen, bool resolve)
  	 *	address.
  	 */
 	return fr_pton4(out, value, inlen, false, false);
+}
+
+/** Parses IPv4/6 address + port, to fr_ipaddr_t and integer
+ *
+ * @param[out] out Where to write the ip address value.
+ * @param[out] port_out Where to write the port (0 if no port found).
+ * @param[in] value to parse.
+ * @param[in] inlen Length of value, if value is \0 terminated inlen may be -1.
+ * @param[in] af If the address type is not obvious from the format, and resolve is true, the DNS
+ *	record (A or AAAA) we require.  Also controls which parser we pass the address to if
+ *	we have no idea what it is.
+ * @param[in] resolve If true and value doesn't look like an IP address, try and resolve value as a
+ *	hostname.
+ */
+int fr_pton_port(fr_ipaddr_t *out, uint16_t *port_out, char const *value, ssize_t inlen, int af, bool resolve)
+{
+	char const	*p = value, *q;
+	char		*end;
+	unsigned long	port;
+	char		buffer[6];
+	size_t		len;
+
+	*port_out = 0;
+
+	len = (inlen >= 0) ? (size_t)inlen : strlen(value);
+
+	if (*p == '[') {
+		if (!(q = memchr(p + 1, ']', len - 1))) {
+			fr_strerror_printf("Missing closing ']' for IPv6 address");
+			return -1;
+		}
+
+		/*
+		 *	inet_pton doesn't like the address being wrapped in []
+		 */
+		if (fr_pton6(out, p + 1, (q - p) - 1, false, false) < 0) return -1;
+
+		if (q[1] == ':') {
+			q++;
+			goto do_port;
+		}
+
+		return 0;
+	}
+
+	/*
+	 *	Host, IPv4 or IPv6 with no port
+	 */
+	q = memchr(p, ':', len);
+	if (!q) return fr_pton(out, p, len, af, resolve);
+
+	/*
+	 *	IPv4 or host, with port
+	 */
+	if (fr_pton(out, p, (q - p), af, resolve) < 0) return -1;
+
+do_port:
+	/*
+	 *	Valid ports are a maximum of 5 digits, so if the
+	 *	input length indicates there are more than 5 chars
+	 *	after the ':' then there's an issue.
+	 */
+	if (inlen > ((q + sizeof(buffer)) - value)) {
+	error:
+		fr_strerror_printf("IP string contains trailing garbage after port delimiter");
+		return -1;
+	}
+
+	p = q + 1;			/* Move to first digit */
+
+	strlcpy(buffer, p, (len - (p - value)) + 1);
+	port = strtoul(buffer, &end, 10);
+	if (*end != '\0') goto error;	/* Trailing garbage after integer */
+
+	if ((port > UINT16_MAX) || (port == 0)) {
+		fr_strerror_printf("Port %lu outside valid port range 1-" STRINGIFY(UINT16_MAX), port);
+		return -1;
+	}
+	*port_out = port;
+
+	return 0;
 }
 
 int fr_ntop(char *out, size_t outlen, fr_ipaddr_t *addr)
@@ -643,18 +844,16 @@ static int inet_pton4(char const *src, struct in_addr *dst)
 
 
 #ifdef HAVE_STRUCT_SOCKADDR_IN6
-/* int
- * inet_pton6(src, dst)
- *	convert presentation level address to network order binary form.
- * return:
- *	1 if `src' is a valid [RFC1884 2.2] address, else 0.
- * notice:
- *	(1) does not touch `dst' unless it's returning 1.
- *	(2) :: in a full address is silently ignored.
- * credit:
- *	inspired by Mark Andrews.
- * author:
- *	Paul Vixie, 1996.
+/** Convert presentation level address to network order binary form
+ *
+ * @note Does not touch dst unless it's returning 1.
+ * @note :: in a full address is silently ignored.
+ * @note Inspired by Mark Andrews.
+ * @author Paul Vixie, 1996.
+ *
+ * @param src presentation level address.
+ * @param dst where to write output address.
+ * @return 1 if `src' is a valid [RFC1884 2.2] address, else 0.
  */
 static int inet_pton6(char const *src, unsigned char *dst)
 {
@@ -903,7 +1102,10 @@ int ip_hton(fr_ipaddr_t *out, int af, char const *hostname, bool fallback)
 	rcode = fr_sockaddr2ipaddr((struct sockaddr_storage *)ai->ai_addr,
 				   ai->ai_addrlen, out, NULL);
 	freeaddrinfo(res);
-	if (!rcode) return -1;
+	if (!rcode) {
+		fr_strerror_printf("Failed converting sockaddr to ipaddr");
+		return -1;
+	}
 
 	return 0;
 }
@@ -1121,9 +1323,33 @@ bool is_whitespace(char const *value)
 	return true;
 }
 
+/** Check whether the string is made up of printable UTF8 chars
+ *
+ * @param value to check.
+ * @param len of value.
+ *
+ * @return
+ *	- true if the string is printable.
+ *	- false if the string contains non printable chars
+ */
+ bool is_printable(void const *value, size_t len)
+ {
+ 	uint8_t	const *p = value;
+ 	int	clen;
+ 	size_t	i;
+
+ 	for (i = 0; i < len; i++) {
+ 		clen = fr_utf8_char(p, len - i);
+ 		if (clen == 0) return false;
+ 		i += (size_t)clen;
+ 		p += clen;
+ 	}
+ 	return true;
+ }
+
 /** Check whether the string is all numbers
  *
- * @return true if the entirety of the string is are numebrs, else false.
+ * @return true if the entirety of the string is all numbers, else false.
  */
 bool is_integer(char const *value)
 {
@@ -1136,7 +1362,7 @@ bool is_integer(char const *value)
 
 /** Check whether the string is allzeros
  *
- * @return true if the entirety of the string is are numebrs, else false.
+ * @return true if the entirety of the string is all zeros, else false.
  */
 bool is_zero(char const *value)
 {
@@ -1155,20 +1381,63 @@ int closefrom(int fd)
 {
 	int i;
 	int maxfd = 256;
+#ifdef HAVE_DIRENT_H
+	DIR *dir;
+#endif
+
+#ifdef F_CLOSEM
+	if (fcntl(fd, F_CLOSEM) == 0) {
+		return 0;
+	}
+#endif
+
+#ifdef F_MAXFD
+	maxfd = fcntl(fd, F_F_MAXFD);
+	if (maxfd >= 0) goto do_close;
+#endif
 
 #ifdef _SC_OPEN_MAX
 	maxfd = sysconf(_SC_OPEN_MAX);
 	if (maxfd < 0) {
-	  maxfd = 256;
+		maxfd = 256;
 	}
+#endif
+
+#ifdef HAVE_DIRENT_H
+	/*
+	 *	Use /proc/self/fd directory if it exists.
+	 */
+	dir = opendir(CLOSEFROM_DIR);
+	if (dir != NULL) {
+		long my_fd;
+		char *endp;
+		struct dirent *dp;
+
+		while ((dp = readdir(dir)) != NULL) {
+			my_fd = strtol(dp->d_name, &endp, 10);
+			if (my_fd <= 0) continue;
+
+			if (*endp) continue;
+
+			if (my_fd == dirfd(dir)) continue;
+
+			if ((my_fd >= fd) && (my_fd <= maxfd)) {
+				(void) close((int) my_fd);
+			}
+		}
+		(void) closedir(dir);
+		return 0;
+	}
+#endif
+
+#ifdef F_MAXFD
+do_close:
 #endif
 
 	if (fd > maxfd) return 0;
 
 	/*
 	 *	FIXME: return EINTR?
-	 *
-	 *	Use F_CLOSEM?
 	 */
 	for (i = fd; i < maxfd; i++) {
 		close(i);
@@ -1293,6 +1562,165 @@ int fr_sockaddr2ipaddr(struct sockaddr_storage const *sa, socklen_t salen,
 	return 1;
 }
 
+#ifdef O_NONBLOCK
+/** Set O_NONBLOCK on a socket
+ *
+ * @note O_NONBLOCK is POSIX.
+ *
+ * @param fd to set nonblocking flag on.
+ * @return flags set on the socket, or -1 on error.
+ */
+int fr_nonblock(int fd)
+{
+	int flags;
+
+	flags = fcntl(fd, F_GETFL, NULL);
+	if (flags < 0)  {
+		fr_strerror_printf("Failure getting socket flags: %s", fr_syserror(errno));
+		return -1;
+	}
+
+	flags |= O_NONBLOCK;
+	if (fcntl(fd, F_SETFL, flags) < 0) {
+		fr_strerror_printf("Failure setting socket flags: %s", fr_syserror(errno));
+		return -1;
+	}
+
+	return flags;
+}
+
+/** Unset O_NONBLOCK on a socket
+ *
+ * @note O_NONBLOCK is POSIX.
+ *
+ * @param fd to set nonblocking flag on.
+ * @return flags set on the socket, or -1 on error.
+ */
+int fr_blocking(int fd)
+{
+	int flags;
+
+	flags = fcntl(fd, F_GETFL, NULL);
+	if (flags < 0)  {
+		fr_strerror_printf("Failure getting socket flags: %s", fr_syserror(errno));
+		return -1;
+	}
+
+	flags ^= O_NONBLOCK;
+	if (fcntl(fd, F_SETFL, flags) < 0) {
+		fr_strerror_printf("Failure setting socket flags: %s", fr_syserror(errno));
+		return -1;
+	}
+
+	return flags;
+}
+#else
+int fr_nonblock(UNUSED int fd)
+{
+	fr_strerror_printf("Non blocking sockets are not supported");
+	return -1;
+}
+int fr_blocking(UNUSED int fd)
+{
+	fr_strerror_printf("Non blocking sockets are not supported");
+	return -1;
+}
+#endif
+
+/** Write out a vector to a file descriptor
+ *
+ * Wraps writev, calling it as necessary. If timeout is not NULL,
+ * timeout is applied to each call that returns EAGAIN or EWOULDBLOCK
+ *
+ * @note Should only be used on nonblocking file descriptors.
+ * @note Socket should likely be closed on timeout.
+ * @note iovec may be modified in such a way that it's not re-usable.
+ * @note Leaves errno set to the last error that ocurred.
+ *
+ * @param fd to write to.
+ * @param vector to write.
+ * @param iovcnt number of elements in iovec.
+ * @param timeout how long to wait for fd to become writeable before timing out.
+ * @return number of bytes written, -1 on error.
+ */
+ssize_t fr_writev(int fd, struct iovec vector[], int iovcnt, struct timeval *timeout)
+{
+	struct iovec *vector_p = vector;
+	ssize_t total = 0;
+
+	while (iovcnt > 0) {
+		ssize_t wrote;
+
+		wrote = writev(fd, vector_p, iovcnt);
+		if (wrote > 0) {
+			total += wrote;
+			while (wrote > 0) {
+				/*
+				 *	An entire vector element was written
+				 */
+				if (wrote >= (ssize_t)vector_p->iov_len) {
+					iovcnt--;
+					wrote -= vector_p->iov_len;
+					vector_p++;
+					continue;
+				}
+
+				/*
+				 *	Partial vector element was written
+				 */
+				vector_p->iov_len -= wrote;
+				vector_p->iov_base = ((char *)vector_p->iov_base) + wrote;
+				break;
+			}
+			continue;
+		} else if (wrote == 0) return total;
+
+		switch (errno) {
+		/* Write operation would block, use select() to implement a timeout */
+#if EWOULDBLOCK != EAGAIN
+		case EWOULDBLOCK:
+		case EAGAIN:
+#else
+		case EAGAIN:
+#endif
+		{
+			int	ret;
+			fd_set	write_set;
+
+			FD_ZERO(&write_set);
+			FD_SET(fd, &write_set);
+
+			/* Don't let signals mess up the select */
+			do {
+				ret = select(fd + 1, NULL, &write_set, NULL, timeout);
+			} while ((ret == -1) && (errno == EINTR));
+
+			/* Select returned 0 which means it reached the timeout */
+			if (ret == 0) {
+				fr_strerror_printf("Write timed out");
+				return -1;
+			}
+
+			/* Other select error */
+			if (ret < 0) {
+				fr_strerror_printf("Failed waiting on socket: %s", fr_syserror(errno));
+				return -1;
+			}
+
+			/* select said a file descriptor was ready for writing */
+			if (!fr_assert(FD_ISSET(fd, &write_set))) return -1;
+
+			break;
+		}
+
+		default:
+			return -1;
+		}
+	}
+
+	return total;
+}
+
 /** Convert UTF8 string to UCS2 encoding
  *
  * @note Borrowed from src/crypto/ms_funcs.c of wpa_supplicant project (http://hostap.epitest.fi/wpa_supplicant/)
@@ -1362,7 +1790,7 @@ size_t fr_prints_uint128(char *out, size_t outlen, uint128_t const num)
 	uint64_t n[2];
 	char *p = buff;
 	int i;
-#ifdef RADIUS_LITTLE_ENDIAN
+#ifdef FR_LITTLE_ENDIAN
 	const size_t l = 0;
 	const size_t h = 1;
 #else

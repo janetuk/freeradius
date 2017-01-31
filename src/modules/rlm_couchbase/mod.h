@@ -27,12 +27,11 @@
 #ifndef _mod_h_
 #define _mod_h_
 
-RCSIDH(mod_h, "$Id$");
+RCSIDH(mod_h, "$Id$")
 
 #include <freeradius-devel/radiusd.h>
 
 #include <libcouchbase/couchbase.h>
-#include <json.h>
 
 #include "jsonc_missing.h"
 
@@ -85,8 +84,6 @@ typedef struct rlm_couchbase_handle_t {
 /* define functions */
 void *mod_conn_create(TALLOC_CTX *ctx, void *instance);
 
-int mod_conn_alive(UNUSED void *instance, void *handle);
-
 int mod_build_attribute_element_map(CONF_SECTION *conf, void *instance);
 
 int mod_attribute_to_element(const char *name, json_object *map, void *buf);
@@ -99,6 +96,6 @@ int mod_ensure_start_timestamp(json_object *json, VALUE_PAIR *vps);
 
 int mod_client_map_section(CONF_SECTION *client, CONF_SECTION const *map, json_object *json, char const *docid);
 
-int mod_load_client_documents(rlm_couchbase_t *inst, CONF_SECTION *cs);
+int mod_load_client_documents(rlm_couchbase_t *inst, CONF_SECTION *tmpl, CONF_SECTION *map);
 
 #endif /* _mod_h_ */

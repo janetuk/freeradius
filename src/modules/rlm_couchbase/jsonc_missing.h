@@ -27,11 +27,15 @@
 #ifndef _jsonc_missing_h_
 #define _jsonc_missing_h_
 
-RCSIDH(jsonc_missing_h, "$Id$");
-
-#include <json.h>
+RCSIDH(jsonc_missing_h, "$Id$")
 
 #include "config.h"
+
+#if defined(HAVE_JSONMC_JSON_H)
+#  include <json-c/json.h>
+#elif defined(HAVE_JSON_JSON_H)
+#  include <json/json.h>
+#endif
 
 #ifndef HAVE_JSON_C_VERSION
 const char *json_c_version(void);
@@ -65,7 +69,8 @@ enum json_tokener_error json_tokener_get_error(json_tokener *tok);
 /* redefine with correct handling of const pointers */
 #if defined(__GNUC__) && !defined(__STRICT_ANSI__)
 #  define json_object_object_foreach(obj, key, val) \
-	char *key; struct json_object *val; \
+	char *key = NULL; \
+	struct json_object *val = NULL; \
 	union ctn_u {const void *cdata; void *data; } ctn; \
 	for (struct lh_entry *entry = json_object_get_object(obj)->head; \
 		({ if (entry) { key = (char *)entry->k; ctn.cdata = entry->v; \
@@ -73,7 +78,9 @@ enum json_tokener_error json_tokener_get_error(json_tokener *tok);
 		entry = entry->next)
 #else /* ANSI C or MSC */
 #  define json_object_object_foreach(obj,key,val) \
-	char *key; struct json_object *val; struct lh_entry *entry; \
+	char *key = NULL; \
+	struct json_object *val = NULL; \
+	struct lh_entry *entry; \
 	union ctn_u {const void *cdata; void *data; } ctn; \
 	for (entry = json_object_get_object(obj)->head; \
 		(entry ? (key = (char *)entry->k, ctn.cdata = entry->v, \

@@ -9,6 +9,11 @@ missing.h
 tls.h
 features.h
 radpaths.h
+vqp.h
+freeradius.h
+
+# Headers from v3.1.x
+freeradius.snmp.h
 
 # Build scripts
 build-radpaths-h

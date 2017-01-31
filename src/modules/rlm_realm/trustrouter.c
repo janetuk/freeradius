@@ -153,29 +153,8 @@ static home_server_t *srvr_blk_to_home_server(TALLOC_CTX *ctx,
 
 	rad_assert(blk != NULL);
 	tid_srvr_get_address(blk, &sa, &sa_len);
-	switch (sa->sa_family) {
 
-	case AF_INET: {
-		const struct sockaddr_in *sin = (const struct sockaddr_in *) sa;
-		home_server_ip.af = AF_INET;
-		home_server_ip.scope = 0;
-		home_server_ip.ipaddr.ip4addr = sin->sin_addr;
-		port = ntohs(sin->sin_port);
-		break;
-	}
-
-	case AF_INET6: {
-		const struct sockaddr_in6 *sin6 = (const struct sockaddr_in6 *) sa;
-		home_server_ip.af = AF_INET6;
-		home_server_ip.scope = sin6->sin6_scope_id;
-		home_server_ip.ipaddr.ip6addr = sin6->sin6_addr;
-		break;
-	}
-
-	default:
-		DEBUG2("Unknown address family in tid srvr block");
-		return NULL;
-	}
+	fr_sockaddr2ipaddr((struct sockaddr_storage *) sa, sa_len, &home_server_ip, &port);
   
 	if (0 != getnameinfo(sa, sa_len,
 			     nametemp,
@@ -377,14 +356,16 @@ REALM *tr_query_realm(REQUEST *request, char const *realm,
 
 	if (!realm) return NULL;
 
+	if (!trustrouter || (strcmp(trustrouter, "none") == 0)) return NULL;
+
 	/* clear the cookie structure */
 	memset (&cookie, 0, sizeof(cookie));
 
 	/* See if the request overrides the community*/
-	vp = pairfind(request->packet->vps, PW_UKERNA_TR_COI, VENDORPEC_UKERNA, TAG_ANY);
+	vp = fr_pair_find_by_num(request->packet->vps, PW_UKERNA_TR_COI, VENDORPEC_UKERNA, TAG_ANY);
 	if (vp)
 		community = vp->vp_strvalue;
-	else pairmake_packet("Trust-Router-COI", community, T_OP_SET);
+	else pair_make_request("Trust-Router-COI", community, T_OP_SET);
 
 	cookie.fr_realm_name = talloc_asprintf(NULL,
 					       "%s%%%s",
@@ -420,8 +401,8 @@ REALM *tr_query_realm(REQUEST *request, char const *realm,
 		DEBUG2("TID response is error, rc = %d: %s.\n", cookie.result,
 		       cookie.err_msg?cookie.err_msg:"(NO ERROR TEXT)");
 		if (cookie.err_msg) 
-			pairmake_reply("Reply-Message", cookie.err_msg, T_OP_SET);
-		pairmake_reply("Error-Cause", "502", T_OP_SET); /*proxy unroutable*/
+			pair_make_reply("Reply-Message", cookie.err_msg, T_OP_SET);
+		pair_make_reply("Error-Cause", "502", T_OP_SET); /*proxy unroutable*/
 	}
 
 cleanup:
