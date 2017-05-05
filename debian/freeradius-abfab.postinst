@@ -1,0 +1,22 @@
+#! /bin/sh
+
+set -e
+
+case "$1" in
+  configure)
+        if [ -z "$2" ]; then
+	    for foo in abfab-tr-idp abfab-tls channel_bindings ; do
+		test -e /etc/freeradius/sites-enabled/$foo || ln -s ../sites-available/$foo /etc/freeradius/sites-enabled
+		done
+	    for foo in abfab_psk_sql ; do
+		test -e /etc/freeradius/mods-enabled/$foo || ln -s ../mods-available/$foo /etc/freeradius/mods-enabled
+		done
+	    adduser --quiet freerad trustrouter 2>/dev/null ||true
+	    adduser --quiet trustrouter freerad 2>/dev/null ||true
+	    fi
+	;;
+    esac
+
+    #DEBHELPER#
+
+exit 0

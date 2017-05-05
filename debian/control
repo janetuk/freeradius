@@ -26,6 +26,8 @@ Build-Depends: debhelper (>= 9),
  libykclient-dev,
  libmemcached-dev,
  libhiredis-dev,
+ moonshot-trust-router-dev (>= 1.3),
+ openssl,
  python-dev,
  samba-dev | samba4-dev
 Section: net
@@ -37,10 +39,11 @@ Homepage: http://www.freeradius.org/
 
 Package: freeradius
 Architecture: any
-Depends: lsb-base (>= 3.1-23.2), ${shlibs:Depends}, ${misc:Depends}, ${dist:Depends}, freeradius-common, freeradius-config, libfreeradius3 (= ${binary:Version}), ssl-cert, adduser
+Depends: lsb-base (>= 3.1-23.2), ${shlibs:Depends}, ${misc:Depends}, ${dist:Depends}, freeradius-common (>= 3.0.13), freeradius-config, libfreeradius3 (= ${binary:Version}), ssl-cert, adduser
 Provides: radius-server
 Recommends: freeradius-utils
 Suggests: freeradius-ldap, freeradius-postgresql, freeradius-mysql, freeradius-krb5, snmp
+Breaks: freeradius (<< 3)
 Description: high-performance and highly configurable RADIUS server
  FreeRADIUS is a high-performance RADIUS server with support for:
   - Authentication by local files, SQL, Kerberos, LDAP, PAM, and more.
@@ -184,3 +187,11 @@ Description: debug symbols for the FreeRADIUS packages
  FreeRADIUS is a modular, high performance and feature-rich RADIUS server.
  This package contains the detached debugging symbols for the Debian FreeRADIUS
  packages.
+
+Package: freeradius-abfab
+Depends: freeradius (= ${binary:Version})
+Recommends: moonshot-trust-router
+Architecture: all
+Description: FreeRADIUS ABFAB Support
+ This package enables sites and modules typically needed by GSS-EAP
+ (RFC 7055) identity providers and RP proxies.
