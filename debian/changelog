@@ -1,8 +1,8 @@
-freeradius (3.0.13+moonshot2-6) unstable; urgency=medium
+freeradius (3.0.13+moonshot3-2) unstable; urgency=medium
 
   * Standard freeradius 3.0.13 + Painless Security signing key.
 
- -- Painless Security <build@painless-security.com>  Mon, 01 May 2017 20:06:00 -0400
+ -- Painless Security <build@painless-security.com>  Fri, 05 May 2017 18:24:00 -0400
 
 freeradius (3.0.13+git) unstable; urgency=medium
 
