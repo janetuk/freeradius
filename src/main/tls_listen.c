@@ -323,11 +323,6 @@ static int tls_socket_recv(rad_listen_t *listener)
 
 	FR_STATS_INC(auth, total_requests);
 
-	/*
-	 *	Re-parent the packet to nothing.
-	 */
-	(void) talloc_steal(NULL, packet);
-
 	return 1;
 }
 
