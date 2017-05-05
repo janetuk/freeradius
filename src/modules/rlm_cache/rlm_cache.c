@@ -143,7 +143,8 @@ static void CC_HINT(nonnull) cache_merge(rlm_cache_t *inst, REQUEST *request, rl
 
 	if (c->state) {
 		rdebug_pair_list(L_DBG_LVL_2, request, c->state, "&session-state:");
-		radius_pairmove(request, &request->state, fr_pair_list_copy(request->state, c->state), false);
+
+		fr_pair_list_mcopy_by_num(request->state_ctx, &request->state, &c->state, 0, 0, TAG_ANY);
 	}
 
 	if (inst->stats) {
@@ -711,7 +712,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	/*
 	 *	Load the appropriate driver for our database
 	 */
-	inst->handle = lt_dlopenext(inst->driver_name);
+	inst->handle = fr_dlopenext(inst->driver_name);
 	if (!inst->handle) {
 		cf_log_err_cs(conf, "Could not link driver %s: %s", inst->driver_name, dlerror());
 		cf_log_err_cs(conf, "Make sure it (and all its dependent libraries!) are in the search path"

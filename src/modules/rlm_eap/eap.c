@@ -122,15 +122,10 @@ int eap_module_instantiate(rlm_eap_t *inst, eap_module_t **m_inst, eap_type_t nu
 		p++;
 	}
 
-#if defined(HAVE_DLFCN_H) && defined(RTLD_SELF)
-	method->type = dlsym(RTLD_SELF, mod_name);
-	if (method->type) goto open_self;
-#endif
-
 	/*
 	 *	Link the loaded EAP-Type
 	 */
-	method->handle = lt_dlopenext(mod_name);
+	method->handle = fr_dlopenext(mod_name);
 	if (!method->handle) {
 		ERROR("rlm_eap (%s): Failed to link %s: %s", inst->xlat_name, mod_name, fr_strerror());
 
@@ -145,9 +140,6 @@ int eap_module_instantiate(rlm_eap_t *inst, eap_module_t **m_inst, eap_type_t nu
 		return -1;
 	}
 
-#if !defined(WITH_LIBLTDL) && defined(HAVE_DLFCN_H) && defined(RTLD_SELF)
-open_self:
-#endif
 	cf_log_module(cs, "Linked to sub-module %s", mod_name);
 
 	/*
@@ -275,7 +267,7 @@ static eap_type_t eap_process_nak(rlm_eap_t *inst, REQUEST *request,
 		if ((nak->data[i] >= PW_EAP_MAX_TYPES) ||
 		    !inst->methods[nak->data[i]]) {
 			RDEBUG2("Peer NAK'd asking for "
-				"unsupported type %s (%d), skipping...",
+				"unsupported EAP type %s (%d), skipping...",
 				eap_type2name(nak->data[i]),
 				nak->data[i]);
 
@@ -293,6 +285,12 @@ static eap_type_t eap_process_nak(rlm_eap_t *inst, REQUEST *request,
 				nak->data[i],
 				eap_type2name(nak->data[i]),
 				nak->data[i]);
+
+			RWARN("!!! We requested to use an EAP type as normal.");
+			RWARN("!!! The supplicant rejected that, and requested to use the same EAP type.");
+			RWARN("!!!     i.e. the supplicant said 'I don't like X, please use X instead.");
+			RWARN("!!! The supplicant software is broken and does not work properly.");
+			RWARN("!!! Please upgrade it to software that works.");
 
 			continue;
 		}
@@ -356,10 +354,19 @@ eap_rcode_t eap_method_select(rlm_eap_t *inst, eap_handler_t *handler)
 	}
 
 	/*
-	 *	Multiple levels of nesting are invalid.
+	 *	Multiple levels of TLS nesting are invalid.  But if
+	 *	the parent has a home_server defined, then this
+	 *	request is being processed through a virtual
+	 *	server... so that's OK.
+	 *
+	 *	i.e. we're inside an EAP tunnel, which means we have a
+	 *	parent.  If the outer session exists, and doesn't have
+	 *	a home server, then it's multiple layers of tunneling.
 	 */
-	if (handler->request->parent && handler->request->parent->parent) {
-		RDEBUG2("Multiple levels of TLS nesting is invalid");
+	if (handler->request->parent &&
+	    handler->request->parent->parent &&
+	    !handler->request->parent->parent->home_server) {
+		RERROR("Multiple levels of TLS nesting are invalid");
 
 		return EAP_INVALID;
 	}
@@ -383,7 +390,8 @@ eap_rcode_t eap_method_select(rlm_eap_t *inst, eap_handler_t *handler)
 		if ((next < PW_EAP_MD5) ||
 		    (next >= PW_EAP_MAX_TYPES) ||
 		    (!inst->methods[next])) {
-			REDEBUG2("Tried to start unsupported method (%d)", next);
+			REDEBUG2("Tried to start unsupported EAP type %s (%d)",
+				 eap_type2name(next), next);
 
 			return EAP_INVALID;
 		}
@@ -437,7 +445,7 @@ eap_rcode_t eap_method_select(rlm_eap_t *inst, eap_handler_t *handler)
 			 *	We haven't configured it, it doesn't exit.
 			 */
 			if (!inst->methods[type->num]) {
-				REDEBUG2("Client asked for unsupported method %s (%d)",
+				REDEBUG2("Client asked for unsupported EAP type %s (%d)",
 					 eap_type2name(type->num),
 					 type->num);
 
@@ -933,7 +941,8 @@ static int eap_validation(REQUEST *request, eap_packet_raw_t **eap_packet_p)
 
 			if ((eap_packet->data[7] == 0) ||
 			    (eap_packet->data[7] >= PW_EAP_MAX_TYPES)) {
-				RAUTH("Unsupported Expanded EAP type %u: ignoring the packet", eap_packet->data[7]);
+				RAUTH("Unsupported Expanded EAP type %s (%u): ignoring the packet",
+				      eap_type2name(eap_packet->data[7]), eap_packet->data[7]);
 				return EAP_INVALID;
 			}
 
@@ -950,7 +959,8 @@ static int eap_validation(REQUEST *request, eap_packet_raw_t **eap_packet_p)
 
 			p = talloc_realloc(talloc_parent(eap_packet), eap_packet, uint8_t, len - 7);
 			if (!p) {
-				RAUTH("Unsupported EAP type %u: ignoring the packet", eap_packet->data[0]);
+				RAUTH("Unsupported EAP type %s (%u): ignoring the packet",
+				      eap_type2name(eap_packet->data[0]), eap_packet->data[0]);
 				return EAP_INVALID;
 			}
 
@@ -965,7 +975,8 @@ static int eap_validation(REQUEST *request, eap_packet_raw_t **eap_packet_p)
 			return EAP_VALID;
 		}
 
-		RAUTH("Unsupported EAP type %u: ignoring the packet", eap_packet->data[0]);
+		RAUTH("Unsupported EAP type %s (%u): ignoring the packet",
+		      eap_type2name(eap_packet->data[0]), eap_packet->data[0]);
 		return EAP_INVALID;
 	}
 
@@ -999,12 +1010,12 @@ static char *eap_identity(REQUEST *request, eap_handler_t *handler, eap_packet_r
 	len = ntohs(len);
 
 	if ((len <= 5) || (eap_packet->data[1] == 0x00)) {
-		RDEBUG("EAP-Identity Unknown");
+		REDEBUG("EAP-Identity Unknown");
 		return NULL;
 	}
 
 	if (len > 1024) {
-		RDEBUG("EAP-Identity too long");
+		REDEBUG("EAP-Identity too long");
 		return NULL;
 	}
 

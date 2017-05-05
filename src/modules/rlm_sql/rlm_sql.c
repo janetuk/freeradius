@@ -154,6 +154,7 @@ static ssize_t sql_xlat(void *instance, REQUEST *request, char const *query, cha
 	sql_rcode_t		rcode;
 	ssize_t			ret = 0;
 	size_t			len = 0;
+	char const		*p;
 
 	/*
 	 *	Add SQL-User-Name attribute just in case it is needed
@@ -168,12 +169,17 @@ static ssize_t sql_xlat(void *instance, REQUEST *request, char const *query, cha
 	rlm_sql_query_log(inst, request, NULL, query);
 
 	/*
+	 *	Trim whitespace for the prefix check
+	 */
+	for (p = query; is_whitespace(p); p++);
+
+	/*
 	 *	If the query starts with any of the following prefixes,
 	 *	then return the number of rows affected
 	 */
-	if ((strncasecmp(query, "insert", 6) == 0) ||
-	    (strncasecmp(query, "update", 6) == 0) ||
-	    (strncasecmp(query, "delete", 6) == 0)) {
+	if ((strncasecmp(p, "insert", 6) == 0) ||
+	    (strncasecmp(p, "update", 6) == 0) ||
+	    (strncasecmp(p, "delete", 6) == 0)) {
 		int numaffected;
 		char buffer[21]; /* 64bit max is 20 decimal chars + null byte */
 
@@ -189,6 +195,7 @@ static ssize_t sql_xlat(void *instance, REQUEST *request, char const *query, cha
 		numaffected = (inst->module->sql_affected_rows)(handle, inst->config);
 		if (numaffected < 1) {
 			RDEBUG("SQL query affected no rows");
+			(inst->module->sql_finish_query)(handle, inst->config);
 
 			goto finish;
 		}
@@ -225,7 +232,7 @@ static ssize_t sql_xlat(void *instance, REQUEST *request, char const *query, cha
 	if (rcode != RLM_SQL_OK) goto query_error;
 
 	rcode = rlm_sql_fetch_row(inst, request, &handle);
-	if (rcode) {
+	if (rcode < 0) {
 		(inst->module->sql_finish_select_query)(handle, inst->config);
 		goto query_error;
 	}
@@ -285,9 +292,17 @@ static int generate_sql_clients(rlm_sql_t *inst)
 
 	if (rlm_sql_select_query(inst, NULL, &handle, inst->config->client_query) != RLM_SQL_OK) return -1;
 
-	while ((rlm_sql_fetch_row(inst, NULL, &handle) == 0) && (row = handle->row)) {
+	while ((rlm_sql_fetch_row(inst, NULL, &handle) == RLM_SQL_OK) && (row = handle->row)) {
+		int num_rows;
 		char *server = NULL;
+
 		i++;
+
+		num_rows = (inst->module->sql_num_fields)(handle, inst->config);
+		if (num_rows < 5) {
+			WARN("SELECT returned too few rows.  Please do not edit 'client_query'");
+			continue;
+		}
 
 		/*
 		 *  The return data for each row MUST be in the following order:
@@ -316,7 +331,7 @@ static int generate_sql_clients(rlm_sql_t *inst)
 			continue;
 		}
 
-		if (((inst->module->sql_num_fields)(handle, inst->config) > 5) && (row[5] != NULL) && *row[5]) {
+		if ((num_rows > 5) && (row[5] != NULL) && *row[5]) {
 			server = row[5];
 		}
 
@@ -502,7 +517,12 @@ int sql_set_user(rlm_sql_t *inst, REQUEST *request, char const *username)
 	fr_pair_value_strsteal(vp, expanded);
 	RDEBUG2("SQL-User-Name set to '%s'", vp->vp_strvalue);
 	vp->op = T_OP_SET;
-	radius_pairmove(request, &request->packet->vps, vp, false);	/* needs to be pair move else op is not respected */
+
+	/*
+	 *	Delete any existing SQL-User-Name, and replace it with ours.
+	 */
+	fr_pair_delete_by_num(&request->packet->vps, vp->da->attr, vp->da->vendor, TAG_ANY);
+	fr_pair_add(&request->packet->vps, vp);
 
 	return 0;
 }
@@ -533,7 +553,7 @@ static int sql_get_grouplist(rlm_sql_t *inst, rlm_sql_handle_t **handle, REQUEST
 	talloc_free(expanded);
 	if (ret != RLM_SQL_OK) return -1;
 
-	while (rlm_sql_fetch_row(inst, request, handle) == 0) {
+	while (rlm_sql_fetch_row(inst, request, handle) == RLM_SQL_OK) {
 		row = (*handle)->row;
 		if (!row)
 			break;
@@ -841,7 +861,7 @@ static int mod_bootstrap(CONF_SECTION *conf, void *instance)
 	 *
 	 *	We need this to check if the sql_fields callback is provided.
 	 */
-	inst->handle = lt_dlopenext(inst->config->sql_driver_name);
+	inst->handle = fr_dlopenext(inst->config->sql_driver_name);
 	if (!inst->handle) {
 		ERROR("Could not link driver %s: %s", inst->config->sql_driver_name, fr_strerror());
 		ERROR("Make sure it (and all its dependent libraries!) are in the search path of your system's ld");
@@ -896,6 +916,52 @@ static int mod_bootstrap(CONF_SECTION *conf, void *instance)
 	xlat_register(inst->name, sql_xlat, sql_escape_func, inst);
 
 	return 0;
+}
+
+
+static void *mod_conn_create(TALLOC_CTX *ctx, void *instance)
+{
+	int rcode;
+	rlm_sql_t *inst = instance;
+	rlm_sql_handle_t *handle;
+
+	/*
+	 *	Connections cannot be alloced from the inst or
+	 *	pool contexts due to threading issues.
+	 */
+	handle = talloc_zero(ctx, rlm_sql_handle_t);
+	if (!handle) return NULL;
+
+	handle->log_ctx = talloc_pool(handle, 2048);
+	if (!handle->log_ctx) {
+		talloc_free(handle);
+		return NULL;
+	}
+
+	/*
+	 *	Handle requires a pointer to the SQL inst so the
+	 *	destructor has access to the module configuration.
+	 */
+	handle->inst = inst;
+
+	rcode = (inst->module->sql_socket_init)(handle, inst->config);
+	if (rcode != 0) {
+	fail:
+		exec_trigger(NULL, inst->cs, "modules.sql.fail", true);
+
+		/*
+		 *	Destroy any half opened connections.
+		 */
+		talloc_free(handle);
+		return NULL;
+	}
+
+	if (inst->config->connect_query) {
+		if (rlm_sql_select_query(inst, NULL, &handle, inst->config->connect_query) != RLM_SQL_OK) goto fail;
+		(inst->module->sql_finish_select_query)(handle, inst->config);
+	}
+
+	return handle;
 }
 
 
@@ -1009,7 +1075,7 @@ do { \
 		}
 	}
 
-	inst->ef = exfile_init(inst, 64, 30, true);
+	inst->ef = exfile_init(inst, 256, 30, true);
 	if (!inst->ef) {
 		cf_log_err_cs(conf, "Failed creating log file context");
 		return -1;
@@ -1503,10 +1569,11 @@ static rlm_rcode_t mod_checksimul(void *instance, REQUEST * request)
 
 	/* If simul_count_query is not defined, we don't do any checking */
 	if (!inst->config->simul_count_query) {
+		RWDEBUG("Simultaneous-Use checking requires 'simul_count_query' to be configured");
 		return RLM_MODULE_NOOP;
 	}
 
-	if ((!request->username) || (request->username->vp_length == '\0')) {
+	if ((!request->username) || (request->username->vp_length == 0)) {
 		REDEBUG("Zero Length username not permitted");
 
 		return RLM_MODULE_INVALID;
@@ -1531,7 +1598,7 @@ static rlm_rcode_t mod_checksimul(void *instance, REQUEST * request)
 
 	if (rlm_sql_select_query(inst, request, &handle, expanded) != RLM_SQL_OK) {
 		rcode = RLM_MODULE_FAIL;
-		goto finish;
+		goto release;	/* handle may no longer be valid */
 	}
 
 	ret = rlm_sql_fetch_row(inst, request, &handle);
@@ -1587,10 +1654,20 @@ static rlm_rcode_t mod_checksimul(void *instance, REQUEST * request)
 		call_num = vp->vp_strvalue;
 	}
 
-	while (rlm_sql_fetch_row(inst, request, &handle) == 0) {
+	while (rlm_sql_fetch_row(inst, request, &handle) == RLM_SQL_OK) {
+		int num_rows;
+
 		row = handle->row;
 		if (!row) {
 			break;
+		}
+
+		num_rows = (inst->module->sql_num_fields)(handle, inst->config);
+		if (num_rows < 8) {
+			RDEBUG("Too few rows returned.  Please do not edit 'simul_verify_query'");
+			rcode = RLM_MODULE_FAIL;
+
+			goto finish;
 		}
 
 		if (!row[2]){
@@ -1633,7 +1710,7 @@ static rlm_rcode_t mod_checksimul(void *instance, REQUEST * request)
 					else if (strcmp(row[7], "SLIP") == 0)
 						proto = 'S';
 				}
-				if (row[8])
+				if ((num_rows > 8) && row[8])
 					sess_time = atoi(row[8]);
 				session_zap(request, nas_addr, nas_port,
 					    row[2], row[1], framed_addr,

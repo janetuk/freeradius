@@ -65,11 +65,6 @@ static void VP_HEXDUMP(char const *msg, uint8_t const *data, size_t len)
 
 
 /*
- *  The RFC says 4096 octets max, and most packets are less than 256.
- */
-#define MAX_PACKET_LEN 4096
-
-/*
  *	The maximum number of attributes which we allow in an incoming
  *	request.  If there are more attributes than this, the request
  *	is rejected.
@@ -184,7 +179,7 @@ static void print_hex_data(uint8_t const *ptr, int attrlen, int depth)
 }
 
 
-void rad_print_hex(RADIUS_PACKET *packet)
+void rad_print_hex(RADIUS_PACKET const *packet)
 {
 	int i;
 
@@ -881,10 +876,7 @@ static ssize_t vp2data_any(RADIUS_PACKET const *packet,
 	case PW_TYPE_STRING:
 	case PW_TYPE_OCTETS:
 		data = vp->data.ptr;
-		if (!data) {
-			fr_strerror_printf("ERROR: Cannot encode NULL data");
-			return -1;
-		}
+		if (!data) return 0;
 		break;
 
 	case PW_TYPE_IFID:
@@ -1363,9 +1355,9 @@ static ssize_t vp2attr_rfc(RADIUS_PACKET const *packet,
 	ptr[0] = attribute & 0xff;
 	ptr[1] = 2;
 
-	if (room > ((unsigned) 255 - ptr[1])) room = 255 - ptr[1];
+	if (room > 255) room = 255;
 
-	len = vp2data_any(packet, original, secret, 0, pvp, ptr + ptr[1], room);
+	len = vp2data_any(packet, original, secret, 0, pvp, ptr + ptr[1], room - ptr[1]);
 	if (len <= 0) return len;
 
 	ptr[1] += len;
@@ -1450,12 +1442,10 @@ static ssize_t vp2attr_vsa(RADIUS_PACKET const *packet,
 
 	}
 
-	if (room > ((unsigned) 255 - (dv->type + dv->length))) {
-		room = 255 - (dv->type + dv->length);
-	}
+	if (room > 255) room = 255;
 
 	len = vp2data_any(packet, original, secret, 0, pvp,
-			  ptr + dv->type + dv->length, room);
+			  ptr + dv->type + dv->length, room - (dv->type + dv->length));
 	if (len <= 0) return len;
 
 	if (dv->length) ptr[dv->type + dv->length - 1] += len;
@@ -1555,11 +1545,11 @@ int rad_vp2vsa(RADIUS_PACKET const *packet, RADIUS_PACKET const *original,
 	lvalue = htonl(vp->da->vendor);
 	memcpy(ptr + 2, &lvalue, 4);
 
-	if (room > ((unsigned) 255 - ptr[1])) room = 255 - ptr[1];
+	if (room > 255) room = 255;
 
 	len = vp2attr_vsa(packet, original, secret, pvp,
 			  vp->da->attr, vp->da->vendor,
-			  ptr + ptr[1], room);
+			  ptr + ptr[1], room - ptr[1]);
 	if (len < 0) return len;
 
 #ifndef NDEBUG
@@ -1707,7 +1697,10 @@ int rad_vp2attr(RADIUS_PACKET const *packet, RADIUS_PACKET const *original,
 	 *	RFC format attributes take the fast path.
 	 */
 	if (!vp->da->vendor) {
-		if (vp->da->attr > 255) return 0;
+		if (vp->da->attr > 255) {
+			*pvp = vp->next;
+			return 0;
+		}
 
 		return rad_vp2rfc(packet, original, secret, pvp,
 				  start, room);
@@ -1815,7 +1808,7 @@ int rad_encode(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 	 */
 	reply = packet->vps;
 	while (reply) {
-		size_t last_len;
+		size_t last_len, room;
 		char const *last_name = NULL;
 
 		VERIFY_VP(reply);
@@ -1844,6 +1837,20 @@ int rad_encode(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 		}
 
 		/*
+		 *	We allow zero-length strings in "unlang", but
+		 *	skip them (except for CUI, thanks WiMAX!) on
+		 *	all other attributes.
+		 */
+		if (reply->vp_length == 0) {
+			if ((reply->da->vendor != 0) ||
+			    ((reply->da->attr != PW_CHARGEABLE_USER_IDENTITY) &&
+			     (reply->da->attr != PW_MESSAGE_AUTHENTICATOR))) {
+				reply = reply->next;
+				continue;
+			}
+		}
+
+		/*
 		 *	Set the Message-Authenticator to the correct
 		 *	length and initial value.
 		 */
@@ -1859,8 +1866,11 @@ int rad_encode(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 		}
 		last_name = reply->da->name;
 
-		len = rad_vp2attr(packet, original, secret, &reply, ptr,
-				  ((uint8_t *) data) + sizeof(data) - ptr);
+		room = ((uint8_t *) data) + sizeof(data) - ptr;
+
+		if (room <= 2) break;
+
+		len = rad_vp2attr(packet, original, secret, &reply, ptr, room);
 		if (len < 0) return -1;
 
 		/*
@@ -1931,8 +1941,44 @@ int rad_sign(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 	}
 
 	/*
+	 *	Set up the authentication vector with zero, or with
+	 *	the original vector, prior to signing.
+	 */
+	switch (packet->code) {
+	case PW_CODE_ACCOUNTING_REQUEST:
+	case PW_CODE_DISCONNECT_REQUEST:
+	case PW_CODE_COA_REQUEST:
+		memset(packet->vector, 0, AUTH_VECTOR_LEN);
+		break;
+
+	case PW_CODE_ACCESS_ACCEPT:
+	case PW_CODE_ACCESS_REJECT:
+	case PW_CODE_ACCESS_CHALLENGE:
+	case PW_CODE_ACCOUNTING_RESPONSE:
+	case PW_CODE_DISCONNECT_ACK:
+	case PW_CODE_DISCONNECT_NAK:
+	case PW_CODE_COA_ACK:
+	case PW_CODE_COA_NAK:
+		if (!original) {
+			fr_strerror_printf("ERROR: Cannot sign response packet without a request packet");
+			return -1;
+		}
+		memcpy(packet->vector, original->vector, AUTH_VECTOR_LEN);
+		break;
+
+	case PW_CODE_ACCESS_REQUEST:
+	case PW_CODE_STATUS_SERVER:
+	default:
+		break;		/* packet->vector is already random bytes */
+	}
+
+#ifndef NDEBUG
+	if ((fr_debug_lvl > 3) && fr_log_fp) rad_print_hex(packet);
+#endif
+
+	/*
 	 *	If there's a Message-Authenticator, update it
-	 *	now, BEFORE updating the authentication vector.
+	 *	now.
 	 */
 	if (packet->offset > 0) {
 		uint8_t calc_auth_vector[AUTH_VECTOR_LEN];
@@ -1949,6 +1995,7 @@ int rad_sign(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 		case PW_CODE_DISCONNECT_NAK:
 		case PW_CODE_COA_REQUEST:
 		case PW_CODE_COA_ACK:
+		case PW_CODE_COA_NAK:
 			memset(hdr->vector, 0, AUTH_VECTOR_LEN);
 			break;
 
@@ -1956,17 +2003,11 @@ int rad_sign(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 		case PW_CODE_ACCESS_ACCEPT:
 		case PW_CODE_ACCESS_REJECT:
 		case PW_CODE_ACCESS_CHALLENGE:
-			if (!original) {
-				fr_strerror_printf("ERROR: Cannot sign response packet without a request packet");
-				return -1;
-			}
-			memcpy(hdr->vector, original->vector,
-			       AUTH_VECTOR_LEN);
+			memcpy(hdr->vector, original->vector, AUTH_VECTOR_LEN);
 			break;
 
-		default:	/* others have vector already set to zero */
+		default:
 			break;
-
 		}
 
 		/*
@@ -1979,13 +2020,12 @@ int rad_sign(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 			    (uint8_t const *) secret, strlen(secret));
 		memcpy(packet->data + packet->offset + 2,
 		       calc_auth_vector, AUTH_VECTOR_LEN);
-
-		/*
-		 *	Copy the original request vector back
-		 *	to the raw packet.
-		 */
-		memcpy(hdr->vector, packet->vector, AUTH_VECTOR_LEN);
 	}
+
+	/*
+	 *	Copy the request authenticator over to the packet.
+	 */
+	memcpy(hdr->vector, packet->vector, AUTH_VECTOR_LEN);
 
 	/*
 	 *	Switch over the packet code, deciding how to
@@ -1993,7 +2033,7 @@ int rad_sign(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 	 */
 	switch (packet->code) {
 		/*
-		 *	Request packets are not signed, bur
+		 *	Request packets are not signed, but
 		 *	have a random authentication vector.
 		 */
 	case PW_CODE_ACCESS_REQUEST:
@@ -2304,6 +2344,8 @@ bool rad_packet_ok(RADIUS_PACKET *packet, int flags, decode_fail_t *reason)
 	bool			seen_ma = false;
 	uint32_t		num_attributes;
 	decode_fail_t		failure = DECODE_FAIL_NONE;
+	bool			eap = false;
+	bool			non_eap = false;
 
 	/*
 	 *	Check for packets smaller than the packet header.
@@ -2509,6 +2551,13 @@ bool rad_packet_ok(RADIUS_PACKET *packet, int flags, decode_fail_t *reason)
 			 */
 		case PW_EAP_MESSAGE:
 			require_ma = true;
+			eap = true;
+			break;
+
+		case PW_USER_PASSWORD:
+		case PW_CHAP_PASSWORD:
+		case PW_ARAP_PASSWORD:
+			non_eap = true;
 			break;
 
 		case PW_MESSAGE_AUTHENTICATOR:
@@ -2583,6 +2632,15 @@ bool rad_packet_ok(RADIUS_PACKET *packet, int flags, decode_fail_t *reason)
 				     &packet->src_ipaddr.ipaddr,
 				     host_ipaddr, sizeof(host_ipaddr)));
 		failure = DECODE_FAIL_MA_MISSING;
+		goto finish;
+	}
+
+	if (eap && non_eap) {
+		FR_DEBUG_STRERROR_PRINTF("Bad packet from host %s:  Packet contains EAP-Message and non-EAP authentication attribute",
+			   inet_ntop(packet->src_ipaddr.af,
+				     &packet->src_ipaddr.ipaddr,
+				     host_ipaddr, sizeof(host_ipaddr)));
+		failure = DECODE_FAIL_TOO_MANY_AUTH;
 		goto finish;
 	}
 
@@ -4295,8 +4353,7 @@ int rad_pwdecode(char *passwd, size_t pwlen, char const *secret,
  * This is per RFC-2868 which adds a two char SALT to the initial intermediate
  * value MD5 hash.
  */
-int rad_tunnel_pwencode(char *passwd, size_t *pwlen, char const *secret,
-			uint8_t const *vector)
+ssize_t rad_tunnel_pwencode(char *passwd, size_t *pwlen, char const *secret, uint8_t const *vector)
 {
 	uint8_t	buffer[AUTH_VECTOR_LEN + MAX_STRING_LEN + 3];
 	unsigned char	digest[AUTH_VECTOR_LEN];
@@ -4378,8 +4435,7 @@ int rad_tunnel_pwencode(char *passwd, size_t *pwlen, char const *secret,
  * initial intermediate value, to differentiate it from the
  * above.
  */
-int rad_tunnel_pwdecode(uint8_t *passwd, size_t *pwlen, char const *secret,
-			uint8_t const *vector)
+ssize_t rad_tunnel_pwdecode(uint8_t *passwd, size_t *pwlen, char const *secret, uint8_t const *vector)
 {
 	FR_MD5_CTX  context, old;
 	uint8_t		digest[AUTH_VECTOR_LEN];

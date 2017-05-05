@@ -167,6 +167,8 @@ typedef struct main_config {
 
 	bool		write_pid;			//!< write the PID file
 
+	bool		exiting;			//!< are we exiting?
+
 
 #ifdef ENABLE_OPENSSL_VERSION_CHECK
 	char const	*allow_vulnerable_openssl;	//!< The CVE number of the last security issue acknowledged.
@@ -222,6 +224,8 @@ struct rad_request {
 
 	VALUE_PAIR		*config;	//!< #VALUE_PAIR (s) used to set per request parameters
 						//!< for modules and the server core at runtime.
+
+	TALLOC_CTX		*state_ctx;	//!< for request->state
 	VALUE_PAIR		*state;		//!< #VALUE_PAIR (s) available over the lifetime of the authentication
 						//!< attempt. Useful where the attempt involves a sequence of
 						//!< many request/challenge packets, like OTP, and EAP.
@@ -271,8 +275,6 @@ struct rad_request {
 	bool			in_request_hash;
 #ifdef WITH_PROXY
 	bool			in_proxy_hash;
-
-	struct timeval		proxy_retransmit;
 
 	uint32_t		num_proxied_requests;	//!< How many times this request was proxied.
 							//!< Retransmissions are driven by requests from the NAS.
@@ -342,7 +344,6 @@ typedef enum request_fail {
  *
  *	We really shouldn't have this many.
  */
-extern char const	*progname;
 extern log_lvl_t	rad_debug_lvl;
 extern char const	*radacct_dir;
 extern char const	*radlog_dir;

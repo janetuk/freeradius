@@ -103,8 +103,8 @@ static CONF_PARSER tls_config[] = {
 	{ "keyfile", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT | PW_TYPE_DEPRECATED, rlm_ldap_t, tls_private_key_file), NULL }, // OK if it changes on HUP
 	{ "private_key_file", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT, rlm_ldap_t, tls_private_key_file), NULL }, // OK if it changes on HUP
 
-	{ "randfile", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT | PW_TYPE_DEPRECATED, rlm_ldap_t, tls_random_file), NULL },
-	{ "random_file", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT, rlm_ldap_t, tls_random_file), NULL },
+	{ "randfile", FR_CONF_OFFSET(PW_TYPE_FILE_EXISTS | PW_TYPE_DEPRECATED, rlm_ldap_t, tls_random_file), NULL },
+	{ "random_file", FR_CONF_OFFSET(PW_TYPE_FILE_EXISTS, rlm_ldap_t, tls_random_file), NULL },
 
 	/*
 	 *	LDAP Specific TLS attributes
@@ -213,7 +213,7 @@ static CONF_PARSER option_config[] = {
 
 
 static const CONF_PARSER module_config[] = {
-	{ "server", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_ldap_t, config_server), NULL },	/* Do not set to required */
+	{ "server", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_MULTI, rlm_ldap_t, config_server), NULL },	/* Do not set to required */
 	{ "port", FR_CONF_OFFSET(PW_TYPE_SHORT, rlm_ldap_t, port), NULL },
 
 	{ "identity", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_ldap_t, admin_identity), NULL },
@@ -670,6 +670,8 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 
 		ldap_errno = ldap_get_option(NULL, LDAP_OPT_API_INFO, &info);
 		if (ldap_errno == LDAP_OPT_SUCCESS) {
+			int i;
+
 			/*
 			 *	Don't generate warnings if the compile type vendor name
 			 *	is found within the link time vendor name.
@@ -691,8 +693,13 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 			INFO("rlm_ldap: libldap vendor: %s, version: %i", info.ldapai_vendor_name,
 			     info.ldapai_vendor_version);
 
+			if (info.ldapai_extensions != NULL ) {
+				for ( i = 0; info.ldapai_extensions[i] != NULL; i++) {
+					ldap_memfree(info.ldapai_extensions[i]);
+				}
+				ldap_memfree(info.ldapai_extensions);
+			}
 			ldap_memfree(info.ldapai_vendor_name);
-			ldap_memfree(info.ldapai_extensions);
 		} else {
 			DEBUG("rlm_ldap: Falling back to build time libldap version info.  Query for LDAP_OPT_API_INFO "
 			      "returned: %i", ldap_errno);
@@ -839,6 +846,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	/*
 	 *	Now iterate over all the 'server' config items
 	 */
+	if (!inst->server) inst->server = talloc_strdup(inst, "");
 	for (cp = cf_pair_find(conf, "server");
 	     cp;
 	     cp = cf_pair_find_next(conf, cp, "server")) {
@@ -865,7 +873,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 				return -1;
 			}
 
-			if (ldap_url->lud_dn) {
+			if (ldap_url->lud_dn && (ldap_url->lud_dn[0] != '\0')) {
 				cf_log_err_cs(conf, "Base DN cannot be specified via server URL");
 				goto ldap_url_error;
 			}
@@ -1166,6 +1174,11 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 				    LDAP_MAX_ATTRMAP) < 0)) {
 		return -1;
 	}
+
+	/*
+	 *	Set global options
+	 */
+	if (rlm_ldap_global_init(inst) < 0) goto error;
 
 	/*
 	 *	Initialize the socket pool.

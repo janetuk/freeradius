@@ -191,6 +191,29 @@ struct tm *gmtime_r(time_t const *l_clock, struct tm *result)
 }
 #endif
 
+#ifndef HAVE_VDPRINTF
+int vdprintf (int fd, char const *format, va_list args)
+{
+	int     ret;
+	FILE    *fp;
+	int	dup_fd;
+
+	dup_fd = dup(fd);
+	if (dup_fd < 0) return -1;
+
+	fp = fdopen(fd, "w");
+	if (!fp) {
+		close(dup_fd);
+		return -1;
+	}
+
+	ret = vfprintf(fp, format, args);
+	fclose(fp);	/* Also closes dup_fd */
+
+	return ret;
+}
+#endif
+
 #ifndef HAVE_GETTIMEOFDAY
 #ifdef WIN32
 /*
@@ -290,6 +313,69 @@ uint128_t ntohlll(uint128_t const num)
 
 	return *(uint128_t *)ret;
 }
+#endif
+
+#ifdef HAVE_OPENSSL_HMAC_H
+#  ifndef HAVE_HMAC_CTX_NEW
+HMAC_CTX *HMAC_CTX_new(void)
+{
+	HMAC_CTX *ctx;
+	ctx = OPENSSL_malloc(sizeof(*ctx));
+	memset(ctx, 0, sizeof(*ctx));
+	if (ctx == NULL) {
+                return NULL;
+        }
+        HMAC_CTX_init(ctx);
+	return ctx;
+}
+#  endif
+#  ifndef HAVE_HMAC_CTX_FREE
+void HMAC_CTX_free(HMAC_CTX *ctx)
+{
+        if (ctx == NULL) {
+                return;
+        }
+        HMAC_CTX_cleanup(ctx);
+        OPENSSL_free(ctx);
+}
+#  endif
+#endif
+
+#ifdef HAVE_OPENSSL_SSL_H
+#  ifndef HAVE_SSL_GET_CLIENT_RANDOM
+size_t SSL_get_client_random(const SSL *s, unsigned char *out, size_t outlen)
+{
+	if (!outlen) return sizeof(s->s3->client_random);
+
+	if (outlen > sizeof(s->s3->client_random)) outlen = sizeof(s->s3->client_random);
+
+	memcpy(out, s->s3->client_random, outlen);
+	return outlen;
+}
+#  endif
+#  ifndef HAVE_SSL_GET_SERVER_RANDOM
+size_t SSL_get_server_random(const SSL *s, unsigned char *out, size_t outlen)
+{
+	if (!outlen) return sizeof(s->s3->server_random);
+
+	if (outlen > sizeof(s->s3->server_random)) outlen = sizeof(s->s3->server_random);
+
+	memcpy(out, s->s3->server_random, outlen);
+	return outlen;
+}
+#  endif
+#  ifndef HAVE_SSL_SESSION_GET_MASTER_KEY
+size_t SSL_SESSION_get_master_key(const SSL_SESSION *s,
+				  unsigned char *out, size_t outlen)
+{
+	if (!outlen) return s->master_key_length;
+
+	if (outlen > (size_t)s->master_key_length) outlen = (size_t)s->master_key_length;
+
+	memcpy(out, s->master_key, outlen);
+	return outlen;
+}
+#  endif
 #endif
 
 /** Call talloc strdup, setting the type on the new chunk correctly

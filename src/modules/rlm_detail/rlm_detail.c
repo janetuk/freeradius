@@ -132,7 +132,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		inst->escape_func = rad_filename_make_safe;
 	}
 
-	inst->ef = exfile_init(inst, 64, 30, inst->locking);
+	inst->ef = exfile_init(inst, 256, 30, inst->locking);
 	if (!inst->ef) {
 		cf_log_err_cs(conf, "Failed creating log file context");
 		return -1;
@@ -223,6 +223,11 @@ static int detail_write(FILE *out, rlm_detail_t *inst, REQUEST *request, RADIUS_
 {
 	VALUE_PAIR *vp;
 	char timestamp[256];
+
+	if (!packet->vps) {
+		RWDEBUG("Skipping empty packet");
+		return 0;
+	}
 
 	if (radius_xlat(timestamp, sizeof(timestamp), request, inst->header, NULL, NULL) < 0) {
 		return -1;
@@ -421,7 +426,7 @@ skip_group:
 	 *	Flush everything
 	 */
 	fclose(outfp);
-	exfile_unlock(inst->ef, outfd); /* do NOT close outfp */
+	exfile_unlock(inst->ef, outfd); /* do NOT close outfd */
 
 	/*
 	 *	And everything is fine.

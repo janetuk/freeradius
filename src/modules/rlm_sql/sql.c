@@ -49,74 +49,10 @@ const FR_NAME_NUMBER sql_rcode_table[] = {
 	{ "server error",	RLM_SQL_ERROR		},
 	{ "query invalid",	RLM_SQL_QUERY_INVALID	},
 	{ "no connection",	RLM_SQL_RECONNECT	},
+	{ "no more rows",	RLM_SQL_NO_MORE_ROWS	},
 	{ NULL, 0 }
 };
 
-
-static int _mod_conn_free(rlm_sql_handle_t *conn)
-{
-	rlm_sql_t *inst = conn->inst;
-
-	rad_assert(inst);
-
-	exec_trigger(NULL, inst->cs, "modules.sql.close", false);
-
-	return 0;
-}
-
-void *mod_conn_create(TALLOC_CTX *ctx, void *instance)
-{
-	int rcode;
-	rlm_sql_t *inst = instance;
-	rlm_sql_handle_t *handle;
-
-	/*
-	 *	Connections cannot be alloced from the inst or
-	 *	pool contexts due to threading issues.
-	 */
-	handle = talloc_zero(ctx, rlm_sql_handle_t);
-	if (!handle) return NULL;
-
-	handle->log_ctx = talloc_pool(handle, 2048);
-	if (!handle->log_ctx) {
-		talloc_free(handle);
-		return NULL;
-	}
-
-	/*
-	 *	Handle requires a pointer to the SQL inst so the
-	 *	destructor has access to the module configuration.
-	 */
-	handle->inst = inst;
-
-	/*
-	 *	When something frees this handle the destructor set by
-	 *	the driver will be called first, closing any open sockets.
-	 *	Then we call our destructor to trigger an modules.sql.close
-	 *	event, then all the memory is freed.
-	 */
-	talloc_set_destructor(handle, _mod_conn_free);
-
-	rcode = (inst->module->sql_socket_init)(handle, inst->config);
-	if (rcode != 0) {
-	fail:
-		exec_trigger(NULL, inst->cs, "modules.sql.fail", true);
-
-		/*
-		 *	Destroy any half opened connections.
-		 */
-		talloc_free(handle);
-		return NULL;
-	}
-
-	if (inst->config->connect_query) {
-		if (rlm_sql_select_query(inst, NULL, &handle, inst->config->connect_query) != RLM_SQL_OK) goto fail;
-		(inst->module->sql_finish_select_query)(handle, inst->config);
-	}
-
-	exec_trigger(NULL, inst->cs, "modules.sql.open", false);
-	return handle;
-}
 
 /*************************************************************************
  *
@@ -131,13 +67,13 @@ int sql_fr_pair_list_afrom_str(TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR **h
 	char const *ptr, *value;
 	char buf[MAX_STRING_LEN];
 	char do_xlat = 0;
-	FR_TOKEN token, operator = T_EOL;
+	FR_TOKEN token, op = T_EOL;
 
 	/*
 	 *	Verify the 'Attribute' field
 	 */
 	if (!row[2] || row[2][0] == '\0') {
-		REDEBUG("The 'Attribute' field is empty or NULL, skipping the entire row");
+		REDEBUG("Attribute field is empty or NULL, skipping the entire row");
 		return -1;
 	}
 
@@ -146,10 +82,9 @@ int sql_fr_pair_list_afrom_str(TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR **h
 	 */
 	if (row[4] != NULL && row[4][0] != '\0') {
 		ptr = row[4];
-		operator = gettoken(&ptr, buf, sizeof(buf), false);
-		if ((operator < T_OP_ADD) ||
-		    (operator > T_OP_CMP_EQ)) {
-			REDEBUG("Invalid operator \"%s\" for attribute %s", row[4], row[2]);
+		op = gettoken(&ptr, buf, sizeof(buf), false);
+		if (!fr_assignment_op[op] && !fr_equality_op[op]) {
+			REDEBUG("Invalid op \"%s\" for attribute %s", row[4], row[2]);
 			return -1;
 		}
 
@@ -157,15 +92,21 @@ int sql_fr_pair_list_afrom_str(TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR **h
 		/*
 		 *  Complain about empty or invalid 'op' field
 		 */
-		operator = T_OP_CMP_EQ;
-		REDEBUG("The 'op' field for attribute '%s = %s' is NULL, or non-existent.", row[2], row[3]);
+		op = T_OP_CMP_EQ;
+		REDEBUG("The op field for attribute '%s = %s' is NULL, or non-existent.", row[2], row[3]);
 		REDEBUG("You MUST FIX THIS if you want the configuration to behave as you expect");
 	}
 
 	/*
 	 *	The 'Value' field may be empty or NULL
 	 */
+	if (!row[3]) {
+		REDEBUG("Value field is empty or NULL, skipping the entire row");
+		return -1;
+	}
+
 	value = row[3];
+
 	/*
 	 *	If we have a new-style quoted string, where the
 	 *	*entire* string is quoted, do xlat's.
@@ -188,9 +129,9 @@ int sql_fr_pair_list_afrom_str(TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR **h
 		 *	Mark the pair to be allocated later.
 		 */
 		case T_BACK_QUOTED_STRING:
-			value = NULL;
 			do_xlat = 1;
-			break;
+
+			/* FALL-THROUGH */
 
 		/*
 		 *	Keep the original string.
@@ -204,7 +145,7 @@ int sql_fr_pair_list_afrom_str(TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR **h
 	/*
 	 *	Create the pair
 	 */
-	vp = fr_pair_make(ctx, NULL, row[2], NULL, operator);
+	vp = fr_pair_make(ctx, NULL, row[2], NULL, op);
 	if (!vp) {
 		REDEBUG("Failed to create the pair: %s", fr_strerror());
 		return -1;
@@ -212,7 +153,7 @@ int sql_fr_pair_list_afrom_str(TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR **h
 
 	if (do_xlat) {
 		if (fr_pair_mark_xlat(vp, value) < 0) {
-			REDEBUG("Error marking pair for xlat");
+			REDEBUG("Error marking pair for xlat: %s", fr_strerror());
 
 			talloc_free(vp);
 			return -1;
@@ -506,7 +447,7 @@ int sql_getvpdata(TALLOC_CTX *ctx, rlm_sql_t *inst, REQUEST *request, rlm_sql_ha
 	rcode = rlm_sql_select_query(inst, request, handle, query);
 	if (rcode != RLM_SQL_OK) return -1; /* error handled by rlm_sql_select_query */
 
-	while (rlm_sql_fetch_row(inst, request, handle) == 0) {
+	while (rlm_sql_fetch_row(inst, request, handle) == RLM_SQL_OK) {
 		row = (*handle)->row;
 		if (!row) break;
 		if (sql_fr_pair_list_afrom_str(ctx, request, pair, row) != 0) {
@@ -535,13 +476,10 @@ void rlm_sql_query_log(rlm_sql_t *inst, REQUEST *request,
 	size_t len;
 	bool failed = false;	/* Write the log message outside of the critical region */
 
-	if (section) {
-		filename = section->logfile;
-	} else {
-		filename = inst->config->logfile;
-	}
+	filename = inst->config->logfile;
+	if (section && section->logfile) filename = section->logfile;
 
-	if (!filename) {
+	if (!filename || !*filename) {
 		return;
 	}
 

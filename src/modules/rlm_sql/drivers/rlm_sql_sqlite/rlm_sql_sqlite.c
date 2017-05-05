@@ -45,7 +45,7 @@ RCSID("$Id$")
 #endif
 
 #ifndef HAVE_SQLITE3_INT64
-typedef sqlite3_int64 sqlite_int64
+typedef sqlite_int64 sqlite3_int64;
 #endif
 
 typedef struct rlm_sql_sqlite_conn {
@@ -665,6 +665,8 @@ static sql_rcode_t sql_fetch_row(rlm_sql_handle_t *handle, rlm_sql_config_t *con
 
 	char **row;
 
+	TALLOC_FREE(handle->row);
+
 	/*
 	 *	Executes the SQLite query and interates over the results
 	 */
@@ -678,9 +680,7 @@ static sql_rcode_t sql_fetch_row(rlm_sql_handle_t *handle, rlm_sql_config_t *con
 	/*
 	 *	No more rows to process (were done)
 	 */
-	if (status == SQLITE_DONE) {
-		return 1;
-	}
+	if (status == SQLITE_DONE) return RLM_SQL_NO_MORE_ROWS;
 
 	/*
 	 *	We only need to do this once per result set, because
@@ -690,11 +690,6 @@ static sql_rcode_t sql_fetch_row(rlm_sql_handle_t *handle, rlm_sql_config_t *con
 		conn->col_count = sql_num_fields(handle, config);
 		if (conn->col_count == 0) return RLM_SQL_ERROR;
 	}
-
-	/*
-	 *	Free the previous result (also gets called on finish_query)
-	 */
-	talloc_free(handle->row);
 
 	MEM(row = handle->row = talloc_zero_array(handle->conn, char *, conn->col_count + 1));
 
@@ -737,7 +732,7 @@ static sql_rcode_t sql_fetch_row(rlm_sql_handle_t *handle, rlm_sql_config_t *con
 		}
 	}
 
-	return 0;
+	return RLM_SQL_OK;
 }
 
 static sql_rcode_t sql_free_result(rlm_sql_handle_t *handle, UNUSED rlm_sql_config_t *config)
@@ -759,7 +754,7 @@ static sql_rcode_t sql_free_result(rlm_sql_handle_t *handle, UNUSED rlm_sql_conf
 	 *	It's just the last error that occurred processing the
 	 *	statement.
 	 */
-	return 0;
+	return RLM_SQL_OK;
 }
 
 /** Retrieves any errors associated with the connection handle
@@ -800,9 +795,7 @@ static int sql_affected_rows(rlm_sql_handle_t *handle,
 {
 	rlm_sql_sqlite_conn_t *conn = handle->conn;
 
-	if (conn->db) {
-		return sqlite3_changes(conn->db);
-	}
+	if (conn->db) return sqlite3_changes(conn->db);
 
 	return -1;
 }

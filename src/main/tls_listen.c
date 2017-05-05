@@ -33,6 +33,7 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 #include <sys/stat.h>
 #endif
 
+#ifdef WITH_TCP
 #ifdef WITH_TLS
 #ifdef HAVE_OPENSSL_RAND_H
 #include <openssl/rand.h>
@@ -174,7 +175,7 @@ static int tls_socket_recv(rad_listen_t *listener)
 
 		SSL_set_ex_data(sock->ssn->ssl, FR_TLS_EX_INDEX_REQUEST, (void *)request);
 		SSL_set_ex_data(sock->ssn->ssl, fr_tls_ex_index_certs, (void *) &sock->certs);
-		SSL_set_ex_data(sock->ssn->ssl, FR_TLS_EX_INDEX_TALLOC, sock->parent);
+		SSL_set_ex_data(sock->ssn->ssl, FR_TLS_EX_INDEX_TALLOC, sock);
 
 		doing_init = true;
 	}
@@ -442,6 +443,11 @@ int dual_tls_send(rad_listen_t *listener, REQUEST *request)
 		return 0;
 	}
 
+	if (request->reply->data_len > (MAX_PACKET_LEN - 100)) {
+		RWARN("Packet is large, and possibly truncated - %zd vs max %d",
+		      request->reply->data_len, MAX_PACKET_LEN);
+	}
+
 	/*
 	 *	Sign the packet.
 	 */
@@ -527,10 +533,7 @@ static ssize_t proxy_tls_read(rad_listen_t *listener)
 				return -1;
 
 			default:
-				while ((err = ERR_get_error())) {
-					DEBUG("proxy recv says %s",
-					      ERR_error_string(err, NULL));
-				}
+				tls_error_log(NULL, "Failed in proxy receive");
 
 				goto do_close;
 			}
@@ -712,8 +715,7 @@ int proxy_tls_send(rad_listen_t *listener, REQUEST *request)
 			break;	/* let someone else retry */
 
 		default:
-			DEBUG("proxy SSL_write says %s",
-			      ERR_error_string(err, NULL));
+			tls_error_log(NULL, "Failed in proxy send");
 			DEBUG("Closing TLS socket to home server");
 			tls_socket_close(listener);
 			PTHREAD_MUTEX_UNLOCK(&sock->mutex);
@@ -727,3 +729,4 @@ int proxy_tls_send(rad_listen_t *listener, REQUEST *request)
 #endif	/* WITH_PROXY */
 
 #endif	/* WITH_TLS */
+#endif	/* WITH_TCP */

@@ -33,6 +33,7 @@ typedef struct rlm_eap_mschapv2_t {
 	bool with_ntdomain_hack;
 	bool send_error;
 	char const *identity;
+	int  auth_type_mschap;
 } rlm_eap_mschapv2_t;
 
 static CONF_PARSER module_config[] = {
@@ -58,6 +59,7 @@ static void fix_mppe_keys(eap_handler_t *handler, mschapv2_opaque_t *data)
 static int mod_instantiate(CONF_SECTION *cs, void **instance)
 {
 	rlm_eap_mschapv2_t *inst;
+	DICT_VALUE const *dv;
 
 	*instance = inst = talloc_zero(cs, rlm_eap_mschapv2_t);
 	if (!inst) return -1;
@@ -77,6 +79,14 @@ static int mod_instantiate(CONF_SECTION *cs, void **instance)
 	if (!inst->identity) {
 		inst->identity = talloc_asprintf(inst, "freeradius-%s", RADIUSD_VERSION_STRING);
 	}
+
+	dv = dict_valbyname(PW_AUTH_TYPE, 0, "MSCHAP");
+	if (!dv) dv = dict_valbyname(PW_AUTH_TYPE, 0, "MS-CHAP");
+	if (!dv) {
+		cf_log_err_cs(cs, "Failed to find 'Auth-Type MS-CHAP' section.  Cannot authenticate users.");
+		return -1;
+	}
+	inst->auth_type_mschap = dv->value;
 
 	return 0;
 }
@@ -535,8 +545,15 @@ failure:
 	 *	The 'value_size' is the size of the response,
 	 *	which is supposed to be the response (48
 	 *	bytes) plus 1 byte of flags at the end.
+	 *
+	 *	NOTE: When using Cisco NEAT with EAP-MSCHAPv2, the
+	 *	      switch supplicant will send MSCHAPv2 data (EAP type = 26)
+	 *	      but will always set a value_size of 16 and NULL out the
+	 *	      peer challenge.
+	 *
 	 */
-	if (eap_ds->response->type.data[4] != 49) {
+	if ((eap_ds->response->type.data[4] != 49) &&
+	    (eap_ds->response->type.data[4] != 16)) {
 		REDEBUG("Response is of incorrect length %d", eap_ds->response->type.data[4]);
 		return 0;
 	}
@@ -640,7 +657,7 @@ packet_ready:
 		 */
 		if (inst->with_ntdomain_hack &&
 		    ((challenge = fr_pair_find_by_num(request->packet->vps, PW_USER_NAME, 0, TAG_ANY)) != NULL) &&
-		    ((username = strchr(challenge->vp_strvalue, '\\')) != NULL)) {
+		    ((username = memchr(challenge->vp_octets, '\\', challenge->vp_length)) != NULL)) {
 			/*
 			 *	Wipe out the NT domain.
 			 *
@@ -662,7 +679,7 @@ packet_ready:
 	/*
 	 *	This is a wild & crazy hack.
 	 */
-	rcode = process_authenticate(PW_AUTH_TYPE_MS_CHAP, request);
+	rcode = process_authenticate(inst->auth_type_mschap, request);
 
 	/*
 	 *	Delete MPPE keys & encryption policy.  We don't

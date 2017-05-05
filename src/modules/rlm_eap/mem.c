@@ -90,8 +90,6 @@ static int _eap_handler_free(eap_handler_t *handler)
 	handler->opaque = NULL;
 	handler->free_opaque = NULL;
 
-	if (handler->certs) fr_pair_list_free(&handler->certs);
-
 	/*
 	 *	Give helpful debug messages if:
 	 *
@@ -111,8 +109,6 @@ static int _eap_handler_free(eap_handler_t *handler)
 		WARN("!! Please read http://wiki.freeradius.org/guide/Certificate_Compatibility     !!");
 		WARN("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
 	}
-
-	talloc_free(handler);
 	
 	return 0;
 }
@@ -406,8 +402,14 @@ eap_handler_t *eaplist_find(rlm_eap_t *inst, REQUEST *request,
 	 *	must exist.
 	 */
 	state = fr_pair_find_by_num(request->packet->vps, PW_STATE, 0, TAG_ANY);
-	if (!state ||
-	    (state->vp_length != EAP_STATE_LEN)) {
+	if (!state) {
+		REDEBUG("EAP requires the State attribute to work, but no State exists in the Access-Request packet.");
+		REDEBUG("The RADIUS client is broken.  No amount of changing FreeRADIUS will fix the RADIUS client.");
+		return NULL;
+	}
+
+	if (state->vp_length != EAP_STATE_LEN) {
+		REDEBUG("The RADIUS client has mangled the State attribute, OR you are forcing EAP in the wrong situation");
 		return NULL;
 	}
 
@@ -430,7 +432,7 @@ eap_handler_t *eaplist_find(rlm_eap_t *inst, REQUEST *request,
 	 *	Might not have been there.
 	 */
 	if (!handler) {
-		ERROR("rlm_eap (%s): No EAP session matching state "
+		RERROR("rlm_eap (%s): No EAP session matching state "
 		       "0x%02x%02x%02x%02x%02x%02x%02x%02x",
 		       inst->xlat_name,
 		       state->vp_octets[0], state->vp_octets[1],
@@ -441,7 +443,7 @@ eap_handler_t *eaplist_find(rlm_eap_t *inst, REQUEST *request,
 	}
 
 	if (handler->trips >= 50) {
-		ERROR("rlm_eap (%s): Aborting! More than 50 roundtrips "
+		RERROR("rlm_eap (%s): Aborting! More than 50 roundtrips "
 		       "made in session with state "
 		       "0x%02x%02x%02x%02x%02x%02x%02x%02x",
 		       inst->xlat_name,

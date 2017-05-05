@@ -436,6 +436,10 @@ char *vp_aprints_value(TALLOC_CTX *ctx, VALUE_PAIR const *vp, char quote)
 {
 	VERIFY_VP(vp);
 
+	if (vp->type == VT_XLAT) {
+		return fr_aprints(ctx, vp->value.xlat, talloc_array_length(vp->value.xlat) - 1, quote);
+	}
+
 	return value_data_aprints(ctx, vp->da->type, vp->da, &vp->data, vp->vp_length, quote);
 }
 
@@ -489,7 +493,7 @@ char *vp_aprints_type(TALLOC_CTX *ctx, PW_TYPE type)
  *  JSON value to.
  *
  * @param out Where to write the string.
- * @param outlen Lenth of output buffer.
+ * @param outlen Length of output buffer.
  * @param vp to print.
  * @return the length of data written to out, or a value >= outlen on truncation.
  */
@@ -565,7 +569,7 @@ size_t vp_prints_value_json(char *out, size_t outlen, VALUE_PAIR const *vp)
 					break;
 
 				case '\n':
-					*out++ = 'b';
+					*out++ = 'n';
 					freespace--;
 					break;
 
@@ -579,7 +583,7 @@ size_t vp_prints_value_json(char *out, size_t outlen, VALUE_PAIR const *vp)
 					freespace--;
 					break;
 				default:
-					len = snprintf(out, freespace, "u%04X", *q);
+					len = snprintf(out, freespace, "u%04X", (uint8_t) *q);
 					if (is_truncated(len, freespace)) return (outlen - freespace) + len;
 					out += len;
 					freespace -= len;
@@ -648,7 +652,7 @@ static char const *vp_tokens[] = {
  * to a string.
  *
  * @param out Where to write the string.
- * @param outlen Lenth of output buffer.
+ * @param outlen Length of output buffer.
  * @param vp to print.
  * @return the length of data written to out, or a value >= outlen on truncation.
  */

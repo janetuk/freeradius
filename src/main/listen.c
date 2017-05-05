@@ -70,9 +70,11 @@ static void print_packet(RADIUS_PACKET *packet)
 static rad_listen_t *listen_alloc(TALLOC_CTX *ctx, RAD_LISTEN_TYPE type);
 
 #ifdef WITH_COMMAND_SOCKET
+#ifdef WITH_TCP
 static int command_tcp_recv(rad_listen_t *listener);
 static int command_tcp_send(rad_listen_t *listener, REQUEST *request);
 static int command_write_magic(int newfd, listen_socket_t *sock);
+#endif
 #endif
 
 static fr_protocol_t master_listen[];
@@ -766,9 +768,11 @@ int common_socket_print(rad_listen_t const *this, char *buffer, size_t bufsize)
 
 	ADDSTRING(name);
 
+#ifdef WITH_TCP
 	if (this->dual) {
 		ADDSTRING("+acct");
 	}
+#endif
 
 	if (sock->interface) {
 		ADDSTRING(" interface ");
@@ -1321,7 +1325,6 @@ static int auth_socket_send(rad_listen_t *listener, REQUEST *request)
 			       fr_strerror());
 		return -1;
 	}
-
 	return 0;
 }
 
@@ -2095,6 +2098,11 @@ static int client_socket_encode(UNUSED rad_listen_t *listener, REQUEST *request)
 		return -1;
 	}
 
+	if (request->reply->data_len > (MAX_PACKET_LEN - 100)) {
+		RWDEBUG("Packet is large, and possibly truncated - %zd vs max %d",
+		      request->reply->data_len, MAX_PACKET_LEN);
+	}
+
 	if (rad_sign(request->reply, request->packet, request->client->secret) < 0) {
 		RERROR("Failed signing packet: %s", fr_strerror());
 
@@ -2149,6 +2157,11 @@ static int proxy_socket_encode(UNUSED rad_listen_t *listener, REQUEST *request)
 		return -1;
 	}
 
+	if (request->proxy->data_len > (MAX_PACKET_LEN - 100)) {
+		RWDEBUG("Packet is large, and possibly truncated - %zd vs max %d",
+		      request->proxy->data_len, MAX_PACKET_LEN);
+	}
+
 	if (rad_sign(request->proxy, NULL, request->home_server->secret) < 0) {
 		RERROR("Failed signing proxied packet: %s", fr_strerror());
 
@@ -2195,6 +2208,8 @@ static fr_protocol_t master_listen[RAD_LISTEN_MAX] = {
 	  common_socket_parse, common_socket_free,
 	  proxy_socket_recv, proxy_socket_send,
 	  common_socket_print, proxy_socket_encode, proxy_socket_decode },
+#else
+	{ 0, "proxy", 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL },
 #endif
 
 	/* authentication */
@@ -2209,6 +2224,8 @@ static fr_protocol_t master_listen[RAD_LISTEN_MAX] = {
 	  common_socket_parse, common_socket_free,
 	  acct_socket_recv, acct_socket_send,
 	  common_socket_print, client_socket_encode, client_socket_decode},
+#else
+	{ 0, "acct", 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL },
 #endif
 
 #ifdef WITH_DETAIL
@@ -2219,15 +2236,11 @@ static fr_protocol_t master_listen[RAD_LISTEN_MAX] = {
 	  detail_print, detail_encode, detail_decode },
 #endif
 
-#ifdef WITH_VMPS
 	/* vlan query protocol */
 	{ 0, "vmps", 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL },
-#endif
 
-#ifdef WITH_DHCP
 	/* dhcp query protocol */
 	{ 0, "dhcp", 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL },
-#endif
 
 #ifdef WITH_COMMAND_SOCKET
 	/* TCP command socket */
@@ -2235,6 +2248,8 @@ static fr_protocol_t master_listen[RAD_LISTEN_MAX] = {
 	  command_socket_parse, command_socket_free,
 	  command_domain_accept, command_domain_send,
 	  command_socket_print, command_socket_encode, command_socket_decode },
+#else
+	{ 0, "command", 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL },
 #endif
 
 #ifdef WITH_COA
@@ -2243,6 +2258,8 @@ static fr_protocol_t master_listen[RAD_LISTEN_MAX] = {
 	  common_socket_parse, NULL,
 	  coa_socket_recv, auth_socket_send, /* CoA packets are same as auth */
 	  common_socket_print, client_socket_encode, client_socket_decode },
+#else
+	{ 0, "coa", 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL },
 #endif
 
 };
@@ -2903,7 +2920,7 @@ static const FR_NAME_NUMBER listen_compare[] = {
 	{ NULL, 0 },
 };
 
-static int _free_proto_handle(lt_dlhandle *handle)
+static int _free_proto_handle(fr_dlhandle *handle)
 {
 	dlclose(*handle);
 	return 0;
@@ -2916,7 +2933,7 @@ static rad_listen_t *listen_parse(CONF_SECTION *cs, char const *server)
 	rad_listen_t	*this;
 	CONF_PAIR	*cp;
 	char const	*value;
-	lt_dlhandle	handle;
+	fr_dlhandle	handle;
 	CONF_SECTION	*server_cs;
 	char		buffer[32];
 
@@ -2935,10 +2952,10 @@ static rad_listen_t *listen_parse(CONF_SECTION *cs, char const *server)
 	}
 
 	snprintf(buffer, sizeof(buffer), "proto_%s", value);
-	handle = lt_dlopenext(buffer);
+	handle = fr_dlopenext(buffer);
 	if (handle) {
 		fr_protocol_t	*proto;
-		lt_dlhandle	*marker;
+		fr_dlhandle	*marker;
 
 		proto = dlsym(handle, buffer);
 		if (!proto) {
@@ -2957,7 +2974,7 @@ static rad_listen_t *listen_parse(CONF_SECTION *cs, char const *server)
 		/*
 		 *	Ensure handle gets closed if config section gets freed
 		 */
-		marker = talloc(cs, lt_dlhandle);
+		marker = talloc(cs, fr_dlhandle);
 		*marker = handle;
 		talloc_set_destructor(marker, _free_proto_handle);
 
@@ -3127,7 +3144,7 @@ int listen_init(CONF_SECTION *config, rad_listen_t **head, bool spawn_flag)
 		override = true;
 
 #ifdef WITH_VMPS
-		if (strcmp(progname, "vmpsd") == 0) {
+		if (strcmp(main_config.name, "vmpsd") == 0) {
 			this = listen_alloc(config, RAD_LISTEN_VQP);
 			if (!auth_port) auth_port = 1589;
 		} else
@@ -3167,7 +3184,7 @@ int listen_init(CONF_SECTION *config, rad_listen_t **head, bool spawn_flag)
 		/*
 		 *	No acct for vmpsd
 		 */
-		if (strcmp(progname, "vmpsd") == 0) goto add_sockets;
+		if (strcmp(main_config.name, "vmpsd") == 0) goto add_sockets;
 #endif
 
 #ifdef WITH_ACCOUNTING
@@ -3305,7 +3322,7 @@ add_sockets:
 		if (!check_config && !spawn_flag && this->tls) {
 			cf_log_err_cs(this->cs, "Threading must be enabled for TLS sockets to function properly");
 			cf_log_err_cs(this->cs, "You probably need to do '%s -fxx -l stdout' for debugging",
-				      progname);
+				      main_config.name);
 			return -1;
 		}
 #endif

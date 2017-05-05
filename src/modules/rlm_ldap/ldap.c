@@ -1174,7 +1174,7 @@ char const *rlm_ldap_find_user(rlm_ldap_t const *inst, REQUEST *request, ldap_ha
 				ldap_memfree(dn);
 			}
 			REXDENT();
-			*rcode = RLM_MODULE_FAIL;
+			*rcode = RLM_MODULE_INVALID;
 			goto finish;
 		}
 	}
@@ -1211,10 +1211,9 @@ char const *rlm_ldap_find_user(rlm_ldap_t const *inst, REQUEST *request, ldap_ha
 		fr_pair_value_strcpy(vp, dn);
 		*rcode = RLM_MODULE_OK;
 	}
-
-finish:
 	ldap_memfree(dn);
 
+finish:
 	if ((freeit || (*rcode != RLM_MODULE_OK)) && *result) {
 		ldap_msgfree(*result);
 		*result = NULL;
@@ -1328,6 +1327,41 @@ static int rlm_ldap_rebind(LDAP *handle, LDAP_CONST char *url, UNUSED ber_tag_t 
 }
 #endif
 
+int rlm_ldap_global_init(rlm_ldap_t *inst)
+{
+	int ldap_errno;
+
+	rad_assert(inst); /* clang scan */
+
+#define do_ldap_global_option(_option, _name, _value) \
+	if (ldap_set_option(NULL, _option, _value) != LDAP_OPT_SUCCESS) { \
+		ldap_get_option(NULL, LDAP_OPT_ERROR_NUMBER, &ldap_errno); \
+		ERROR("Failed setting global option %s: %s", _name, \
+			 (ldap_errno != LDAP_SUCCESS) ? ldap_err2string(ldap_errno) : "Unknown error"); \
+		return -1;\
+	}
+
+#define maybe_ldap_global_option(_option, _name, _value) \
+	if (_value) do_ldap_global_option(_option, _name, _value)
+
+#ifdef LDAP_OPT_DEBUG_LEVEL
+	/*
+	 *	Can't use do_ldap_global_option
+	 */
+	if (inst->ldap_debug) do_ldap_global_option(LDAP_OPT_DEBUG_LEVEL, "ldap_debug", &(inst->ldap_debug));
+#endif
+
+#ifdef LDAP_OPT_X_TLS_RANDOM_FILE
+	/*
+	 *	OpenLDAP will error out if we attempt to set
+	 *	this on a handle. Presumably it's global in
+	 *	OpenSSL too.
+	 */
+	maybe_ldap_global_option(LDAP_OPT_X_TLS_RANDOM_FILE, "random_file", inst->tls_random_file);
+#endif
+	return 0;
+}
+
 /** Close and delete a connection
  *
  * Unbinds the LDAP connection, informing the server and freeing any memory, then releases the memory used by the
@@ -1404,17 +1438,8 @@ void *mod_conn_create(TALLOC_CTX *ctx, void *instance)
 		goto error;\
 	}
 
-#define do_ldap_global_option(_option, _name, _value) \
-	if (ldap_set_option(NULL, _option, _value) != LDAP_OPT_SUCCESS) { \
-		ldap_get_option(conn->handle, LDAP_OPT_ERROR_NUMBER, &ldap_errno); \
-		LDAP_ERR("Failed setting global option %s: %s", _name, \
-			 (ldap_errno != LDAP_SUCCESS) ? ldap_err2string(ldap_errno) : "Unknown error"); \
-		goto error;\
-	}
-
-	if (inst->ldap_debug) {
-		do_ldap_global_option(LDAP_OPT_DEBUG_LEVEL, "ldap_debug", &(inst->ldap_debug));
-	}
+#define maybe_ldap_option(_option, _name, _value) \
+	if (_value) do_ldap_option(_option, _name, _value)
 
 	/*
 	 *	Leave "dereference" unset to use the OpenLDAP default.
@@ -1474,9 +1499,6 @@ void *mod_conn_create(TALLOC_CTX *ctx, void *instance)
 		do_ldap_option(LDAP_OPT_X_TLS, "tls_mode", &(inst->tls_mode));
 	}
 
-#  define maybe_ldap_option(_option, _name, _value) \
-	if (_value) do_ldap_option(_option, _name, _value)
-
 	maybe_ldap_option(LDAP_OPT_X_TLS_CACERTFILE, "ca_file", inst->tls_ca_file);
 	maybe_ldap_option(LDAP_OPT_X_TLS_CACERTDIR, "ca_path", inst->tls_ca_path);
 
@@ -1486,7 +1508,6 @@ void *mod_conn_create(TALLOC_CTX *ctx, void *instance)
 	 */
 	maybe_ldap_option(LDAP_OPT_X_TLS_CERTFILE, "certificate_file", inst->tls_certificate_file);
 	maybe_ldap_option(LDAP_OPT_X_TLS_KEYFILE, "private_key_file", inst->tls_private_key_file);
-	maybe_ldap_option(LDAP_OPT_X_TLS_RANDOM_FILE, "random_file", inst->tls_random_file);
 
 #  ifdef LDAP_OPT_X_TLS_NEVER
 	if (inst->tls_require_cert_str) {

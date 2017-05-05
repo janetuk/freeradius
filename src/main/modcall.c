@@ -283,9 +283,9 @@ static rlm_rcode_t CC_HINT(nonnull) call_modsingle(rlm_components_t component, m
 	blocked = (request->master_state == REQUEST_STOP_PROCESSING);
 	if (blocked) return RLM_MODULE_NOOP;
 
-	RDEBUG3("modsingle[%s]: calling %s (%s) for request %d",
+	RDEBUG3("modsingle[%s]: calling %s (%s)",
 		comp2str[component], sp->modinst->name,
-		sp->modinst->entry->name, request->number);
+		sp->modinst->entry->name);
 	request->log.indent = 0;
 
 	if (sp->modinst->force) {
@@ -309,14 +309,14 @@ static rlm_rcode_t CC_HINT(nonnull) call_modsingle(rlm_components_t component, m
 	 */
 	blocked = (request->master_state == REQUEST_STOP_PROCESSING);
 	if (blocked) {
-		RWARN("Module %s became unblocked for request %u", sp->modinst->entry->name, request->number);
+		RWARN("Module %s became unblocked", sp->modinst->entry->name);
 	}
 
  fail:
 	request->log.indent = indent;
-	RDEBUG3("modsingle[%s]: returned from %s (%s) for request %d",
+	RDEBUG3("modsingle[%s]: returned from %s (%s)",
 	       comp2str[component], sp->modinst->name,
-	       sp->modinst->entry->name, request->number);
+	       sp->modinst->entry->name);
 
 	return request->rcode;
 }
@@ -449,6 +449,10 @@ redo:
 	 */
 	if (!c) goto finish;
 
+	if (fr_debug_lvl >= 3) {
+		VERIFY_REQUEST(request);
+	}
+
 	rad_assert(c->debug_name != NULL); /* if this happens, all bets are off. */
 
 	/*
@@ -514,8 +518,8 @@ redo:
 		 *	Like MOD_ELSE, but allow for a later "else"
 		 */
 		if (if_taken) {
-			RDEBUG2("... skipping %s for request %d: Preceding \"if\" was taken",
-				unlang_keyword[c->type], request->number);
+			RDEBUG2("... skipping %s: Preceding \"if\" was taken",
+				unlang_keyword[c->type]);
 			was_if = true;
 			if_taken = true;
 			goto next_sibling;
@@ -533,14 +537,14 @@ redo:
 	if (c->type == MOD_ELSE) {
 		if (!was_if) { /* error */
 		elsif_error:
-			RDEBUG2("... skipping %s for request %d: No preceding \"if\"",
-				unlang_keyword[c->type], request->number);
+			RDEBUG2("... skipping %s: No preceding \"if\"",
+				unlang_keyword[c->type]);
 			goto next_sibling;
 		}
 
 		if (if_taken) {
-			RDEBUG2("... skipping %s for request %d: Preceding \"if\" was taken",
-				unlang_keyword[c->type], request->number);
+			RDEBUG2("... skipping %s: Preceding \"if\" was taken",
+				unlang_keyword[c->type]);
 			was_if = false;
 			if_taken = false;
 			goto next_sibling;
@@ -2823,7 +2827,7 @@ static modcallable *do_compile_modgroup(modcallable *parent,
 			rad_assert(parent != NULL);
 			p = mod_callabletogroup(parent);
 
-			rad_assert(p->tail != NULL);
+			if (!p->tail) goto elsif_fail;
 
 			/*
 			 *	We're in the process of compiling the
@@ -2833,6 +2837,7 @@ static modcallable *do_compile_modgroup(modcallable *parent,
 			f = mod_callabletogroup(p->tail);
 			if ((f->mc.type != MOD_IF) &&
 			    (f->mc.type != MOD_ELSIF)) {
+			elsif_fail:
 				cf_log_err_cs(g->cs, "Invalid location for 'elsif'.  There is no preceding 'if' statement");
 				talloc_free(g);
 				return NULL;
@@ -2863,11 +2868,12 @@ static modcallable *do_compile_modgroup(modcallable *parent,
 			rad_assert(parent != NULL);
 			p = mod_callabletogroup(parent);
 
-			rad_assert(p->tail != NULL);
+			if (!p->tail) goto else_fail;
 
 			f = mod_callabletogroup(p->tail);
 			if ((f->mc.type != MOD_IF) &&
 			    (f->mc.type != MOD_ELSIF)) {
+			else_fail:
 				cf_log_err_cs(g->cs, "Invalid location for 'else'.  There is no preceding 'if' statement");
 				talloc_free(g);
 				return NULL;
@@ -3776,6 +3782,12 @@ bool modcall_pass2(modcallable *mc)
 				goto do_children;
 			}
 
+			if (g->vpt->type == TMPL_TYPE_ATTR_UNDEFINED) {
+				if (!pass2_fixup_undefined(cf_section_to_item(g->cs), g->vpt)) {
+					return false;
+				}
+			}
+
 			/*
 			 *	Compile and sanity check xlat
 			 *	expansions.
@@ -3881,7 +3893,13 @@ bool modcall_pass2(modcallable *mc)
 				char const *name1 = cf_section_name1(g->cs);
 
 				if (strcmp(name1, unlang_keyword[c->type]) != 0) {
-					c->debug_name = talloc_asprintf(c, "%s %s", name1, cf_section_name2(g->cs));
+					name2 = cf_section_name2(g->cs);
+
+					if (!name2) {
+						c->debug_name = name1;
+					} else {
+						c->debug_name = talloc_asprintf(c, "%s %s", name1, name2);
+					}
 				}
 			}
 
@@ -3993,4 +4011,11 @@ void modcall_debug(modcallable *mc, int depth)
 			break;
 		}
 	}
+}
+
+int modcall_pass2_condition(fr_cond_t *c)
+{
+	if (!fr_condition_walk(c, pass2_callback, NULL)) return -1;
+
+	return 0;
 }

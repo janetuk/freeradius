@@ -107,14 +107,14 @@ endif
 	mv config.sub.dist config.sub
 
 #Architecture
-build: patch build-arch build-indep
+build: build-arch build-indep
 
-build-arch: build-arch-stamp patch
+build-arch: patch build-arch-stamp
 build-arch-stamp: config.status
 	$(MAKE)
 	touch $@
 
-build-indep: build-indep-stamp
+build-indep: patch build-indep-stamp
 build-indep-stamp: config.status
 	touch $@
 
@@ -155,6 +155,11 @@ install-arch: build-arch-stamp
 	# rename radius binary to play nicely with others
 	mv $(freeradius_dir)/usr/sbin/radiusd $(freeradius_dir)/usr/sbin/$(package)
 	mv $(freeradius_dir)/$(mandir)/man8/radiusd.8 $(freeradius_dir)/$(mandir)/man8/$(package).8
+
+	# don't package symlinks in sites-enabled and mods-enabled - they're
+	# created on install by freeradius-config.postinst
+	rm $(freeradius_dir)/etc/freeradius/sites-enabled/*
+	rm $(freeradius_dir)/etc/freeradius/mods-enabled/*
 
 	dh_install -i --sourcedir=$(freeradius_dir)
 	dh_install --sourcedir=$(freeradius_dir) -p libfreeradius3
