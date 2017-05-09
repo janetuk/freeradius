@@ -1,3 +1,9 @@
+freeradius (3.0.13+moonshot3-4) unstable; urgency=medium
+
+  * Bumped version number
+
+ -- Painless Security <build@painless-security.com>  Tue, 09 May 2017 15:00:00 -0400
+
 freeradius (3.0.13+moonshot3-3) unstable; urgency=medium
 
   * Removed some leftover cruft from debian/freeradius-postgresql.postinst
