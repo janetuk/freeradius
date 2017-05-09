@@ -1,3 +1,9 @@
+freeradius (3.0.13+moonshot3-3) unstable; urgency=medium
+
+  * Removed some leftover cruft from debian/freeradius-postgresql.postinst
+
+ -- Painless Security <build@painless-security.com>  Mon, 08 May 2017 21:44:00 -0400
+
 freeradius (3.0.13+moonshot3-2) unstable; urgency=medium
 
   * Standard freeradius 3.0.13 + Painless Security signing key.
