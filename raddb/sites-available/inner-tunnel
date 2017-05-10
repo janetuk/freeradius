@@ -354,6 +354,10 @@ post-auth {
 		}
 	}
 
+	# Uncomment to enable logging of certain Moonshot attributes. See
+	# mods-available/moonshot_custom_linelog.
+	# log_moonshot_authn_idp
+
 	#
 	#  Access-Reject packets are sent through the REJECT sub-section of the
 	#  post-auth section.
@@ -362,6 +366,10 @@ post-auth {
 	#  'edir_account_policy_check = yes' in the ldap module configuration
 	#
 	Post-Auth-Type REJECT {
+		# Uncomment to enable logging of certain Moonshot attributes. See
+		# mods-available/moonshot_custom_linelog.
+		# log_moonshot_authn_idp
+
 		# log failed authentications in SQL, too.
 		-sql
 		attr_filter.access_reject
@@ -373,6 +381,9 @@ post-auth {
 			&Module-Failure-Message := &request:Module-Failure-Message
 		}
 	}
+	# Uncomment to enable logging of certain Moonshot attributes. See
+	# mods-available/moonshot_custom_linelog.
+	# log_moonshot_authn_idp
 }
 
 #

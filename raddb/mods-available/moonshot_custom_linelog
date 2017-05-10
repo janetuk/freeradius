@@ -1,0 +1,75 @@
+# This script can be used in the sites-available/inner-tunnel file (on an IdP()
+# or sites-available/abfab-tr-idp file (on a Moonshot RP Proxy) to log the
+# values of certain attributes that are returned to the client.
+#
+# This is for testing and debugging purposes; it is not enabled by default.
+# To enable:
+#
+# 1) Add a softlink from ../mods-enabled/custom_linelog to this file
+#
+# 2) If on an IdP, uncomment the lines in sites-available/inner-tunnel that
+#    contain "log_moonshot_authn_idp"
+#
+# 3) If on a Moonshot RP Proxy, uncomment the lines in sites-available/abfab-tr-idp
+#    that contain "log_moonshot_authn_rp_proxy"
+
+
+linelog log_moonshot_authn_rp_proxy {
+	destination = file
+
+	#
+	#  Used if the expansion of "reference" fails.
+	#
+	format = ""
+
+#	file {
+		filename = ${logdir}/moonshot-authn-linelog
+
+		permissions = 0600
+#	}
+
+	reference = "messages.%{%{reply:Packet-Type}:-default}"
+
+	#
+	#  The messages defined here are taken from the "reference"
+	#  expansion, above.
+	#
+	#  Pairs may be attributes refs, xlats, literals or execs.
+	messages {
+		default = "Unknown packet type %{Packet-Type}"
+
+		Access-Accept = "moonshot-auth#AUTH=OK#TIME=%T#IP=%{request:Packet-Src-IP-Address}#SVC=%{%{request:GSS-Acceptor-Service-Name}:-none}/%{%{request:GSS-Acceptor-Host-Name}:-none}#FROM=%{%{request:Realm}:-LOCAL}#MOONSHOT_HOST_TID=%{reply:Moonshot-Host-TargetedId}#MOONSHOT_REALM_TID=%{reply:Moonshot-Realm-TargetedId}#MOONSHOT_COI_TID=%{reply:Moonshot-TR-COI-TargetedId}#MOONSHOT_SAML=%{%{reply:SAML-AAA-Assertion[*]}:-none}"
+		Access-Reject = "moonshot-auth#AUTH=FAIL#TIME=%T#IP=%{request:Packet-Src-IP-Address}#SVC=%{%{request:GSS-Acceptor-Service-Name}:-none}/%{%{request:GSS-Acceptor-Host-Name}:-none}#FROM=%{%{request:Realm}:-LOCAL}#FAILURE_REASON=%{%{reply:EAP-Message}:-%{reply:Reply-Message[*]}:-unknown}"
+	}
+}
+
+
+
+linelog log_moonshot_authn_idp {
+	destination = file
+
+	#
+	#  Used if the expansion of "reference" fails.
+	#
+	format = ""
+
+#	file {
+		filename = ${logdir}/moonshot-authn-linelog
+
+		permissions = 0600
+#	}
+
+	reference = "messages.%{%{reply:Packet-Type}:-default}"
+
+	#
+	#  The messages defined here are taken from the "reference"
+	#  expansion, above.
+	#
+	#  Pairs may be attributes refs, xlats, literals or execs.
+	messages {
+		default = "Unknown packet type %{Packet-Type}"
+
+		Access-Accept = "moonshot-auth#AUTH=OK#TIME=%T#IP=%{request:Packet-Src-IP-Address}#SVC=%{%{request:GSS-Acceptor-Service-Name}:-none}/%{%{request:GSS-Acceptor-Host-Name}:-none}#FROM=%{%{request:Realm}:-LOCAL}#USERNAME=%{request:User-Name}#MOONSHOT_HOST_TID=%{reply:Moonshot-Host-TargetedId}#MOONSHOT_REALM_TID=%{reply:Moonshot-Realm-TargetedId}#MOONSHOT_COI_TID=%{reply:Moonshot-TR-COI-TargetedId}#MOONSHOT_SAML=%{%{reply:SAML-AAA-Assertion[*]}:-none}"
+		Access-Reject = "moonshot-auth#AUTH=FAIL#TIME=%T#IP=%{request:Packet-Src-IP-Address}#SVC=%{%{request:GSS-Acceptor-Service-Name}:-none}/%{%{request:GSS-Acceptor-Host-Name}:-none}#FROM=%{%{request:Realm}:-LOCAL}#USERNAME=%{request:User-Name}#FAILURE_REASON=%{%{reply:EAP-Message}:-%{reply:Reply-Message[*]}:-unknown}"
+	}
+}

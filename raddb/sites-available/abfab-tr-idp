@@ -12,7 +12,7 @@
 
 server abfab-idp {
 authorize {
-        psk_authorize
+	psk_authorize
 	abfab_client_check
 	filter_username
 	preprocess
@@ -30,9 +30,9 @@ authorize {
 #	cui
 
 	suffix {
-	        updated = 1
+		updated = 1
 		noop = reject
-        }
+	}
 	eap {
 		ok = return
 	}
@@ -96,6 +96,11 @@ post-auth {
 	exec
 	#  Remove reply message if the response contains an EAP-Message
 	remove_reply_message_if_eap
+
+	# Uncomment to enable logging of certain Moonshot attributes. See
+	# mods-available/moonshot_custom_linelog.
+	# log_moonshot_authn_rp_proxy
+
 	#  Access-Reject packets are sent through the REJECT sub-section of the
 	#  post-auth section.
 	#
@@ -103,6 +108,10 @@ post-auth {
 	#  'edir_account_policy_check = yes' in the ldap module configuration
 	#
 	Post-Auth-Type REJECT {
+		# Uncomment to enable logging of certain Moonshot attributes. See
+		# mods-available/moonshot_custom_linelog.
+		# log_moonshot_authn_rp_proxy
+
 		# log failed authentications in SQL, too.
 		-sql
 		attr_filter.access_reject
@@ -119,6 +128,10 @@ post-auth {
 		#  Remove reply message if the response contains an EAP-Message
 		remove_reply_message_if_eap
 	}
+
+	# Uncomment to enable logging of certain Moonshot attributes. See
+	# mods-available/moonshot_custom_linelog.
+	# log_moonshot_authn_rp_proxy
 }
 #
 #  When the server decides to proxy a request to a home server,
