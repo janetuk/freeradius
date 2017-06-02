@@ -1,3 +1,9 @@
+freeradius (3.0.13+moonshot3-6) unstable; urgency=medium
+
+  * Disabled session caching in EAP in response to CVE-2017-9148.
+
+ -- Painless Security <build@painless-security.com>  Fri, 02 Jun 2017 15:29:00 -0400
+
 freeradius (3.0.13+moonshot3-5) unstable; urgency=medium
 
   * Fixed deleted links when upgrading to 3.0.13 on debian/ubuntu
