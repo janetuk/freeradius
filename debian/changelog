@@ -1,3 +1,9 @@
+freeradius (3.0.14+moonshot4-1) unstable; urgency=medium
+
+  * Merged from release_3.0.14
+
+ -- Painless Security <build@painless-security.com>  Mon, 05 Jun 2017 19:03:00 -0400
+
 freeradius (3.0.14+git) unstable; urgency=medium
 
   * New upstream version.
