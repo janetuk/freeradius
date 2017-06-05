@@ -1,3 +1,9 @@
+freeradius (3.0.14+git) unstable; urgency=medium
+
+  * New upstream version.
+
+ -- Alan DeKok <aland@freeradius.org>  Tue, 07 Mar 2017 12:00:00 -0400
+
 freeradius (3.0.13+moonshot3-6) unstable; urgency=medium
 
   * Disabled session caching in EAP in response to CVE-2017-9148.
