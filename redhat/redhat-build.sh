@@ -5,6 +5,9 @@
 
 # Usage: rhb.sh <freeradius-version>
 # <freeradius-version> should include any moonshot extensions, e.g.: 3.0.13-5
+# Note: This must be consistent with the Version and Release lines at the
+# top of ../freeradius-server.spec: The part before the '-' is the Version,
+# and the part ater the '-' is the Release (up through the '%' on that line, anyway.)
 
 set -euo pipefail
 IFS=$'\n\t'
