@@ -22,8 +22,6 @@ Source102: freeradius-logrotate
 Source103: freeradius-pam-conf
 Source104: freeradius-tmpfiles.conf
 
-Patch1: freeradius-redhat-config.patch
-
 %global docdir %{?_pkgdocdir}%{!?_pkgdocdir:%{_docdir}/%{name}-%{version}}
 %define initddir %{?_initddir:%{_initddir}}%{!?_initddir:%{_initrddir}}
 
@@ -202,7 +200,6 @@ This plugin provides the unixODBC support for the FreeRADIUS server project.
 %setup -q -n %{dist_base}
 # Note: We explicitly do not make patch backup files because 'make install'
 # mistakenly includes the backup files, especially problematic for raddb config files.
-%patch1 -p1
 
 %build
 # Force compile/link options, extra security for network facing daemon
@@ -414,6 +411,7 @@ exit 0
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/ippool
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/ippool-dhcp
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main
+%dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/moonshot-targeted-ids
 
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/unbound
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/unbound/default.conf
@@ -487,6 +485,8 @@ exit 0
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/logintime
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/mac2ip
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/mac2vlan
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/moonshot-targeted-ids
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/moonshot_custom_linelog
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/mschap
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/ntlm_auth
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/opendirectory
@@ -523,6 +523,7 @@ exit 0
 %config(missingok) /etc/raddb/mods-enabled/attr_filter
 %config(missingok) /etc/raddb/mods-enabled/cache_eap
 %config(missingok) /etc/raddb/mods-enabled/chap
+%config(missingok) /etc/raddb/mods-enabled/date
 %config(missingok) /etc/raddb/mods-enabled/detail
 %config(missingok) /etc/raddb/mods-enabled/detail.log
 %config(missingok) /etc/raddb/mods-enabled/dhcp
@@ -561,6 +562,7 @@ exit 0
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/dhcp
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/eap
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/filter
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/moonshot-targeted-ids
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/operator-name
 
 
@@ -602,6 +604,7 @@ exit 0
 %{_libdir}/freeradius/rlm_digest.so
 %{_libdir}/freeradius/rlm_dynamic_clients.so
 %{_libdir}/freeradius/rlm_eap.so
+%{_libdir}/freeradius/rlm_eap_fast.so
 %{_libdir}/freeradius/rlm_eap_gtc.so
 %{_libdir}/freeradius/rlm_eap_leap.so
 %{_libdir}/freeradius/rlm_eap_md5.so
@@ -693,6 +696,8 @@ exit 0
 %doc %{_mandir}/man1/radwho.1.gz
 %doc %{_mandir}/man1/radzap.1.gz
 %doc %{_mandir}/man1/smbencrypt.1.gz
+%doc %{_mandir}/man1/dhcpclient.1.gz
+%doc %{_mandir}/man1/rad_counter.1.gz
 %doc %{_mandir}/man5/checkrad.5.gz
 %doc %{_mandir}/man8/radcrypt.8.gz
 %doc %{_mandir}/man8/radsniff.8.gz
@@ -753,6 +758,10 @@ exit 0
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/main/ndb/schema.sql
 /etc/raddb/mods-config/sql/main/ndb/README
 
+%dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/moonshot-targeted-ids/mysql
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/moonshot-targeted-ids/mysql/queries.conf
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/moonshot-targeted-ids/mysql/schema.sql
+
 %{_libdir}/freeradius/rlm_sql_mysql.so
 
 %files postgresql
@@ -782,6 +791,11 @@ exit 0
 
 %{_libdir}/freeradius/rlm_sql_postgresql.so
 
+%dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/moonshot-targeted-ids/postgresql
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/moonshot-targeted-ids/postgresql/queries.conf
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/moonshot-targeted-ids/postgresql/schema.sql
+
+
 %files sqlite
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/counter/sqlite
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/counter/sqlite/dailycounter.conf
@@ -804,6 +818,11 @@ exit 0
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main/sqlite
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/main/sqlite/queries.conf
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/main/sqlite/schema.sql
+
+%dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/moonshot-targeted-ids/sqlite
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/moonshot-targeted-ids/sqlite/queries.conf
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/moonshot-targeted-ids/sqlite/schema.sql
+
 
 %{_libdir}/freeradius/rlm_sql_sqlite.so
 

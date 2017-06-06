@@ -1,4 +1,4 @@
-#! /bin/bash
+#! /bin/bash -x
 
 # This script should be run inside of a moonshot directory that contains 
 # a freeradius-server repository.
@@ -27,7 +27,10 @@ tar -zcf freeradius-${VERSION}.tar.gz freeradius-server
 # Move new source package
 cp freeradius-${VERSION}.tar.gz ~/rpmbuild/SOURCES/freeradius-server.tar.gz
 mv -f freeradius-${VERSION}.tar.gz ~/rpmbuild/SOURCES/
-cp rpm-sources/* ~/rpmbuild/SOURCES
+if [ -n "$(ls -A rpm-sources)" ]
+then
+    cp rpm-sources/* ~/rpmbuild/SOURCES
+fi
 
 # Move new spec file
 cp freeradius-server/freeradius-server.spec ~/rpmbuild/SPECS/
