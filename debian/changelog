@@ -1,8 +1,8 @@
-freeradius (3.0.15+moonshot4-1) unstable; urgency=medium
+freeradius (3.0.15-moonshot5) unstable; urgency=medium
 
   * Bumping version number again for Debian 7 builds
 
- -- Painless Security <build@painless-security.com>  Mon, 31 Jul 2017 23:10:00 -0500
+ -- Painless Security <build@painless-security.com>  Mon, 31 Jul 2017 23:11:00 -0500
 
 freeradius (3.0.15+moonshot3-1) unstable; urgency=medium
 
