@@ -2,6 +2,8 @@ freeradius (3.0.15+moonshot4-2) unstable; urgency=medium
 
   * No code changes, but rebuilding package against Trust Router 3.0.2
 
+ -- Painless Security <build@painless-security.com>  Wed, 13 Sep 2017 13:36:23 -0400
+
 freeradius (3.0.15+moonshot4-1) unstable; urgency=medium
 
   * Bumping version number again for Debian 7 builds
