@@ -7,54 +7,49 @@ stages:
 before_script:
     - rm -fr build SOURCES RPMS
 
-ubuntu18:
-  image: registry.ci.ti.ja.net/jisc/moonshot-build/ubuntu18:latest
+centos6:
+  image: registry.ci.ti.ja.net/jisc/moonshot-build/centos6:latest
   stage: build
+  tags:
+    - moonshot
   script:
-    - "for i in ui mech_eap trust_router; do wget --header \"PRIVATE-TOKEN: $TOKEN\" https://gitlab.ci.ti.ja.net/moonshot/$i/-/jobs/artifacts/develop/download?job=ubuntu18 -O deps.zip; unzip deps.zip; done"
-    - "dpkg -i build/*.deb || true"
-    - apt-get install -fy
-    - debuild -us -uc
-    - rm -fr build deps.zip
-    - mkdir build
-    - cp ../*.deb build
+    - "for i in ui mech_eap libradsec trust_router; do curl -L -H \"PRIVATE-TOKEN: $TOKEN\" https://gitlab.ci.ti.ja.net/moonshot/$i/-/jobs/artifacts/develop/download?job=centos6 -o deps.zip; unzip deps.zip; done"
+    - yum -y install RPMS/x86_64/*.rpm
+    - rm -fr RPMS deps.zip
+    - ./configure
+    - make dist
+    - mkdir SOURCES
+    - cp freeradius*.tar.bz2 SOURCES
+    - cp centos/* SOURCES
+    - rpmbuild -bb centos/freeradius.spec --define "_topdir `pwd`"
   artifacts:
     paths:
-        - build/*.deb
+        - RPMS
 
-ubuntu14:
-  image: registry.ci.ti.ja.net/jisc/moonshot-build/ubuntu14:latest
+centos7:
+  image: registry.ci.ti.ja.net/jisc/moonshot-build/centos7:latest
   stage: build
+  tags:
+    - moonshot
   script:
-    - "for i in ui mech_eap trust_router; do curl -L -H \"PRIVATE-TOKEN: $TOKEN\" https://gitlab.ci.ti.ja.net/moonshot/$i/-/jobs/artifacts/develop/download?job=ubuntu14 -o deps.zip; unzip deps.zip; done"
-    - "dpkg -i build/*.deb || true"
-    - apt-get install -fy
-    - debuild -us -uc
-    - rm -fr build deps.zip
-    - mkdir build
-    - cp ../*.deb build
+    - "for i in ui mech_eap libradsec trust_router; do curl -L -H \"PRIVATE-TOKEN: $TOKEN\" https://gitlab.ci.ti.ja.net/moonshot/$i/-/jobs/artifacts/develop/download?job=centos7 -o deps.zip; unzip deps.zip; done"
+    - yum -y install RPMS/x86_64/*.rpm
+    - rm -fr RPMS deps.zip
+    - ./configure
+    - make dist
+    - mkdir SOURCES
+    - cp freeradius*.tar.bz2 SOURCES
+    - cp centos/* SOURCES
+    - rpmbuild -bb centos/freeradius.spec --define "_topdir `pwd`"
   artifacts:
     paths:
-        - build/*.deb
-
-ubuntu16:
-  image: registry.ci.ti.ja.net/jisc/moonshot-build/ubuntu16:latest
-  stage: build
-  script:
-    - 'for i in ui mech_eap trust_router; do curl -L -H "PRIVATE-TOKEN: $TOKEN" https://gitlab.ci.ti.ja.net/moonshot/$i/-/jobs/artifacts/develop/download?job=ubuntu16 -o deps.zip; unzip deps.zip; done'
-    - "dpkg -i build/*.deb || true"
-    - apt-get install -fy
-    - debuild -us -uc
-    - rm -fr build deps.zip
-    - mkdir build
-    - cp ../*.deb build
-  artifacts:
-    paths:
-        - build/*.deb
+        - RPMS
 
 debian8:
   image: registry.ci.ti.ja.net/jisc/moonshot-build/debian8:latest
   stage: build
+  tags:
+    - moonshot
   script:
     - "for i in ui mech_eap trust_router; do curl -L -H \"PRIVATE-TOKEN: $TOKEN\" https://gitlab.ci.ti.ja.net/moonshot/$i/-/jobs/artifacts/develop/download?job=debian8 -o deps.zip; unzip deps.zip; done"
     - "dpkg -i build/*.deb || true"
@@ -70,6 +65,8 @@ debian8:
 debian9:
   image: registry.ci.ti.ja.net/jisc/moonshot-build/debian9:latest
   stage: build
+  tags:
+    - moonshot
   script:
     - "for i in ui mech_eap trust_router; do curl -L -H \"PRIVATE-TOKEN: $TOKEN\" https://gitlab.ci.ti.ja.net/moonshot/$i/-/jobs/artifacts/develop/download?job=debian9 -o deps.zip; unzip deps.zip; done"
     - "dpkg -i build/*.deb || true"
@@ -82,36 +79,53 @@ debian9:
     paths:
         - build/*.deb
 
-centos7:
-  image: registry.ci.ti.ja.net/jisc/moonshot-build/centos7:latest
+ubuntu14:
+  image: registry.ci.ti.ja.net/jisc/moonshot-build/ubuntu14:latest
   stage: build
+  tags:
+    - moonshot
   script:
-    - "for i in ui mech_eap libradsec trust_router; do curl -L -H \"PRIVATE-TOKEN: $TOKEN\" https://gitlab.ci.ti.ja.net/moonshot/$i/-/jobs/artifacts/develop/download?job=centos7 -o deps.zip; unzip deps.zip; done"
-    - yum -y install RPMS/x86_64/*.rpm
-    - rm -fr RPMS deps.zip
-    - ./configure
-    - make dist
-    - mkdir SOURCES
-    - cp freeradius*.tar.bz2 SOURCES
-    - cp centos/* SOURCES
-    - rpmbuild -bb centos/freeradius.spec --define "_topdir `pwd`"
+    - "for i in ui mech_eap trust_router; do curl -L -H \"PRIVATE-TOKEN: $TOKEN\" https://gitlab.ci.ti.ja.net/moonshot/$i/-/jobs/artifacts/develop/download?job=ubuntu14 -o deps.zip; unzip deps.zip; done"
+    - "dpkg -i build/*.deb || true"
+    - apt-get install -fy
+    - debuild -us -uc
+    - rm -fr build deps.zip
+    - mkdir build
+    - cp ../*.deb build
   artifacts:
     paths:
-        - RPMS
+        - build/*.deb
 
-centos6:
-  image: registry.ci.ti.ja.net/jisc/moonshot-build/centos6:latest
+ubuntu16:
+  image: registry.ci.ti.ja.net/jisc/moonshot-build/ubuntu16:latest
   stage: build
+  tags:
+    - moonshot
   script:
-    - "for i in ui mech_eap libradsec trust_router; do curl -L -H \"PRIVATE-TOKEN: $TOKEN\" https://gitlab.ci.ti.ja.net/moonshot/$i/-/jobs/artifacts/develop/download?job=centos6 -o deps.zip; unzip deps.zip; done"
-    - yum -y install RPMS/x86_64/*.rpm
-    - rm -fr RPMS deps.zip
-    - ./configure
-    - make dist
-    - mkdir SOURCES
-    - cp freeradius*.tar.bz2 SOURCES
-    - cp centos/* SOURCES
-    - rpmbuild -bb centos/freeradius.spec --define "_topdir `pwd`"
+    - 'for i in ui mech_eap trust_router; do curl -L -H "PRIVATE-TOKEN: $TOKEN" https://gitlab.ci.ti.ja.net/moonshot/$i/-/jobs/artifacts/develop/download?job=ubuntu16 -o deps.zip; unzip deps.zip; done'
+    - "dpkg -i build/*.deb || true"
+    - apt-get install -fy
+    - debuild -us -uc
+    - rm -fr build deps.zip
+    - mkdir build
+    - cp ../*.deb build
   artifacts:
     paths:
-        - RPMS
+        - build/*.deb
+
+ubuntu18:
+  image: registry.ci.ti.ja.net/jisc/moonshot-build/ubuntu18:latest
+  stage: build
+  tags:
+    - moonshot
+  script:
+    - "for i in ui mech_eap trust_router; do wget --header \"PRIVATE-TOKEN: $TOKEN\" https://gitlab.ci.ti.ja.net/moonshot/$i/-/jobs/artifacts/develop/download?job=ubuntu18 -O deps.zip; unzip deps.zip; done"
+    - "dpkg -i build/*.deb || true"
+    - apt-get install -fy
+    - debuild -us -uc
+    - rm -fr build deps.zip
+    - mkdir build
+    - cp ../*.deb build
+  artifacts:
+    paths:
+        - build/*.deb
