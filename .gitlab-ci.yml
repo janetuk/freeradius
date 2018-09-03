@@ -1,0 +1,74 @@
+variables:
+  DOCKER_DRIVER: overlay2
+
+stages:
+- build
+
+before_script:
+    - rm -fr build SOURCES RPMS
+
+.centoscommon: &centoscommon
+  stage: build
+  tags:
+    - moonshot
+  script:
+    - yum -y upgrade
+    - sed -i "s/\(.\)%{?dist}/\1b$CI_PIPELINE_ID%{?dist}/g" centos/freeradius.spec
+    - "for i in ui mech_eap trust_router libradsec; do wget --header \"PRIVATE-TOKEN: $TOKEN\" https://gitlab.ci.ti.ja.net/moonshot/$i/-/jobs/artifacts/develop/download?job=$CI_JOB_NAME -O deps.zip; unzip deps.zip; done"
+    - yum -y install RPMS/x86_64/*.rpm
+    - rm -fr RPMS deps.zip
+    - ./configure
+    - make dist
+    - mkdir SOURCES
+    - cp freeradius*.tar.bz2 SOURCES
+    - cp centos/* SOURCES
+    - rpmbuild -bb centos/freeradius.spec --define "_topdir `pwd`"
+  artifacts:
+    paths:
+        - RPMS
+
+.debiancommon: &debiancommon
+  stage: build
+  tags:
+    - moonshot
+  script:
+    - apt-get -y update && apt-get -y dist-upgrade
+    - dch -l ".$CI_JOB_NAME.b$CI_PIPELINE_ID" "Include job ID"
+    - "for i in ui mech_eap trust_router libradsec; do wget --header \"PRIVATE-TOKEN: $TOKEN\" https://gitlab.ci.ti.ja.net/moonshot/$i/-/jobs/artifacts/develop/download?job=$CI_JOB_NAME -O deps.zip; unzip deps.zip; done"
+    - "dpkg -i build/*.deb || true"
+    - apt-get install -fy
+    - debuild -us -uc
+    - rm -fr build deps.zip
+    - mkdir build
+    - cp ../*.deb build
+  artifacts:
+    paths:
+        - build/*.deb
+
+centos6:
+  image: registry.ci.ti.ja.net/jisc/moonshot-build/centos6:latest
+  <<: *centoscommon
+
+centos7:
+  image: registry.ci.ti.ja.net/jisc/moonshot-build/centos7:latest
+  <<: *centoscommon
+
+debian8:
+  image: registry.ci.ti.ja.net/jisc/moonshot-build/debian8:latest
+  <<: *debiancommon
+
+debian9:
+  image: registry.ci.ti.ja.net/jisc/moonshot-build/debian9:latest
+  <<: *debiancommon
+
+ubuntu14:
+  image: registry.ci.ti.ja.net/jisc/moonshot-build/ubuntu14:latest
+  <<: *debiancommon
+
+ubuntu16:
+  image: registry.ci.ti.ja.net/jisc/moonshot-build/ubuntu16:latest
+  <<: *debiancommon
+
+ubuntu18:
+  image: registry.ci.ti.ja.net/jisc/moonshot-build/ubuntu18:latest
+  <<: *debiancommon
