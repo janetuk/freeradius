@@ -64,11 +64,11 @@ post-auth {
 	#  If session-state contains an update User-Name make sure that is the
 	#  only one that will end up in the reply
 
-    if (session-state:User-Name) {
-        update reply {
-            User-Name !* ANY
-        }
-    }
+	if (session-state:User-Name && reply:User-Name && request:User-Name && (reply:User-Name == request:User-Name)) {
+		update reply {
+			User-Name !* ANY
+		}
+	}
 	update {
 		&reply: += &session-state:
 	}
