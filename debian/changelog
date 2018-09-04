@@ -1,8 +1,14 @@
-freeradius (3.0.16+moonshot1) unstable; urgency=medium
+freeradius (3.0.17+moonshot1) unstable; urgency=medium
 
-  * Merged from upstream release_3.0.16
+  * Merged from upstream release_3.0.17
 
- -- Jisc <assent@jisc.ac.uk>  Mon, 11 Jun 2018 12:00:00 -0400
+ -- Jisc <assent@jisc.ac.uk>  Mon, 4 Sep 2018 12:00:00 +0000
+
+freeradius (3.0.17+git) unstable; urgency=medium
+
+  * New upstream version.
+
+ -- Alan DeKok <aland@freeradius.org>  Thu, 11 Jun 2018 12:00:00 -0500
 
 freeradius (3.0.16+git) unstable; urgency=medium
 
