@@ -61,6 +61,14 @@ post-auth {
 	#  The session-state attributes are automatically deleted after
 	#  an Access-Reject or Access-Accept is sent.
 	#
+	#  If session-state contains an update User-Name make sure that is the
+	#  only one that will end up in the reply
+
+    if (session-state:User-Name) {
+        update reply {
+            User-Name !* ANY
+        }
+    }
 	update {
 		&reply: += &session-state:
 	}
