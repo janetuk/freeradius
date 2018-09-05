@@ -1,7 +1,7 @@
 Summary: High-performance and highly configurable free RADIUS server
 Name: freeradius
-Version: 3.0.16
-Release: 2.moonshot%{?dist}
+Version: 3.0.17
+Release: 2.moonshot.%{?dist}
 License: GPLv2+ and LGPLv2+
 Group: System Environment/Daemons
 URL: http://www.freeradius.org/
@@ -893,6 +893,9 @@ exit 0
 %{_libdir}/freeradius/rlm_sql_unixodbc.so
 
 %changelog
+* Tue Sep 04 2018 Alejandro Perez-Mendez <alex.perez-mendez@jisc.ac.uk> - 3.0.17-2
+- Upgrade to upsteam v3.0.17 release
+
 * Wed Jun 13 2018 Alejandro Perez-Mendez <alex.perez-mendez@jisc.ac.uk> - 3.0.16-2
 - Upgrade to upsteam v3.0.16 release
 - Unified version for Centos 6 and 7
