@@ -24,6 +24,7 @@ before_script:
     - cp centos/* SOURCES
     - rpmbuild -bb centos/freeradius.spec --define "_topdir `pwd`"
   artifacts:
+    expire_in: 6 months
     paths:
         - RPMS
 
@@ -42,6 +43,7 @@ before_script:
     - mkdir build
     - cp ../*.deb build
   artifacts:
+    expire_in: 6 months
     paths:
         - build/*.deb
 
