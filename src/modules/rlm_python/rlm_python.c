@@ -522,9 +522,11 @@ static rlm_rcode_t do_python_single(REQUEST *request, PyObject *pFunc, char cons
 	 */
 	if (PyTuple_CheckExact(pRet)) {
 		PyObject *pTupleInt;
+		int tuple_size = PyTuple_GET_SIZE(pRet);
 
-		if (PyTuple_GET_SIZE(pRet) != 3) {
-			ERROR("%s - Tuple must be (return, replyTuple, configTuple)", funcname);
+		if (tuple_size < 3 || tuple_size > 7) {
+			ERROR("%s - Tuple must be (return, replyTuple, configTuple, [requestTuple], "
+			      "[stateTuple], [proxyreqTuple], [proxyreplyTuple])", funcname);
 			ret = RLM_MODULE_FAIL;
 			goto finish;
 		}
@@ -543,7 +545,32 @@ static rlm_rcode_t do_python_single(REQUEST *request, PyObject *pFunc, char cons
 		/* Config item tuple */
 		mod_vptuple(request, request, &request->config,
 			    PyTuple_GET_ITEM(pRet, 2), funcname, "config");
-
+		/* Request item tuple */
+		if (tuple_size >= 4) {
+			mod_vptuple(request->packet, request, &request->packet->vps,
+				    PyTuple_GET_ITEM(pRet, 3), funcname, "request");
+			/*
+			 *	Update cached copies
+			 */
+			request->username = fr_pair_find_by_num(request->packet->vps, PW_USER_NAME, 0, TAG_ANY);
+			request->password = fr_pair_find_by_num(request->packet->vps, PW_USER_PASSWORD, 0, TAG_ANY);
+			if (!request->password)
+				request->password = fr_pair_find_by_num(request->packet->vps, PW_CHAP_PASSWORD, 0, TAG_ANY);
+		}
+		/* State item tuple */
+		if (tuple_size >= 5)
+			mod_vptuple(request->state_ctx, request, &request->state,
+				    PyTuple_GET_ITEM(pRet, 4), funcname, "session-state");
+#ifdef WITH_PROXY
+		/* Proxy request item tuple */
+		if (request->proxy && tuple_size >= 6)
+			mod_vptuple(request->proxy, request, &request->proxy->vps,
+				    PyTuple_GET_ITEM(pRet, 5), funcname, "proxy-request");
+		/* Proxy request item tuple */
+		if (request->proxy_reply && tuple_size == 7)
+			mod_vptuple(request->proxy_reply, request, &request->proxy_reply->vps,
+				    PyTuple_GET_ITEM(pRet, 6), funcname, "proxy-reply");
+#endif
 	} else if (PyInt_CheckExact(pRet)) {
 		/* Just an integer */
 		ret = PyInt_AsLong(pRet);
