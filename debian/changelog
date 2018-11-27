@@ -4,7 +4,7 @@ freeradius (3.0.17+moonshot2.DIST) unstable; urgency=medium
   * Backport some Python module changes
   * Support for OpenSSL 1.1
 
- -- Jisc <assent@jisc.ac.uk>  Mon, 4 Sep 2018 12:00:00 +0000
+ -- Jisc <assent@jisc.ac.uk>  Tue, 27 Nov 2018 12:00:00 +0000
 
 freeradius (3.0.17+moonshot1) unstable; urgency=medium
 
