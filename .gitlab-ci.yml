@@ -23,6 +23,7 @@ before_script:
     - cp centos/* SOURCES
     - rpmbuild -bb centos/freeradius.spec --define "_topdir `pwd`"
   artifacts:
+    expire_in: 6 months
     paths:
         - RPMS
 
@@ -41,6 +42,7 @@ before_script:
     - mkdir build
     - cp ../*.deb build
   artifacts:
+    expire_in: 6 months
     paths:
         - build/*.deb
 
@@ -58,6 +60,14 @@ debian8:
 
 debian9:
   image: registry.ci.ti.ja.net/jisc/moonshot-build/debian9:latest
+  <<: *debiancommon
+
+raspbian8:
+  image: registry.ci.ti.ja.net/jisc/moonshot-build/raspbian8:latest
+  <<: *debiancommon
+
+raspbian9:
+  image: registry.ci.ti.ja.net/jisc/moonshot-build/raspbian9:latest
   <<: *debiancommon
 
 ubuntu14:
