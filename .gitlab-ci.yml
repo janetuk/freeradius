@@ -63,11 +63,18 @@ debian9:
   image: registry.ci.ti.ja.net/jisc/moonshot-build/debian9:latest
   <<: *debiancommon
 
+debian10:
+  when: manual
+  image: registry.ci.ti.ja.net/jisc/moonshot-build/debian10:latest
+  <<: *debiancommon
+
 raspbian8:
+  when: manual
   image: registry.ci.ti.ja.net/jisc/moonshot-build/raspbian8:latest
   <<: *debiancommon
 
 raspbian9:
+  when: manual
   image: registry.ci.ti.ja.net/jisc/moonshot-build/raspbian9:latest
   <<: *debiancommon
 
