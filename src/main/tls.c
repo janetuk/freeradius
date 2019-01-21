@@ -564,6 +564,7 @@ tls_session_t *tls_new_client_session(TALLOC_CTX *ctx, fr_tls_server_conf_t *con
 	return ssn;
 }
 
+
 /** Create a new TLS session
  *
  * Configures a new TLS session, configuring options, setting callbacks etc...
