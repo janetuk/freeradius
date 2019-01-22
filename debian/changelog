@@ -1,3 +1,9 @@
+freeradius (3.0.17+moonshot4.DIST) unstable; urgency=medium
+
+  * TBD
+
+ -- Jisc <assent@jisc.ac.uk>  Tue, 22 Jan 2019 00:00:00 +0000
+
 freeradius (3.0.17+moonshot3) unstable; urgency=medium
 
   * Add Debian Buster build
