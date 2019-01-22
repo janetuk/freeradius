@@ -1,4 +1,10 @@
-freeradius (3.0.17+moonshot2.DIST) unstable; urgency=medium
+freeradius (3.0.17+moonshot3.DIST) unstable; urgency=medium
+
+  * Add Debian Buster build
+
+ -- Jisc <assent@jisc.ac.uk>  Tue, 22 Jan 2019 00:00:00 +0000
+
+freeradius (3.0.17+moonshot2) unstable; urgency=medium
 
   * Add Moonshot-OTP-Secret dictionary definition
   * Backport some Python module changes
