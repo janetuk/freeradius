@@ -621,7 +621,7 @@ exit 0
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/filter
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/moonshot-targeted-ids
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/operator-name
-
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/rfc7542
 
 # binaries
 %defattr(-,root,root)

@@ -29,6 +29,12 @@ authorize {
 	#  cui below and set "add_cui = yes" for these clients in clients.conf
 #	cui
 
+	#
+	#  If you want to only do standard RADIUS NAI routing, comment
+	#  out the below line.
+	rfc7542
+
+	#  Standard RADIUS NAI routing
 	suffix {
 		updated = 1
 		noop = reject
