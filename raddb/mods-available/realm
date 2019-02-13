@@ -38,6 +38,13 @@ realm suffix {
 #	default_community = "apc.communities.example.com"
 }
 
+#  'realm!username'
+#
+realm bangpath {
+	format = prefix
+	delimiter = "!"
+}
+
 #  'username%realm'
 #
 realm realmpercent {
