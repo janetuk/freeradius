@@ -23,7 +23,7 @@
 #  Examples: rfc7542_realms = 'example.com'
 #            rfc7542_realms = 'example.com|another.net|this.org'
 #
-rfc7542_realms = ${changeme}
+rfc7542_realms = 'changeme'
 
 #  This policy checks the User-Name attribute whether it is in
 #  RFC7542 bang-path format. If it is, it lets the bang-path realm
