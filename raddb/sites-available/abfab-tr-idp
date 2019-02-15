@@ -35,10 +35,13 @@ authorize {
 	# rfc7542
 
 	#  Standard RADIUS NAI routing
-	suffix {
-		updated = 1
-		noop = reject
+	if (!updated) {
+		suffix {
+			updated = 1
+			noop = reject
+		}
 	}
+
 	eap {
 		ok = return
 	}
