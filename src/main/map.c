@@ -1109,7 +1109,10 @@ int map_to_request(REQUEST *request, vp_map_t const *map, radius_map_getvalue_t 
 	}
 
 	parent = radius_list_ctx(context, map->lhs->tmpl_list);
-	rad_assert(parent);
+	if (!parent) {
+		REDEBUG("Unable to set parent list");
+		return -1;
+	}
 
 	/*
 	 *	The callback should either return -1 to signify operations error,
@@ -1124,7 +1127,7 @@ int map_to_request(REQUEST *request, vp_map_t const *map, radius_map_getvalue_t 
 			return rcode;
 		}
 		if (!head) {
-			RDEBUG2("No attributes updated");
+			RDEBUG2("No attributes updated for RHS %s", map->rhs->name);
 			return rcode;
 		}
 	} else {
@@ -1165,9 +1168,10 @@ int map_to_request(REQUEST *request, vp_map_t const *map, radius_map_getvalue_t 
 				fr_pair_list_free(list);
 				*list = head;
 				head = NULL;
-			} else {
+			} else { /* FALL-THROUGH */
 		case T_OP_EQ:
 				rad_assert(map->rhs->type == TMPL_TYPE_EXEC);
+				/* FALL-THROUGH */
 		case T_OP_ADD:
 				fr_pair_list_move(parent, list, &head);
 				fr_pair_list_free(&head);
@@ -1664,6 +1668,7 @@ void map_debug_log(REQUEST *request, vp_map_t const *map, VALUE_PAIR const *vp)
 		break;
 
 	default:
+		RDEBUG("map %s = %s", fr_int2str(tmpl_names, map->lhs->type, "???"), value);
 		break;
 	}
 

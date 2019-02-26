@@ -30,8 +30,8 @@ authorize {
 #	cui
 
 	#
-	#  If you want to only do standard RADIUS NAI routing, comment
-	#  out the below line.
+	# Do RFC 7542 bang path routing. If you want to only do standard
+	# RADIUS NAI routing, comment out the below line.
 	rfc7542
 
 	#  Standard RADIUS NAI routing
@@ -75,7 +75,7 @@ post-auth {
 
 	if (session-state:User-Name && reply:User-Name && request:User-Name && (reply:User-Name == request:User-Name)) {
 		update reply {
-			User-Name !* ANY
+			&User-Name !* ANY
 		}
 	}
 	update {

@@ -30,14 +30,14 @@ rfc7542_realms = 'changeme'
 #  processor handle it, otherwise it leaves it for suffix to handle
 #
 rfc7542.authorize {
-	#   Format: not_local_realm!...@local_realm: Handle with bangpath
+	# Format: not_local_realm!...@local_realm: Handle with bangpath
 	if ( (&request:User-Name =~ /(.+)!(.*)\@(${policy.rfc7542_realms})/) && \
 	    !(&request:User-Name =~ /(${policy.rfc7542_realms})!(.*)\@(.+)/) ) {
 		bangpath
 		updated
 	}
 
-	#  Format: local_realm!...@not_local_realm: Handle with bangpath
+	# Format: local_realm!...@not_local_realm: Handle with bangpath
 	elsif ( (&request:User-Name =~ /(${policy.rfc7542_realms})!(.*)\@(.+)/) && \
 	       !(&request:User-Name =~ /(.+)!(.*)\@(${policy.rfc7542_realms})/) ) {
 		bangpath
