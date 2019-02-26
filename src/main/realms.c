@@ -264,6 +264,10 @@ static ssize_t xlat_home_server(UNUSED void *instance, REQUEST *request,
 			state = "dead";
 			break;
 
+		case HOME_STATE_CONNECTION_FAIL:
+			state = "fail";
+			break;
+
 		default:
 			state = "unknown";
 			break;
@@ -458,7 +462,7 @@ void realm_home_server_sanitize(home_server_t *home, CONF_SECTION *cs)
 	FR_INTEGER_BOUND_CHECK("check_timeout", home->ping_timeout, >=, 1);
 	FR_INTEGER_BOUND_CHECK("check_timeout", home->ping_timeout, <=, 10);
 
-	FR_INTEGER_BOUND_CHECK("revive_interval", home->revive_interval, >=, 60);
+	FR_INTEGER_BOUND_CHECK("revive_interval", home->revive_interval, >=, 10);
 	FR_INTEGER_BOUND_CHECK("revive_interval", home->revive_interval, <=, 3600);
 
 #ifdef WITH_COA
@@ -2512,7 +2516,7 @@ home_server_t *home_server_ldb(char const *realmname,
 		 *	Home servers that are unknown, alive, or zombie
 		 *	are used for proxying.
 		 */
-		if (home->state == HOME_STATE_IS_DEAD) {
+		if (home->state >= HOME_STATE_IS_DEAD) {
 			continue;
 		}
 
@@ -2676,7 +2680,7 @@ home_server_t *home_server_ldb(char const *realmname,
 
 			if (!home) continue;
 
-			if ((home->state == HOME_STATE_IS_DEAD) &&
+			if ((home->state >= HOME_STATE_IS_DEAD) &&
 			    (home->ping_check == HOME_PING_CHECK_NONE)) {
 				home->state = HOME_STATE_ALIVE;
 				home->response_timeouts = 0;

@@ -1,14 +1,26 @@
-freeradius (3.0.17+moonshot4.DIST) unstable; urgency=medium
+freeradius (3.0.18+moonshot1.DIST) unstable; urgency=medium
+
+  * Merged with 3.0.18 upstream
+
+ -- Jisc <moonshot@jisc.ac.uk>  Tue, 26 Feb 2019 00:00:00 +0000
+
+freeradius (3.0.18+git) unstable; urgency=medium
+
+  * New upstream version.
+
+ -- Alan DeKok <aland@freeradius.org>  Sat, 05 May 2018 12:00:00 -0500
+
+freeradius (3.0.17+moonshot4) unstable; urgency=medium
 
   * Build source package
 
- -- Jisc <assent@jisc.ac.uk>  Sat, 2 Feb 2019 00:00:00 +0000
+ -- Jisc <moonshot@jisc.ac.uk>  Sat, 2 Feb 2019 00:00:00 +0000
 
 freeradius (3.0.17+moonshot3) unstable; urgency=medium
 
   * Add Debian Buster build
 
- -- Jisc <assent@jisc.ac.uk>  Tue, 22 Jan 2019 00:00:00 +0000
+ -- Jisc <moonshot@jisc.ac.uk>  Tue, 22 Jan 2019 00:00:00 +0000
 
 freeradius (3.0.17+moonshot2) unstable; urgency=medium
 
@@ -16,19 +28,19 @@ freeradius (3.0.17+moonshot2) unstable; urgency=medium
   * Backport some Python module changes
   * Support for OpenSSL 1.1
 
- -- Jisc <assent@jisc.ac.uk>  Tue, 27 Nov 2018 12:00:00 +0000
+ -- Jisc <moonshot@jisc.ac.uk>  Tue, 27 Nov 2018 12:00:00 +0000
 
 freeradius (3.0.17+moonshot1) unstable; urgency=medium
 
   * Merged from upstream release_3.0.17
 
- -- Jisc <assent@jisc.ac.uk>  Mon, 5 Sep 2018 12:00:00 +0000
+ -- Jisc <moonshot@jisc.ac.uk>  Mon, 4 Sep 2018 12:00:00 +0000
 
 freeradius (3.0.17+git) unstable; urgency=medium
 
   * New upstream version.
 
- -- Alan DeKok <aland@freeradius.org>  Thu, 11 Jun 2018 12:00:00 -0500
+ -- Alan DeKok <aland@freeradius.org>  Thu, 11 Jan 2018 12:00:00 -0500
 
 freeradius (3.0.16+git) unstable; urgency=medium
 

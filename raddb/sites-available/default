@@ -152,6 +152,17 @@ listen {
 #	clients = per_socket_clients
 
 	#
+	#  Set the default UDP receive buffer size.  In most cases,
+	#  the default values set by the kernel are fine.  However, in
+	#  some cases the NASes will send large packets, and many of
+	#  them at a time.  It is then possible to overflow the
+	#  buffer, causing the kernel to drop packets before they
+	#  reach FreeRADIUS.  Increasing the size of the buffer will
+	#  avoid these packet drops.
+	#
+#	recv_buff = 65536
+
+	#
 	#  Connection limiting for sockets with "proto = tcp".
 	#
 	#  This section is ignored for other kinds of sockets.
@@ -713,7 +724,7 @@ post-auth {
 
 	if (session-state:User-Name && reply:User-Name && request:User-Name && (reply:User-Name == request:User-Name)) {
 		update reply {
-			User-Name !* ANY
+			&User-Name !* ANY
 		}
 	}
 	update {
@@ -727,6 +738,14 @@ post-auth {
 	#  Create the CUI value and add the attribute to Access-Accept.
 	#  Uncomment the line below if *returning* the CUI.
 #	cui
+
+	#  Create empty accounting session to make simultaneous check
+	#  more robust. See the accounting queries configuration in
+	#  raddb/mods-config/sql/main/*/queries.conf for details.
+	#
+	#  The "sql_session_start" policy is defined in
+	#  raddb/policy.d/accounting.  See that file for more details.
+#	sql_session_start
 
 	#
 	#  If you want to have a log of authentication replies,

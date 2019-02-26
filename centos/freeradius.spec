@@ -1,7 +1,7 @@
 Summary: High-performance and highly configurable free RADIUS server
 Name: freeradius
-Version: 3.0.17
-Release: 4.moonshot%{?dist}
+Version: 3.0.18
+Release: 1.moonshot%{?dist}
 License: GPLv2+ and LGPLv2+
 Group: System Environment/Daemons
 URL: http://www.freeradius.org/
@@ -621,7 +621,7 @@ exit 0
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/filter
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/moonshot-targeted-ids
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/operator-name
-
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/policy.d/rfc7542
 
 # binaries
 %defattr(-,root,root)

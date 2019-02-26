@@ -236,7 +236,7 @@ static int tls_socket_recv(rad_listen_t *listener)
 	/*
 	 *	If we need to do more initialization, do that here.
 	 */
-	if (!SSL_is_init_finished(sock->ssn->ssl)) {
+	if (!sock->ssn->is_init_finished) {
 		if (!tls_handshake_recv(request, sock->ssn)) {
 			RDEBUG("FAILED in TLS handshake receive");
 			goto do_close;
@@ -596,6 +596,7 @@ static ssize_t proxy_tls_read(rad_listen_t *listener)
 			case SSL_ERROR_ZERO_RETURN:
 				/* remote end sent close_notify, send one back */
 				SSL_shutdown(sock->ssn->ssl);
+				/* FALL-THROUGH */
 
 			case SSL_ERROR_SYSCALL:
 			do_close:

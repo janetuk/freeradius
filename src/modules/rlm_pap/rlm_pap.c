@@ -357,7 +357,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 			 */
 			if (fr_pair_find_by_num(request->config, PW_CLEARTEXT_PASSWORD, 0, TAG_ANY)) {
 				RWDEBUG("Config already contains a \"known good\" password "
-					"(&control:Cleartext-Password).  Ignoring &config:Password-With-Header");
+					"(&control:Cleartext-Password).  Ignoring &control:Password-With-Header");
 				break;
 			}
 
@@ -489,6 +489,11 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 		    ((vp->vp_integer == 13) || /* EAP-TLS */
 		     (vp->vp_integer == 21) || /* EAP-TTLS */
 		     (vp->vp_integer == 25))) {	/* PEAP */
+			return RLM_MODULE_NOOP;
+		}
+
+		if (auth_type) {
+			DEBUG("Not doing PAP as Auth-Type is already set.");
 			return RLM_MODULE_NOOP;
 		}
 

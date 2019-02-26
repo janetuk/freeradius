@@ -625,11 +625,17 @@ REALM *tr_query_realm(REQUEST *request, char const *realm,
 	pthread_mutex_unlock(&tidc_mutex);
 
 	/* If we weren't able to get a response from the trust router server, goto cleanup (hence return NULL realm) */
-	if (!rv) goto cleanup;
+	if (!rv) {
+		DEBUG2("Could not connect with Trust Router server for realm %s, rv = %d\n", realm, rv);
+		module_failure_msg(request, "Could not connect with Trust Router server for realm %s", realm);
+		goto cleanup;
+	}
 
 	/* If we got a response but it is an error one, include a Reply-Message and Error-Cause attributes */
 	if (cookie.result != TID_SUCCESS) {
 		DEBUG2("TID response is error, rc = %d: %s.\n", cookie.result,
+		       cookie.err_msg?cookie.err_msg:"(NO ERROR TEXT)");
+		module_failure_msg(request, "TID response is error, rc = %d: %s.\n", cookie.result,
 		       cookie.err_msg?cookie.err_msg:"(NO ERROR TEXT)");
 		if (cookie.err_msg)
 			pair_make_reply("Reply-Message", cookie.err_msg, T_OP_SET);

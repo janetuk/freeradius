@@ -1468,7 +1468,7 @@ static ssize_t xlat_tokenize_literal(TALLOC_CTX *ctx, char *fmt, xlat_exp_t **he
 			ssize_t slen;
 			xlat_exp_t *next;
 
-			if (!p[1] || !strchr("%}dlmntDGHISTYv", p[1])) {
+			if (!p[1] || !strchr("%}dlmntDGHIMSTYv", p[1])) {
 				talloc_free(node);
 				*error = "Invalid variable expansion";
 				p++;
@@ -2172,6 +2172,10 @@ static char *xlat_aprint(TALLOC_CTX *ctx, REQUEST *request, xlat_exp_t const * c
 			}
 			break;
 
+		case 'M': /* request microsecond component */
+			snprintf(str, freespace, "%06u", (unsigned int) usec);
+			break;
+
 		case 'S': /* request timestamp in SQL format*/
 			if (!localtime_r(&when, &ts)) goto error;
 			strftime(str, freespace, "%Y-%m-%d %H:%M:%S", &ts);
@@ -2229,6 +2233,18 @@ static char *xlat_aprint(TALLOC_CTX *ctx, REQUEST *request, xlat_exp_t const * c
 		}
 		RDEBUG2("EXPAND %s", node->xlat->name);
 		RDEBUG2("   --> %s", str);
+
+		/*
+		 *	Resize the buffer to the correct size.
+		 */
+		if (rcode == 0) {
+			talloc_free(str);
+			str = talloc_strdup(ctx, "");
+		} else if (rcode < 2047) {
+			child = talloc_memdup(ctx, str, rcode + 1);
+			talloc_free(str);
+			str = child;
+		}
 		break;
 
 	case XLAT_MODULE:

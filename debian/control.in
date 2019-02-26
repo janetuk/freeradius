@@ -1,5 +1,5 @@
 Source: freeradius
-Build-Depends: debhelper (>= 9),
+Build-Depends: @BUILDDEPS@ debhelper (>= 9),
  quilt,
  dpkg-dev (>= 1.13.19),
  dh-systemd (>= 1.5),
@@ -36,7 +36,7 @@ Section: net
 Priority: optional
 Maintainer: Josip Rodin <joy-packages@debian.org>
 Uploaders: Stephen Gran <sgran@debian.org>, Mark Hymers <mhy@debian.org>
-Standards-Version: 3.9.6
+Standards-Version: 3.9.8
 Homepage: http://www.freeradius.org/
 
 Package: freeradius
@@ -191,7 +191,7 @@ Description: debug symbols for the FreeRADIUS packages
  packages.
 
 Package: freeradius-abfab
-Depends: freeradius (= ${binary:Version})
+Depends: freeradius (>= ${binary:Version})
 Recommends: moonshot-trust-router
 Architecture: all
 Description: FreeRADIUS ABFAB Support

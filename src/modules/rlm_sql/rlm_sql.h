@@ -126,6 +126,7 @@ typedef struct sql_config {
 								//!< stale sessions.
 
 	char const		*allowed_chars;			//!< Chars which done need escaping..
+	bool			driver_specific_escape;		//!< Use the driver specific SQL escape method
 	uint32_t		query_timeout;			//!< How long to allow queries to run for.
 
 	char const		*connect_query;			//!< Query executed after establishing
@@ -205,13 +206,14 @@ typedef struct rlm_sql_module_t {
 	int (*sql_affected_rows)(rlm_sql_handle_t *handle, rlm_sql_config_t *config);
 
 	sql_rcode_t (*sql_fetch_row)(rlm_sql_handle_t *handle, rlm_sql_config_t *config);
-	sql_rcode_t (*sql_fields)(char const **out[], rlm_sql_handle_t *handle, rlm_sql_config_t *config);
 	sql_rcode_t (*sql_free_result)(rlm_sql_handle_t *handle, rlm_sql_config_t *config);
 
 	sql_error_t	sql_error;				//!< Get any errors from the previous query.
 
 	sql_rcode_t (*sql_finish_query)(rlm_sql_handle_t *handle, rlm_sql_config_t *config);
 	sql_rcode_t (*sql_finish_select_query)(rlm_sql_handle_t *handle, rlm_sql_config_t *config);
+
+	xlat_escape_t	sql_escape_func;
 } rlm_sql_module_t;
 
 struct sql_inst {
