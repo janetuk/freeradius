@@ -1,9 +1,3 @@
-freeradius (3.0.18+moonshot3.DIST) unstable; urgency=medium
-
-  * TBA
-
- -- Jisc <moonshot@jisc.ac.uk>  Tue, 5 Feb 2019 00:00:00 +0000
-
 freeradius (3.0.18+moonshot2.DIST) unstable; urgency=medium
 
   * Revert systemd unit for Debian as 3.0.18 one does not work properly.
