@@ -835,6 +835,7 @@ exit 0
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/ippool/postgresql
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/ippool/postgresql/queries.conf
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/ippool/postgresql/schema.sql
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/ippool/postgresql/procedure.sql
 
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/main/postgresql
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/main/postgresql/setup.sql
