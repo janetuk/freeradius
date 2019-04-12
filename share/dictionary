@@ -117,6 +117,7 @@ $INCLUDE dictionary.rfc7268
 $INCLUDE dictionary.rfc7499
 $INCLUDE dictionary.rfc7930
 $INCLUDE dictionary.rfc8045
+$INCLUDE dictionary.rfc8559
 
 #
 #	Mostly values which have been allocated by IANA under
@@ -249,6 +250,7 @@ $INCLUDE dictionary.packeteer
 $INCLUDE dictionary.paloalto
 $INCLUDE dictionary.patton
 $INCLUDE dictionary.perle
+$INCLUDE dictionary.pfsense
 $INCLUDE dictionary.propel
 $INCLUDE dictionary.prosoft
 $INCLUDE dictionary.proxim
