@@ -103,6 +103,11 @@ Requires: freeradius-sqlite
 This package provides configuration required by an ABFAB (RFC 7055)
 identity provider or RP proxy.
 
+%post abfab
+usermod -a -G radiusd trustrouter 2>/dev/null ||true
+usermod -a -G trustrouter radiusd 2>/dev/null ||true
+exit 0
+
 %package doc
 Group: Documentation
 Summary: FreeRADIUS documentation
