@@ -191,8 +191,7 @@ Description: debug symbols for the FreeRADIUS packages
  packages.
 
 Package: freeradius-abfab
-Depends: freeradius (>= ${binary:Version})
-Requires: moonshot-trust-router
+Depends: freeradius (>= ${binary:Version}), moonshot-trust-router
 Architecture: all
 Description: FreeRADIUS ABFAB Support
  This package enables sites and modules typically needed by GSS-EAP
