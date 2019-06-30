@@ -102,6 +102,7 @@ BuildRequires: selinux-policy-doc
 Requires: %{name} = %{version}-%{release}
 Requires: freeradius-sqlite
 Requires: trust_router-libs
+Requires: trust_router
 Requires(post):   /usr/sbin/semodule, /sbin/restorecon
 Requires(postun): /usr/sbin/semodule, /sbin/restorecon
 
