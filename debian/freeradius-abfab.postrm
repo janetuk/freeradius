@@ -3,7 +3,7 @@
 set -e
 
 if [ $1 = purge ]; then
-    for foo in sites-enabled/channel_bindings sites-enabled/abfab-tr-idp sites-available/abfab-tls mods-enabled/abfab_psk_sql; do
+    for foo in sites-enabled/channel_bindings sites-enabled/abfab-tr-idp sites-enabled/abfab-tls mods-enabled/abfab_psk_sql; do
 	test -e /etc/freeradius/$foo &&rm /etc/freeradius/$foo
 	done
     fi
