@@ -1,8 +1,11 @@
 freeradius (3.0.19+moonshot2.DIST) unstable; urgency=medium
 
-  * TBD
+  * Make moonshot-trust-router a strong dependency for freeradius-abfab, since
+    freeradius won't start without the /var/lib/trust_ruter/keys file created.
+  * Fix error in postrm script for freeradius-abfab which was removing the
+    wrong file.
 
- -- Jisc <moonshot@jisc.ac.uk>  Fri, 12 Apr 2019 00:00:00 +0000
+ -- Jisc <moonshot@jisc.ac.uk>  Mon, 1 Jul 2019 00:00:00 +0000
 
 freeradius (3.0.19+moonshot1.DIST) unstable; urgency=medium
 
