@@ -1,5 +1,5 @@
 #============= radiusd_t ==============
-module radiusd_moonshot 1.1;
+module radiusd_moonshot 1.2;
 require {
     type unlabeled_t;
     type security_t;
