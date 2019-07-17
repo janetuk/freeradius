@@ -16,7 +16,7 @@ require {
     class process ptrace;
     class tcp_socket { name_bind name_connect };
     class netlink_selinux_socket { bind create };
-    class file { execute read execute_no_trans write getattr open ioctl append setattr };
+    class file { execute read execute_no_trans write getattr open ioctl append setattr lock };
     class process execmem;
     class capability sys_ptrace;
     class security compute_av;
@@ -34,6 +34,6 @@ allow radiusd_t self:netlink_selinux_socket { bind create };
 allow radiusd_t self:process { ptrace execmem };
 allow radiusd_t system_dbusd_var_lib_t:dir search;
 allow radiusd_t system_dbusd_var_lib_t:file { read getattr open };
-allow radiusd_t var_lib_t:file { read write getattr open }; 
+allow radiusd_t var_lib_t:file { read write getattr open lock }; 
 allow radiusd_t unlabeled_t:file { ioctl open append setattr };
 
