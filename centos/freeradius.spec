@@ -1,7 +1,7 @@
 Summary: High-performance and highly configurable free RADIUS server
 Name: freeradius
 Version: 3.0.19
-Release: 1.moonshot2%{?dist}
+Release: 1.moonshot3%{?dist}
 License: GPLv2+ and LGPLv2+
 Group: System Environment/Daemons
 URL: http://www.freeradius.org/
@@ -24,7 +24,6 @@ Source100: radiusd.service
 Source102: freeradius-logrotate
 Source103: freeradius-pam-conf
 Source104: freeradius-tmpfiles.conf
-Source105: radiusd_moonshot.te
 
 Patch1: freeradius-redhat-config.patch
 # This one does not seem used by CentOS packagers
@@ -96,18 +95,13 @@ Group: System Environment/Daemons
 Summary: FreeRADIUS ABFAb Configuration
 
 BuildRequires: trust_router-devel
-BuildRequires: selinux-policy-devel
-BuildRequires: selinux-policy-doc
 
 Requires: %{name} = %{version}-%{release}
 Requires: freeradius-sqlite
 Requires: trust_router-libs
 Requires: trust_router
-Requires(post):   /usr/sbin/semodule, /sbin/restorecon
-Requires(postun): /usr/sbin/semodule, /sbin/restorecon
-
-%global selinux_types %(%{__awk} '/^#[[:space:]]*SELINUXTYPE=/,/^[^#]/ { if ($3 == "-") printf "%s ", $2 }' /etc/selinux/config 2>/dev/null)
-%global selinux_variants %([ -z "%{selinux_types}" ] && echo mls targeted || echo %{selinux_types})
+Requires(post):   /usr/sbin/semanage
+Requires(postun): /usr/sbin/semanage
 
 %description abfab
 This package provides configuration required by an ABFAB (RFC 7055)
@@ -118,23 +112,19 @@ identity provider or RP proxy.
 usermod -a -G radiusd trustrouter 2>/dev/null ||true
 usermod -a -G trustrouter radiusd 2>/dev/null ||true
 
-# Install selinux modules
-echo "Installing SELinux policies"
-for selinuxvariant in %{selinux_variants}
-do
-  /usr/sbin/semodule -s ${selinuxvariant} -i \
-    %{_datadir}/selinux/${selinuxvariant}/radiusd_moonshot.pp &> /dev/null || :
-done
+# Warn about SElinux requirements
+echo "*** In order to allow FreeRadius work with Moonshot, you need to configure"
+echo "*** it to run in Permissive mode, using the following command:"
+echo "***         semanage permissive -a radiusd_t"
 exit 0
 
 %postun abfab
-echo "Uninstalling SELinux policies"
 if [ $1 -eq 0 ] ; then
-  for selinuxvariant in %{selinux_variants}
-  do
-    /usr/sbin/semodule -s ${selinuxvariant} -r radiusd_moonshot &> /dev/null || :
-  done
+    echo "*** If you configed FreeRadius to run in Permissive mode, you might want"
+    echo "*** to set it back to Enforcing, using the following command:"
+    echo "***         semanage permissive -d radiusd_t"
 fi
+exit 0
 
 %package doc
 Group: Documentation
@@ -386,20 +376,6 @@ Please reference that document.
 All documentation is in the freeradius-doc sub-package.
 
 EOF
-
-# Install the SELinux policyf
-mkdir SELinux
-cp -p %{SOURCE105} SELinux/
-cd SELinux
-for selinuxvariant in %{selinux_variants}
-do
-  make NAME=${selinuxvariant} -f /usr/share/selinux/devel/Makefile
-  install -D -p -m 644 radiusd_moonshot.pp \
-    $RPM_BUILD_ROOT/%{_datadir}/selinux/${selinuxvariant}/radiusd_moonshot.pp
-  make NAME=${selinuxvariant} -f /usr/share/selinux/devel/Makefile clean
-done
-cd -
-
 
 # Make sure our user/group is present prior to any package or subpackage installation
 %pre
@@ -780,7 +756,6 @@ exit 0
 %dir %attr(750,root,radiusd) /etc/raddb/mods-enabled
 %config(missingok) /etc/raddb/mods-enabled/abfab_psk_sql
 %config(missingok) /etc/raddb/mods-available/moonshot_custom_linelog
-/usr/share/selinux/*
 
 %files doc
 
