@@ -60,16 +60,17 @@ before_script:
     - sed -i "s/pkgrel=.*/pkgrel=$CI_PIPELINE_ID/g" alpine/APKBUILD
     - "wget --header \"PRIVATE-TOKEN: $TOKEN\" https://gitlab.ci.ti.ja.net/api/v4/projects/moonshot%2Ftrust_router/jobs/artifacts/develop/download?job=$CI_JOB_NAME -O deps.zip; unzip deps.zip"
     - apk add apks/*/*.apk --allow-untrusted
+    - rm -fr apks deps.zip
     - adduser -D tmpuser -s /bin/sh
     - adduser tmpuser abuild
     - ./configure
     - make dist
     - cp freeradius-server-*.tar.gz alpine
     - cd alpine
-    - ls
     - sudo -u tmpuser abuild checksum
     - sudo -u tmpuser abuild-keygen -an
     - sudo -u tmpuser abuild -r
+    - cd ..
     - mkdir apks
     - mv /home/tmpuser/packages/freeradius-server/* apks
   artifacts:
