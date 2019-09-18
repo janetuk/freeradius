@@ -28,7 +28,6 @@ source="$_realname-server-$pkgver.tar.gz
 
 	musl-fix-headers.patch
 	fix-scopeid.patch
-	freeradius-313-default-config.patch
 	"
 builddir="$srcdir"/$_realname-server-$pkgver
 
