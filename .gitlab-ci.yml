@@ -106,7 +106,6 @@ raspbian9:
   <<: *debiancommon
 
 raspbian10:
-  when: manual
   image: $DOCKER_REGISTRY_URL/raspbian10:latest
   <<: *debiancommon
 
