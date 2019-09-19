@@ -49,6 +49,34 @@ before_script:
     paths:
         - build/*
 
+.alpinecommon: &alpinecommon
+  stage: build
+  except:
+    - tags
+  tags:
+    - moonshot
+  script:
+    - sed -i "s/pkgrel=.*/pkgrel=$CI_PIPELINE_ID/g" alpine/APKBUILD
+    - "wget --header \"PRIVATE-TOKEN: $TOKEN\" https://gitlab.ci.ti.ja.net/api/v4/projects/moonshot%2Ftrust_router/jobs/artifacts/develop/download?job=$CI_JOB_NAME -O deps.zip; unzip deps.zip"
+    - apk add apks/*/*.apk --allow-untrusted
+    - rm -fr apks deps.zip
+    - adduser -D tmpuser -s /bin/sh
+    - adduser tmpuser abuild
+    - ./configure
+    - make dist
+    - cp freeradius-server-*.tar.gz alpine
+    - cd alpine
+    - sudo -u tmpuser abuild checksum
+    - sudo -u tmpuser abuild-keygen -an
+    - sudo -u tmpuser abuild -r
+    - cd ..
+    - mkdir apks
+    - mv /home/tmpuser/packages/freeradius-server/* apks
+  artifacts:
+    expire_in: 6 months
+    paths:
+        - apks/*/*.apk
+
 centos6:
   image: $DOCKER_REGISTRY_URL/centos6:latest
   <<: *centoscommon
@@ -77,6 +105,11 @@ raspbian9:
   image: $DOCKER_REGISTRY_URL/raspbian9:latest
   <<: *debiancommon
 
+raspbian10:
+  when: manual
+  image: $DOCKER_REGISTRY_URL/raspbian10:latest
+  <<: *debiancommon
+
 ubuntu16:
   image: $DOCKER_REGISTRY_URL/ubuntu16:latest
   <<: *debiancommon
@@ -84,3 +117,11 @@ ubuntu16:
 ubuntu18:
   image: $DOCKER_REGISTRY_URL/ubuntu18:latest
   <<: *debiancommon
+
+alpine39:
+  image: $DOCKER_REGISTRY_URL/alpine39:latest
+  <<: *alpinecommon
+
+alpine39_armhf:
+  image: $DOCKER_REGISTRY_URL/alpine39_arm:latest
+  <<: *alpinecommon

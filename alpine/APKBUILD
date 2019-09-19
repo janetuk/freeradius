@@ -1,0 +1,303 @@
+# Contributor: Alejandro Perez-Mendez <alex.perez-mendez@jisc.ac.uk>
+# Maintainer: Alejandro Perez-Mendez <alex.perez-mendez@jisc.ac.uk>
+pkgname=freeradius
+_realname=freeradius
+pkgver=3.0.19
+pkgrel=4
+pkgdesc="RADIUS (Remote Authentication Dial-In User Service) server"
+url="https://freeradius.org/"
+arch="all"
+license="GPL-2.0-or-later"
+makedepends="openssl-dev mariadb-connector-c-dev postgresql-dev gdbm-dev readline-dev
+	bash libtool autoconf automake perl-dev python2-dev openldap-dev krb5-dev
+	unixodbc-dev linux-pam-dev sqlite-dev talloc-dev libpcap-dev
+	linux-headers curl-dev hiredis-dev json-c-dev net-snmp-tools trust_router-dev"
+pkggroups="radius"
+pkgusers="radius"
+install="$pkgname.pre-install"
+depends="trust_router"
+subpackages="$pkgname-dbg $pkgname-doc $pkgname-dev $pkgname-ldap $pkgname-lib
+	$pkgname-mssql $pkgname-mysql $pkgname-sql $pkgname-perl
+	$pkgname-postgresql $pkgname-python $pkgname-radclient $pkgname-sqlite
+	$pkgname-unixodbc $pkgname-pam $pkgname-eap $pkgname-krb5
+	$pkgname-rest $pkgname-redis $pkgname-checkrad $pkgname-abfab"
+provides="freeradius3=$pkgver-r$pkgrel"
+source="$_realname-server-$pkgver.tar.gz
+	$pkgname.confd
+	$pkgname.initd
+
+	musl-fix-headers.patch
+	fix-scopeid.patch
+	"
+builddir="$srcdir"/$_realname-server-$pkgver
+
+# secfixes:
+#   3.0.19-r3:
+#     - CVE-2019-10143
+#   3.0.19-r0:
+#     - CVE-2019-11234
+#     - CVE-2019-11235
+
+_radconfdir="/etc/raddb"
+_radmodsdir="$_radconfdir/mods-available"
+_radlibdir="/usr/lib/freeradius"
+_radmodsconfdir="$_radconfdir/mods-config"
+ldpath="$_radlibdir"
+
+prepare() {
+	default_prepare
+	update_config_sub
+	# remove certs generation
+	# rm -rf raddb/certs
+}
+
+build() {
+	cd "$builddir"
+	# freeradius requries json.h to be in a dir called 'json'. We fool
+	# the configure script with a symlink pointing to proper location.
+	ln -s /usr/include/json-c json
+
+	./configure \
+		--build=$CBUILD \
+		--host=$CHOST \
+		--prefix=/usr \
+		--sysconfdir=/etc \
+		--mandir=/usr/share/man \
+		--infodir=/usr/share/info \
+		--localstatedir=/var \
+		--datarootdir=/usr/share \
+		--libdir="$_radlibdir" \
+		--with-logdir=/var/log/radius \
+		--with-radacctdir=/var/log/radius/radacct \
+		--with-system-libtool \
+		--with-system-libltdl \
+		--with-shared-libs \
+		--with-udpfromto \
+		--with-rlm_sql_sqlite \
+		--with-rlm_sql_postgresql \
+		--with-rlm_sql_mysql \
+		--with-rlm_krb5 \
+		--with-rlm_rest \
+		--with-rlm_redis \
+		--with-rlm_rediswho \
+		--without-rlm_eap_tnc \
+		--without-rlm_eap_ikev2 \
+		--without-rlm_sql_iodbc \
+		--without-rlm_sql_oracle \
+		--without-rlm_yubikey \
+		--without-rlm_ykclient \
+		--with-jsonc-include-dir="$PWD"
+
+	make -j1 LDFLAGS="$LDFLAGS -lssl"
+}
+
+package() {
+	cd "$builddir"
+	install -d -m0750 -o root -g radius \
+		"${pkgdir}"${_radconfdir}
+	install -d -m0750 -o radius -g radius \
+		"$pkgdir"/var/run/radius
+	install -d -m0750 -o radius -g radius \
+		"$pkgdir"/var/log/radius
+	install -d -m0750 -o radius -g radius \
+		"$pkgdir"/var/log/radius/radacct
+
+	PACKAGE=yes make -j1 R="$pkgdir" install
+	chown -R root:radius "$pkgdir"/etc/raddb/*
+	rm -f "$pkgdir"/usr/sbin/rc.radiusd
+	install -m755 -D "$srcdir"/$pkgname.initd \
+		"$pkgdir"/etc/init.d/radiusd
+	install -m644 -D "$srcdir"/$pkgname.confd \
+		"$pkgdir"/etc/conf.d/radiusd
+	#Install misses to create this
+	mkdir -p "${pkgdir}"${_radmodsconfdir}/sql/ippool-dhcp/postgresql
+}
+
+_mvdb() {
+	for dir in ippool-dhcp ippool counter main cui; do
+		mkdir -p "${subpkgdir}"${_radmodsconfdir}/sql/$dir
+		mv "${pkgdir}"${_radmodsconfdir}/sql/$dir/$1 \
+		 "${subpkgdir}"${_radmodsconfdir}/sql/$dir
+	done
+	mkdir -p "${subpkgdir}"${_radlibdir}
+	mv "${pkgdir}"${_radlibdir}/rlm_sql_${1}.so "${subpkgdir}"${_radlibdir}
+}
+
+eap() {
+	depends="freeradius=$pkgver-r$pkgrel"
+	provides="freeradius3-eap=$pkgver-r$pkgrel"
+	pkgdesc="EAP module for FreeRADIUS server"
+	mkdir -p "${subpkgdir}"${_radlibdir} "$subpkgdir"/usr/bin
+	mv "${pkgdir}"${_radlibdir}/rlm_eap*.so "${subpkgdir}"${_radlibdir}
+	mv "$pkgdir"/usr/bin/radeapclient "$subpkgdir"/usr/bin
+	mkdir -p "${subpkgdir}"${_radmodsdir} "$subpkgdir"$_radconfdir/mods-enabled
+	mv "${pkgdir}"${_radmodsdir}/eap "${subpkgdir}"${_radmodsdir}
+	mv "$pkgdir"$_radconfdir/mods-enabled/eap \
+		"$subpkgdir"$_radconfdir/mods-enabled/
+
+	mkdir -p "${subpkgdir}"${_radconfdir}
+	mv "${pkgdir}"${_radconfdir}/certs "${subpkgdir}"${_radconfdir}
+}
+
+abfab() {
+	depends="freeradius=$pkgver-r$pkgrel freeradius-sqlite freeradius-sql freeradius-eap"
+	provides="freeradius3-abfab=$pkgver-r$pkgrel"
+	pkgdesc="ABFAB configuration for FreeRADIUS server"
+	mkdir -p "${subpkgdir}"${_radconfdir}/sites-enabled
+	mkdir -p "${subpkgdir}"${_radconfdir}/mods-enabled
+	for foo in abfab-tr-idp abfab-tls channel_bindings ; do
+	    ln -sf ../sites-available/$foo "${subpkgdir}"${_radconfdir}/sites-enabled
+	    done
+	for foo in abfab_psk_sql ; do
+	    ln -sf ../mods-available/$foo "${subpkgdir}"${_radconfdir}/mods-enabled
+	    done
+}
+
+ldap() {
+	depends="freeradius=$pkgver-r$pkgrel"
+	provides="freeradius3-ldap=$pkgver-r$pkgrel"
+	pkgdesc="LDAP module for FreeRADIUS server"
+	mkdir -p "${subpkgdir}"${_radlibdir}
+	mv "${pkgdir}"${_radlibdir}/rlm_ldap* "${subpkgdir}"${_radlibdir}
+}
+
+krb5() {
+	depends="freeradius=$pkgver-r$pkgrel"
+	provides="freeradius3-krb5=$pkgver-r$pkgrel"
+	pkgdesc="Kerberos module for FreeRADIUS server"
+	mkdir -p "${subpkgdir}"${_radlibdir}
+	mv "${pkgdir}"${_radlibdir}/rlm_krb5* "${subpkgdir}"${_radlibdir}
+}
+
+lib() {
+	depends=""
+	pkgdesc="Freeradius shared libraries"
+	mkdir -p "${subpkgdir}"${_radlibdir} "${subpkgdir}"${_radconfdir} \
+	 "$subpkgdir"/usr/share/freeradius
+	mv "${pkgdir}"${_radlibdir}/libfreeradius-*.so \
+	 "${subpkgdir}"${_radlibdir}
+	mv "${pkgdir}"/usr/share/freeradius/* \
+	 "${subpkgdir}"/usr/share/freeradius
+}
+
+sql() {
+	depends="freeradius=$pkgver-r$pkgrel"
+	provides="freeradius3-sql=$pkgver-r$pkgrel"
+	pkgdesc="SQL module for FreeRADIUS server"
+	mkdir -p "${subpkgdir}"${_radlibdir}
+	for lib in sql sqlippool sql_null sqlcounter; do
+		mv "${pkgdir}"${_radlibdir}/rlm_${lib}.so \
+			"${subpkgdir}"${_radlibdir}
+	done
+	mkdir -p "${subpkgdir}"${_radconfdir}/sites-available
+	mv "${pkgdir}"${_radconfdir}/sites-available/buffered-sql \
+	 "${subpkgdir}"${_radconfdir}/sites-available
+	mkdir -p "${subpkgdir}"${_radmodsdir}
+	mv "${pkgdir}"${_radmodsdir}/*sql* "${subpkgdir}"${_radmodsdir}
+}
+
+mysql() {
+	depends="freeradius-sql=$pkgver-r$pkgrel"
+	provides="freeradius3-mysql=$pkgver-r$pkgrel"
+	pkgdesc="MySQL module for FreeRADIUS server"
+	_mvdb mysql
+}
+
+mssql() {
+	depends="freeradius-sql=$pkgver-r$pkgrel"
+	provides="freeradius3-mssql=$pkgver-r$pkgrel"
+	pkgdesc="MSSQL module for FreeRADIUS server"
+	mkdir -p "${subpkgdir}"${_radmodsconfdir}/sql/main
+	mv "${pkgdir}"${_radmodsconfdir}/sql/main/mssql \
+	 "${subpkgdir}"${_radmodsconfdir}/sql/main
+}
+
+perl() {
+	depends="freeradius=$pkgver-r$pkgrel perl"
+	provides="freeradius3-perl=$pkgver-r$pkgrel"
+	pkgdesc="Perl module for FreeRADIUS server"
+	mkdir -p "${subpkgdir}"${_radlibdir}
+	mv "${pkgdir}"${_radlibdir}/rlm_perl* "${subpkgdir}"${_radlibdir}
+	mkdir -p "${subpkgdir}"${_radconfdir}/mods-available
+	mv "${pkgdir}"${_radconfdir}/mods-available/perl \
+		"${subpkgdir}"${_radconfdir}/mods-available/perl
+}
+
+checkrad() {
+	depends="perl perl-net-telnet perl-snmp-session net-snmp-tools"
+	pkgdesc="Check if a user is (still) logged in on a certain port"
+	mkdir -p "$subpkgdir"/usr/sbin
+	mv "$pkgdir"/usr/sbin/checkrad "$subpkgdir"/usr/sbin/checkrad
+}
+
+postgresql() {
+	depends="freeradius-sql=$pkgver-r$pkgrel"
+	provides="freeradius3-postgresql=$pkgver-r$pkgrel"
+	pkgdesc="PostgreSQL module for FreeRADIUS server"
+	_mvdb postgresql
+}
+
+python() {
+	depends="freeradius=$pkgver-r$pkgrel python2"
+	provides="freeradius3-python=$pkgver-r$pkgrel"
+	pkgdesc="Python module for FreeRADIUS server"
+	mkdir -p "${subpkgdir}"${_radlibdir}
+	mv "${pkgdir}"${_radlibdir}/rlm_python* "${subpkgdir}"${_radlibdir}
+	for dir in $_radmodsdir $_radmodsconfdir; do
+		mkdir -p "${subpkgdir}"$dir
+		mv "${pkgdir}"$dir/python "${subpkgdir}"$dir
+	done
+}
+
+radclient() {
+	depends=""
+	provides="freeradius3-radclient=$pkgver-r$pkgrel"
+	pkgdesc="Client for FreeRADIUS server"
+	mkdir -p "$subpkgdir"/usr/bin
+	mv "$pkgdir"/usr/bin/radclient "$subpkgdir"/usr/bin/radclient
+}
+
+sqlite() {
+	depends="freeradius-sql=$pkgver-r$pkgrel"
+	provides="freeradius3-sqlite=$pkgver-r$pkgrel"
+	pkgdesc="SQLite module for FreeRADIUS server"
+	_mvdb sqlite
+}
+
+unixodbc() {
+	depends="freeradius=$pkgver-r$pkgrel"
+	provides="freeradius3-unixodbc=$pkgver-r$pkgrel"
+	pkgdesc="ODBC module for FreeRADIUS server"
+	mkdir -p "${subpkgdir}"${_radlibdir}
+	mv "${pkgdir}"${_radlibdir}/rlm_sql_unixodbc.so \
+		"${subpkgdir}"${_radlibdir}
+}
+
+pam() {
+	depends="freeradius=$pkgver-r$pkgrel"
+	provides="freeradius3-pam=$pkgver-r$pkgrel"
+	pkgdesc="PAM module for FreeRADIUS server"
+	mkdir -p "${subpkgdir}"${_radlibdir}
+	mv "${pkgdir}"${_radlibdir}/rlm_pam* "${subpkgdir}"${_radlibdir}
+}
+
+rest() {
+	depends="freeradius=$pkgver-r$pkgrel"
+	pkgdesc="REST module for FreeRADIUS server"
+	mkdir -p "${subpkgdir}"${_radlibdir}
+	mv "${pkgdir}"${_radlibdir}/rlm_rest* "${subpkgdir}"${_radlibdir}
+}
+
+redis() {
+	depends="freeradius=$pkgver-r$pkgrel"
+	pkgdesc="Redis modules for FreeRADIUS server"
+	mkdir -p "${subpkgdir}"${_radlibdir}
+	mv "${pkgdir}"${_radlibdir}/rlm_redis* "${subpkgdir}"${_radlibdir}
+}
+
+sha512sums="fc0879b5ec066d93e0ca98f7c96833b5fa99cd65fc769c20af484782be6238ce009cabdceb55f32b77d616f977b9d2f5ba1316e0dc6d8948493b6c9f14d39b92  freeradius-server-3.0.19.tar.gz
+e248159c0a44f722e405c51c8015d9ad672e42ad0d38ca28f8a051ff911aa4d3e630b9bd4543e9d610940bc4ae50c022594e219ce341b36abe85c572acad418b  freeradius.confd
+ba3c424d4eabb147c7aa3e31575a87ddb26b6a792d2a8714e73d8763e07854326a03a83991a7420246ca06bf0b93d0a6f23ec198f5e48647f9d25b40067e852a  freeradius.initd
+c49e5eec7497fccde5fd09dba1ea9b846e57bc88015bd81640aa531fb5c9b449f37136f42c85fe1d7940c5963aed664b85da28442b388c9fb8cc27873df03b2d  musl-fix-headers.patch
+41d478c0e40ff82fc36232964037c1ab8ffca9fdbb7dca02ed49319906e751c133b5d7bc7773c645cec6d9d39d1de69cba25e8d59afa8d6662563dd17f35f234  fix-scopeid.patch
+666e15a3c3e5b98ff8c3168de85b341606af5e2790af379ddec46464e9d7de14a715876a34ba1eb7fa47ddead23f7134128d591db32309db0e4acbdb6f21ef5e  freeradius-313-default-config.patch"
