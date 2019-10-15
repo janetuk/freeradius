@@ -1,8 +1,8 @@
 freeradius (3.0.19+moonshot5.DIST) unstable; urgency=medium
 
-  * TBD
+  * Minor fixes to CI.
 
- -- Jisc <moonshot@jisc.ac.uk>  Thu, 19 Sep 2019 00:00:00 +0000
+ -- Jisc <moonshot@jisc.ac.uk>  Thu, 15 Oct 2019 00:00:00 +0000
 
 freeradius (3.0.19+moonshot4.DIST) unstable; urgency=medium
 
