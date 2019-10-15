@@ -1,7 +1,7 @@
 Summary: High-performance and highly configurable free RADIUS server
 Name: freeradius
 Version: 3.0.19
-Release: 1.moonshot4%{?dist}
+Release: 1.moonshot5%{?dist}
 License: GPLv2+ and LGPLv2+
 Group: System Environment/Daemons
 URL: http://www.freeradius.org/
@@ -192,7 +192,7 @@ This plugin provides the Perl support for the FreeRADIUS server project.
 Summary: Python support for freeradius
 Group: System Environment/Daemons
 Requires: %{name} = %{version}-%{release}
-BuildRequires: python-devel
+BuildRequires: python2-devel
 
 %description python
 This plugin provides the Python support for the FreeRADIUS server project.

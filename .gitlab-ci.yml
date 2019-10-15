@@ -15,7 +15,7 @@ before_script:
     - moonshot
   script:
     - "wget --header \"PRIVATE-TOKEN: $TOKEN\" https://gitlab.ci.ti.ja.net/api/v4/projects/moonshot%2Ftrust_router/jobs/artifacts/master/download?job=$CI_JOB_NAME -O deps.zip; unzip deps.zip"
-    - yum -y install RPMS/x86_64/trust_router-devel*.rpm RPMS/x86_64/trust_router-libs*.rpm
+    - yum -y install RPMS/x86_64/trust_router-devel*.rpm RPMS/x86_64/trust_router-libs*.rpm RPMS/x86_64/trust_router-debuginfo*.rpm
     - rm -fr RPMS SRPMS deps.zip
     - ./configure
     - make dist
@@ -82,6 +82,10 @@ centos6:
 
 centos7:
   image: $DOCKER_REGISTRY_URL/centos7:latest
+  <<: *centoscommon
+
+centos8:
+  image: $DOCKER_REGISTRY_URL/centos8:latest
   <<: *centoscommon
 
 debian8:
