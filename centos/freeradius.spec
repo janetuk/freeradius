@@ -323,6 +323,7 @@ install -m 0644 %{SOURCE104} %{buildroot}%{_tmpfilesdir}/radiusd.conf
 
 # remove unneeded stuff
 rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/certs/*.crt
+rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/certs/*.crl
 rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/certs/*.csr
 rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/certs/*.der
 rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/certs/*.key
@@ -354,6 +355,9 @@ rm $RPM_BUILD_ROOT/%{_libdir}/freeradius/rlm_test.so
 
 # remove unsupported config files
 rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/experimental.conf
+rm -rf $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/mods-config/sql/ippool/mongo
+rm -rf $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/mods-config/sql/main/mongo
+
 
 # install doc files omitted by standard install
 for f in COPYRIGHT CREDITS INSTALL.rst README.rst VERSION; do
@@ -510,6 +514,7 @@ exit 0
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/robust-proxy-accounting
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/soh
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/coa
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/coa-relay
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/example
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/inner-tunnel
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/dhcp
@@ -576,6 +581,7 @@ exit 0
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/passwd
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/preprocess
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/python
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/python3
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/radutmp
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/realm
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-available/redis
@@ -816,6 +822,7 @@ exit 0
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/ippool/mysql
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/ippool/mysql/queries.conf
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/ippool/mysql/schema.sql
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/ippool/mysql/procedure.sql
 
 %dir %attr(750,root,radiusd) /etc/raddb/mods-config/sql/ippool-dhcp/mysql
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/mods-config/sql/ippool-dhcp/mysql/queries.conf
