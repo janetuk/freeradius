@@ -1,8 +1,14 @@
-freeradius (3.0.19+moonshot6.DIST) unstable; urgency=medium
+freeradius (3.0.20+moonshot1.DIST) unstable; urgency=medium
 
-  * TBD
+  * Merged with 3.0.20 upstream
 
- -- Jisc <moonshot@jisc.ac.uk>  Thu, 15 Oct 2019 00:00:00 +0000
+ -- Jisc <moonshot@jisc.ac.uk>  Mon, 18 Nov 2019 00:00:00 +0000
+
+freeradius (3.0.20+git) unstable; urgency=medium
+
+  * New upstream version.
+
+ -- Alan DeKok <aland@freeradius.org>  Thu, 14 Nov 2019 12:00:00 -0500
 
 freeradius (3.0.19+moonshot5.DIST) unstable; urgency=medium
 
