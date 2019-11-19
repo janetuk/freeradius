@@ -3,7 +3,7 @@
 pkgname=freeradius
 _realname=freeradius
 _pkgver=3.0.20
-pkgver=${_pkgver}_p1
+pkgver=${_pkgver}_p2
 pkgrel=1
 pkgdesc="RADIUS (Remote Authentication Dial-In User Service) server"
 url="https://freeradius.org/"
