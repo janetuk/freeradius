@@ -34,7 +34,7 @@ all: index.txt serial dh server ca client
 client: client.pem
 
 .PHONY: ca
-ca: ca.der
+ca: ca.der ca.crl
 
 .PHONY: server
 server: server.pem server.vrfy
@@ -70,11 +70,17 @@ ca.key ca.pem: ca.cnf
 	@[ -f index.txt ] || $(MAKE) index.txt
 	@[ -f serial ] || $(MAKE) serial
 	$(OPENSSL) req -new -x509 -keyout ca.key -out ca.pem \
-		-days $(CA_DEFAULT_DAYS) -config ./ca.cnf
+		-days $(CA_DEFAULT_DAYS) -config ./ca.cnf \
+		-passin pass:$(PASSWORD_CA) -passout pass:$(PASSWORD_CA)
 	chmod g+r ca.key
 
 ca.der: ca.pem
 	$(OPENSSL) x509 -inform PEM -outform DER -in ca.pem -out ca.der
+
+ca.crl: ca.pem
+	$(OPENSSL) ca -gencrl -keyfile ca.key -cert ca.pem -config ./ca.cnf -out ca-crl.pem -key $(PASSWORD_CA)
+	$(OPENSSL) crl -in ca-crl.pem -outform der -out ca.crl
+	rm ca-crl.pem
 
 ######################################################################
 #
@@ -176,4 +182,4 @@ clean:
 #
 destroycerts:
 	rm -f *~ dh *.csr *.crt *.p12 *.der *.pem *.key index.txt* \
-			serial*  *\.0 *\.1
+			serial*  *\.0 *\.1 ca-crl.pem ca.crl

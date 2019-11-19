@@ -91,10 +91,11 @@ post-auth {
 	#  un-comment the following line, and enable the
 	#  'detail reply_log' module.
 #	reply_log
+
 	#
 	#  After authenticating the user, do another SQL query.
 	#
-	#  See "Authentication Logging Queries" in sql.conf
+	#  See "Authentication Logging Queries" in `mods-config/sql/main/$driver/queries.conf`
 	-sql
 
 	#
@@ -116,7 +117,7 @@ post-auth {
 	#  post-auth section.
 	#
 	#  Add the ldap module name (or instance) if you have set
-	#  'edir_account_policy_check = yes' in the ldap module configuration
+	#  'edir = yes' in the ldap module configuration
 	#
 	Post-Auth-Type REJECT {
 		# Uncomment to enable logging of certain Moonshot attributes. See

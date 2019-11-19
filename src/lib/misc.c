@@ -607,13 +607,6 @@ int fr_pton(fr_ipaddr_t *out, char const *value, ssize_t inlen, int af, bool res
 			fr_strerror_printf("Invalid address");
 			return -1;
 		}
-
-		/*
-		 *	Fall through to resolving the address, using
-		 *	whatever address family they prefer.  If they
-		 *	don't specify an address family, force IPv4.
-		 */
-		if (af == AF_UNSPEC) af = AF_INET;
 	}
 
 	/*
@@ -1411,7 +1404,8 @@ bool is_whitespace(char const *value)
 {
 	do {
 		if (!isspace(*value)) return false;
-	} while (*++value);
+		value++;
+	} while (*value);
 
 	return true;
 }
@@ -1446,9 +1440,21 @@ bool is_whitespace(char const *value)
  */
 bool is_integer(char const *value)
 {
+#ifndef __clang_analyzer__
 	do {
 		if (!isdigit(*value)) return false;
-	} while (*++value);
+		value++;
+	} while (*value);
+
+	/*
+	 *	Clang analyzer complains about the above line: "Branch
+	 *	depends on a garbage value", even though that's
+	 *	clearly not true.  And, it doesn't complain about the
+	 *	other functions doing similar things.
+	 */
+#else
+	if (!isdigit(*value)) return false;
+#endif
 
 	return true;
 }
@@ -1461,7 +1467,8 @@ bool is_zero(char const *value)
 {
 	do {
 		if (*value != '0') return false;
-	} while (*++value);
+		value++;
+	} while (*value);
 
 	return true;
 }

@@ -123,6 +123,20 @@ int eaptls_start(EAP_DS *eap_ds, int peap_flag)
 	return 1;
 }
 
+
+/** Send an EAP-TLS success
+ *
+ * Composes an EAP-TLS-Success.  This is a message with code EAP_TLS_ESTABLISHED.
+ * It contains no cryptographic material, and is not protected.
+ *
+ * We add the MPPE keys here.  These are used by the NAS.  The supplicant
+ * will derive the same keys separately.
+ *
+ * @param handler handler of eap session that completed successfully.
+ * @param peap_flag to indicate PEAP version
+ * @return
+ *      - 1 on success.
+ */
 int eaptls_success(eap_handler_t *handler, int peap_flag)
 {
 	EAPTLS_PACKET	reply;
@@ -918,8 +932,12 @@ fr_tls_status_t eaptls_process(eap_handler_t *handler)
 		} else {
 			vp_cursor_t cursor;
 			VALUE_PAIR *vp;
+			fr_tls_server_conf_t *conf;
 
 			RDEBUG("Adding cached attributes from session %s", buffer);
+
+			conf = (fr_tls_server_conf_t *)SSL_get_ex_data(tls_session->ssl, FR_TLS_EX_INDEX_CONF);
+			rad_assert(conf != NULL);
 
 			/*
 			 *	The cbtls_get_session() function doesn't have
@@ -932,6 +950,12 @@ fr_tls_status_t eaptls_process(eap_handler_t *handler)
 			for (vp = fr_cursor_init(&cursor, &vps);
 			     vp;
 			     vp = fr_cursor_next(&cursor)) {
+				if (conf->cache_ht && fr_hash_table_finddata(conf->cache_ht, vp->da)) {
+					rdebug_pair(L_DBG_LVL_2, request, vp, "&session-state:");
+					fr_pair_add(&request->state, fr_pair_copy(request->state_ctx, vp));
+					continue;
+				}
+
 				/*
 				 *	TLS-* attrs get added back to
 				 *	the request list.
@@ -943,11 +967,11 @@ fr_tls_status_t eaptls_process(eap_handler_t *handler)
 					 *	Certs already exist.  Don't re-add them.
 					 */
 					if (!handler->certs) {
-						rdebug_pair(L_DBG_LVL_2, request, vp, "request:");
+						rdebug_pair(L_DBG_LVL_2, request, vp, "&request:");
 						fr_pair_add(&request->packet->vps, fr_pair_copy(request->packet, vp));
 					}
 				} else {
-					rdebug_pair(L_DBG_LVL_2, request, vp, "reply:");
+					rdebug_pair(L_DBG_LVL_2, request, vp, "&reply:");
 					fr_pair_add(&request->reply->vps, fr_pair_copy(request->reply, vp));
 				}
 			}

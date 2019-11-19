@@ -95,6 +95,13 @@ VALUE	DHCP-Hardware-Type		ARPSec			30
 VALUE	DHCP-Hardware-Type		IPSec-Tunnel		31
 VALUE	DHCP-Hardware-Type		Infiniband		32
 VALUE	DHCP-Hardware-Type		CAI-TIA-102		33
+VALUE	DHCP-Hardware-Type		Wiegand-Interface	34
+VALUE	DHCP-Hardware-Type		Pure-IP			35
+VALUE	DHCP-Hardware-Type		HW-EXP1			36
+VALUE	DHCP-Hardware-Type		HFI			37
+#
+#	38-255	Unassigned
+#
 
 ##############################################################################
 #
@@ -272,7 +279,7 @@ ATTRIBUTE	DHCP-BCMS-Server-IPv4-Address		89	ipaddr array
 # Authentication
 ATTRIBUTE	DHCP-Authentication			90	octets
 
-ATTRIBUTE	DHCP-Client-Last-Txn-Time		91	octets
+ATTRIBUTE	DHCP-Client-Last-Txn-Time		91	integer # seconds in the past
 
 ATTRIBUTE	DHCP-associated-ip			92	octets
 # Client System Architecture
