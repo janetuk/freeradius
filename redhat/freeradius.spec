@@ -110,6 +110,54 @@ done when adding or deleting new users.
 %debug_package
 %endif
 
+%package abfab
+Group: System Environment/Daemons
+Summary: FreeRADIUS ABFAb Configuration
+
+BuildRequires: trust_router-devel
+
+Requires: %{name} = %{version}-%{release}
+Requires: freeradius-sqlite
+Requires: trust_router-libs
+Requires: trust_router
+Requires(post):   /usr/sbin/semanage
+Requires(postun): /usr/sbin/semanage
+
+%description abfab
+This package provides configuration required by an ABFAB (RFC 7055)
+identity provider or RP proxy.
+
+%post abfab
+# Assing crossed permissions
+usermod -a -G radiusd trustrouter 2>/dev/null ||true
+usermod -a -G trustrouter radiusd 2>/dev/null ||true
+
+# Enable ABFAB sites and modules by default
+for foo in abfab-tr-idp abfab-tls channel_bindings ; do
+    test -e %{_sysconfdir}/raddb/sites-enabled/$foo || ln -sf ../sites-available/$foo %{_sysconfdir}/raddb/sites-enabled
+done
+for foo in abfab_psk_sql ; do
+    test -e %{_sysconfdir}/raddb/mods-enabled/$foo || ln -sf ../mods-available/$foo %{_sysconfdir}/raddb/mods-enabled
+done
+
+
+# Warn about SElinux requirements
+echo "*** In order to allow FreeRadius work with Moonshot, you need to configure"
+echo "*** it to run in Permissive mode, using the following command:"
+echo "***         semanage permissive -a radiusd_t"
+exit 0
+
+%postun abfab
+if [ $1 -eq 0 ] ; then
+    echo "*** If you configed FreeRadius to run in Permissive mode, you might want"
+    echo "*** to set it back to Enforcing, using the following command:"
+    echo "***         semanage permissive -d radiusd_t"
+    for foo in sites-enabled/channel_bindings sites-enabled/abfab-tr-idp sites-enabled/abfab-tls mods-enabled/abfab_psk_sql; do
+        test -e %{_sysconfdir}/raddb/$foo && rm %{_sysconfdir}/raddb/$foo
+    done
+fi
+exit 0
+
 %if %{?_with_rlm_cache_memcached:1}%{?!_with_rlm_cache_memcached:0}
 %package memcached
 Summary: Memcached support for freeRADIUS
@@ -828,6 +876,9 @@ fi
 %defattr(-,root,root)
 %{_libdir}/freeradius/rlm_yubikey.so
 %endif
+
+%files abfab
+# intentionally empty
 
 %changelog
 * Wed Sep 25 2013 Alan DeKok <aland@freeradius.org> - 3.0.0
