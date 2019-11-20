@@ -315,6 +315,7 @@ This plugin provides Oracle support for the FreeRADIUS server project.
 %endif
 %endif
 
+%if 0%{?rhel} > 6
 %package redis
 Summary: Redis support for FreeRADIUS
 Group: System Environment/Daemons
@@ -324,6 +325,7 @@ BuildRequires: hiredis-devel
 
 %description redis
 This plugin provides Redis support for the FreeRADIUS server project.
+%endif
 
 %package rest
 Summary: REST support for FreeRADIUS
@@ -846,10 +848,12 @@ fi
 %defattr(-,root,root)
 %{_libdir}/freeradius/rlm_sql_unixodbc.so
 
+%if 0%{?rhel} > 6
 %files redis
 %defattr(-,root,root)
 %{_libdir}/freeradius/rlm_redis.so
 %{_libdir}/freeradius/rlm_rediswho.so
+%endif
 
 %files rest
 %defattr(-,root,root)
