@@ -570,8 +570,6 @@ fi
 
 %dir %attr(755,radiusd,radiusd) /var/lib/radiusd
 %dir %attr(755,radiusd,radiusd) /var/run/radiusd/
-%dir %attr(755,radiusd,radiusd) %{_localstatedir}/lib/radiusd
-
 # binaries
 %defattr(-,root,root)
 /usr/sbin/checkrad
