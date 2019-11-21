@@ -132,15 +132,6 @@ identity provider or RP proxy.
 usermod -a -G radiusd trustrouter 2>/dev/null ||true
 usermod -a -G trustrouter radiusd 2>/dev/null ||true
 
-# Enable ABFAB sites and modules by default
-for foo in abfab-tr-idp abfab-tls channel_bindings ; do
-    test -e %{_sysconfdir}/raddb/sites-enabled/$foo || ln -sf ../sites-available/$foo %{_sysconfdir}/raddb/sites-enabled
-done
-for foo in abfab_psk_sql ; do
-    test -e %{_sysconfdir}/raddb/mods-enabled/$foo || ln -sf ../mods-available/$foo %{_sysconfdir}/raddb/mods-enabled
-done
-
-
 # Warn about SElinux requirements
 echo "*** In order to allow FreeRadius work with Moonshot, you need to configure"
 echo "*** it to run in Permissive mode, using the following command:"
@@ -152,9 +143,6 @@ if [ $1 -eq 0 ] ; then
     echo "*** If you configed FreeRadius to run in Permissive mode, you might want"
     echo "*** to set it back to Enforcing, using the following command:"
     echo "***         semanage permissive -d radiusd_t"
-    for foo in sites-enabled/channel_bindings sites-enabled/abfab-tr-idp sites-enabled/abfab-tls mods-enabled/abfab_psk_sql; do
-        test -e %{_sysconfdir}/raddb/$foo && rm %{_sysconfdir}/raddb/$foo
-    done
 fi
 exit 0
 
@@ -457,6 +445,14 @@ install -D -m 755 redhat/freeradius-radiusd-init $RPM_BUILD_ROOT/%{initddir}/rad
 install -D -m 644 redhat/freeradius-logrotate $RPM_BUILD_ROOT/%{_sysconfdir}/logrotate.d/radiusd
 install -D -m 644 redhat/freeradius-pam-conf $RPM_BUILD_ROOT/%{_sysconfdir}/pam.d/radiusd
 
+# enable ABFAB files
+for foo in abfab-tr-idp abfab-tls channel_bindings ; do
+    test -e $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/sites-enabled/$foo || ln -s ../sites-available/$foo $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/sites-enabled
+done
+for foo in abfab_psk_sql ; do
+    test -e $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/mods-enabled/$foo || ln -s ../mods-available/$foo $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/mods-enabled
+done
+
 # remove unneeded stuff
 rm -rf doc/00-OLD
 rm -f $RPM_BUILD_ROOT/usr/sbin/rc.radiusd
@@ -729,6 +725,14 @@ fi
 %attr(640,root,radiusd) %config(noreplace) %{_sysconfdir}/raddb/mods-config/python/*
 %dir %attr(750,root,radiusd) %{_sysconfdir}/raddb/mods-enabled
 %attr(640,root,radiusd) %config(noreplace) %{_sysconfdir}/raddb/mods-enabled/*
+
+# exclude ABFAB files
+%exclude %{_sysconfdir}/raddb/sites-enabled/abfab-tls
+%exclude %{_sysconfdir}/raddb/sites-enabled/abfab-tr-idp
+%exclude %{_sysconfdir}/raddb/sites-enabled/channel_bindings
+%exclude %{_sysconfdir}/raddb/mods-enabled/abfab_psk_sql
+
+
 # mysql
 %dir %attr(750,root,radiusd) %{_sysconfdir}/raddb/mods-config/sql
 %dir %attr(750,root,radiusd) %{_sysconfdir}/raddb/mods-config/sql/counter
@@ -884,7 +888,12 @@ fi
 %endif
 
 %files abfab
-# intentionally empty
+%dir %attr(750,root,radiusd) /etc/raddb/sites-enabled
+%config(missingok) %{_sysconfdir}/raddb/sites-enabled/abfab-tr-idp
+%config(missingok) %{_sysconfdir}/raddb/sites-enabled/abfab-tls
+%config(missingok) %{_sysconfdir}/raddb/sites-enabled/channel_bindings
+%dir %attr(750,root,radiusd) %{_sysconfdir}/raddb/mods-enabled
+%config(missingok) %{_sysconfdir}/raddb/mods-enabled/abfab_psk_sql
 
 %changelog
 * Wed Sep 25 2013 Alan DeKok <aland@freeradius.org> - 3.0.0
