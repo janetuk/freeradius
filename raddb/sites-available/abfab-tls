@@ -10,7 +10,7 @@ listen {
 	proto = tcp
 
 	tls {
-		min_tls_version = "1.2"
+		tls_min_version = "1.2"
 		private_key_password = whatever
 
 		# Moonshot tends to distribute certs separate from keys
@@ -48,7 +48,7 @@ listen {
 	proto = tcp
 
 	tls {
-		min_tls_version = "1.2"
+		tls_min_version = "1.2"
 		private_key_password = whatever
 
 		# Moonshot tends to distribute certs separate from keys

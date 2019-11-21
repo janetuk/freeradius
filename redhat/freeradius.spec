@@ -29,7 +29,7 @@
 Summary: High-performance and highly configurable free RADIUS server
 Name: freeradius
 Version: 3.0.20
-Release: 1%{?dist}
+Release: 1.moonshot2%{?dist}
 License: GPLv2+ and LGPLv2+
 Group: System Environment/Daemons
 URL: http://www.freeradius.org/
@@ -110,6 +110,42 @@ done when adding or deleting new users.
 %debug_package
 %endif
 
+%package abfab
+Group: System Environment/Daemons
+Summary: FreeRADIUS ABFAb Configuration
+
+BuildRequires: trust_router-devel
+
+Requires: %{name} = %{version}-%{release}
+Requires: freeradius-sqlite
+Requires: trust_router-libs
+Requires: trust_router
+Requires(post):   /usr/sbin/semanage
+Requires(postun): /usr/sbin/semanage
+
+%description abfab
+This package provides configuration required by an ABFAB (RFC 7055)
+identity provider or RP proxy.
+
+%post abfab
+# Assing crossed permissions
+usermod -a -G radiusd trustrouter 2>/dev/null ||true
+usermod -a -G trustrouter radiusd 2>/dev/null ||true
+
+# Warn about SElinux requirements
+echo "*** In order to allow FreeRadius work with Moonshot, you need to configure"
+echo "*** it to run in Permissive mode, using the following command:"
+echo "***         semanage permissive -a radiusd_t"
+exit 0
+
+%postun abfab
+if [ $1 -eq 0 ] ; then
+    echo "*** If you configed FreeRadius to run in Permissive mode, you might want"
+    echo "*** to set it back to Enforcing, using the following command:"
+    echo "***         semanage permissive -d radiusd_t"
+fi
+exit 0
+
 %if %{?_with_rlm_cache_memcached:1}%{?!_with_rlm_cache_memcached:0}
 %package memcached
 Summary: Memcached support for freeRADIUS
@@ -151,8 +187,8 @@ attributes Selecting a particular configuration Authentication methods
 Summary: LDAP support for FreeRADIUS
 Group: System Environment/Daemons
 Requires: %{name} = %{version}-%{release}
-Requires: openldap-ltb
-BuildRequires: openldap-ltb
+Requires: openldap-clients
+BuildRequires: openldap-devel
 
 %description ldap
 This plugin provides LDAP support for the FreeRADIUS server project.
@@ -267,6 +303,7 @@ This plugin provides Oracle support for the FreeRADIUS server project.
 %endif
 %endif
 
+%if 0%{?rhel} > 6
 %package redis
 Summary: Redis support for FreeRADIUS
 Group: System Environment/Daemons
@@ -276,6 +313,7 @@ BuildRequires: hiredis-devel
 
 %description redis
 This plugin provides Redis support for the FreeRADIUS server project.
+%endif
 
 %package rest
 Summary: REST support for FreeRADIUS
@@ -407,6 +445,14 @@ install -D -m 755 redhat/freeradius-radiusd-init $RPM_BUILD_ROOT/%{initddir}/rad
 install -D -m 644 redhat/freeradius-logrotate $RPM_BUILD_ROOT/%{_sysconfdir}/logrotate.d/radiusd
 install -D -m 644 redhat/freeradius-pam-conf $RPM_BUILD_ROOT/%{_sysconfdir}/pam.d/radiusd
 
+# enable ABFAB files
+for foo in abfab-tr-idp abfab-tls channel_bindings ; do
+    test -e $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/sites-enabled/$foo || ln -s ../sites-available/$foo $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/sites-enabled
+done
+for foo in abfab_psk_sql ; do
+    test -e $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/mods-enabled/$foo || ln -s ../mods-available/$foo $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/mods-enabled
+done
+
 # remove unneeded stuff
 rm -rf doc/00-OLD
 rm -f $RPM_BUILD_ROOT/usr/sbin/rc.radiusd
@@ -466,13 +512,13 @@ rm -rf $RPM_BUILD_ROOT
 # Make sure our user/group is present prior to any package or subpackage installation
 %pre
 getent group  radiusd >/dev/null || /usr/sbin/groupadd -r -g 95 radiusd
-getent passwd radiusd >/dev/null || /usr/sbin/useradd  -r -g radiusd -u 95 -c "radiusd user" -s /sbin/nologin radiusd > /dev/null 2>&1
+getent passwd radiusd >/dev/null || /usr/sbin/useradd  -r -g radiusd -u 95 -c "radiusd user" -s /sbin/nologin radiusd -d %{_localstatedir}/lib/radiusd > /dev/null 2>&1
 exit 0
 
 # Make sure our user/group is present prior to any package or subpackage installation
 %pre config
 getent group  radiusd >/dev/null || /usr/sbin/groupadd -r -g 95 radiusd
-getent passwd radiusd >/dev/null || /usr/sbin/useradd  -r -g radiusd -u 95 -c "radiusd user" -s /sbin/nologin radiusd > /dev/null 2>&1
+getent passwd radiusd >/dev/null || /usr/sbin/useradd  -r -g radiusd -u 95 -c "radiusd user" -s /sbin/nologin radiusd -d %{_localstatedir}/lib/radiusd > /dev/null 2>&1
 exit 0
 
 
@@ -677,6 +723,14 @@ fi
 %attr(640,root,radiusd) %config(noreplace) %{_sysconfdir}/raddb/mods-config/python/*
 %dir %attr(750,root,radiusd) %{_sysconfdir}/raddb/mods-enabled
 %attr(640,root,radiusd) %config(noreplace) %{_sysconfdir}/raddb/mods-enabled/*
+
+# exclude ABFAB files
+%exclude %{_sysconfdir}/raddb/sites-enabled/abfab-tls
+%exclude %{_sysconfdir}/raddb/sites-enabled/abfab-tr-idp
+%exclude %{_sysconfdir}/raddb/sites-enabled/channel_bindings
+%exclude %{_sysconfdir}/raddb/mods-enabled/abfab_psk_sql
+
+
 # mysql
 %dir %attr(750,root,radiusd) %{_sysconfdir}/raddb/mods-config/sql
 %dir %attr(750,root,radiusd) %{_sysconfdir}/raddb/mods-config/sql/counter
@@ -798,10 +852,12 @@ fi
 %defattr(-,root,root)
 %{_libdir}/freeradius/rlm_sql_unixodbc.so
 
+%if 0%{?rhel} > 6
 %files redis
 %defattr(-,root,root)
 %{_libdir}/freeradius/rlm_redis.so
 %{_libdir}/freeradius/rlm_rediswho.so
+%endif
 
 %files rest
 %defattr(-,root,root)
@@ -828,6 +884,14 @@ fi
 %defattr(-,root,root)
 %{_libdir}/freeradius/rlm_yubikey.so
 %endif
+
+%files abfab
+%dir %attr(750,root,radiusd) /etc/raddb/sites-enabled
+%config(missingok) %{_sysconfdir}/raddb/sites-enabled/abfab-tr-idp
+%config(missingok) %{_sysconfdir}/raddb/sites-enabled/abfab-tls
+%config(missingok) %{_sysconfdir}/raddb/sites-enabled/channel_bindings
+%dir %attr(750,root,radiusd) %{_sysconfdir}/raddb/mods-enabled
+%config(missingok) %{_sysconfdir}/raddb/mods-enabled/abfab_psk_sql
 
 %changelog
 * Wed Sep 25 2013 Alan DeKok <aland@freeradius.org> - 3.0.0
