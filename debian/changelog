@@ -1,8 +1,9 @@
 freeradius (3.0.20+moonshot2.DIST) unstable; urgency=medium
 
-  * TBD
+  * Use FreeRadius's spec file instead of our own
+  * Fix freeradius.service so freerad can write to /etc/freeradius
 
- -- Jisc <moonshot@jisc.ac.uk>  Mon, 18 Nov 2019 00:00:00 +0000
+ -- Jisc <moonshot@jisc.ac.uk>  Mon, 21 Nov 2019 00:00:00 +0000
 
 freeradius (3.0.20+moonshot1.DIST) unstable; urgency=medium
 
