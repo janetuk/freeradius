@@ -516,13 +516,13 @@ rm -rf $RPM_BUILD_ROOT
 # Make sure our user/group is present prior to any package or subpackage installation
 %pre
 getent group  radiusd >/dev/null || /usr/sbin/groupadd -r -g 95 radiusd
-getent passwd radiusd >/dev/null || /usr/sbin/useradd  -r -g radiusd -u 95 -c "radiusd user" -s /sbin/nologin radiusd > /dev/null 2>&1
+getent passwd radiusd >/dev/null || /usr/sbin/useradd  -r -g radiusd -u 95 -c "radiusd user" -s /sbin/nologin radiusd -d %{_localstatedir}/lib/radiusd > /dev/null 2>&1
 exit 0
 
 # Make sure our user/group is present prior to any package or subpackage installation
 %pre config
 getent group  radiusd >/dev/null || /usr/sbin/groupadd -r -g 95 radiusd
-getent passwd radiusd >/dev/null || /usr/sbin/useradd  -r -g radiusd -u 95 -c "radiusd user" -s /sbin/nologin radiusd > /dev/null 2>&1
+getent passwd radiusd >/dev/null || /usr/sbin/useradd  -r -g radiusd -u 95 -c "radiusd user" -s /sbin/nologin radiusd -d %{_localstatedir}/lib/radiusd > /dev/null 2>&1
 exit 0
 
 
@@ -574,6 +574,8 @@ fi
 
 %dir %attr(755,radiusd,radiusd) /var/lib/radiusd
 %dir %attr(755,radiusd,radiusd) /var/run/radiusd/
+%dir %attr(755,radiusd,radiusd) %{_localstatedir}/lib/radiusd
+
 # binaries
 %defattr(-,root,root)
 /usr/sbin/checkrad
