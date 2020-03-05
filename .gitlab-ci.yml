@@ -120,10 +120,22 @@ ubuntu18:
   image: $DOCKER_REGISTRY_URL/ubuntu18:latest
   <<: *debiancommon
 
+ubuntu20:
+  image: $DOCKER_REGISTRY_URL/ubuntu20:latest
+  <<: *debiancommon
+
 alpine39:
   image: $DOCKER_REGISTRY_URL/alpine39:latest
   <<: *alpinecommon
 
 alpine39_armhf:
   image: $DOCKER_REGISTRY_URL/alpine39_arm:latest
+  <<: *alpinecommon
+
+alpine311:
+  image: $DOCKER_REGISTRY_URL/alpine311:latest
+  <<: *alpinecommon
+
+alpine311_armhf:
+  image: $DOCKER_REGISTRY_URL/alpine311_arm:latest
   <<: *alpinecommon
