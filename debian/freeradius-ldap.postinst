@@ -7,7 +7,6 @@ case "$1" in
         if [ -x "`which invoke-rc.d 2>/dev/null`" ]; then
           invoke-rc.d freeradius force-reload || true
         else
-          # Customized by Painless Security: Don't abort install if the reload fails
           /etc/init.d/freeradius force-reload
         fi
         ;;

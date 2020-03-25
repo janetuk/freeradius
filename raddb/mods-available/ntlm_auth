@@ -14,9 +14,8 @@
 #
 exec ntlm_auth {
 	wait = yes
-	# From upstream freeradius:
-	# program = "/path/to/ntlm_auth --request-nt-key --domain=MYDOMAIN --username=%{mschap:User-Name} --password=%{User-Password}"
+	program = "/path/to/ntlm_auth --request-nt-key --domain=MYDOMAIN --username=%{mschap:User-Name} --password=%{User-Password}"
 
-	# Moonshot VM configuration:
-	program = "/usr/bin/ntlm_auth --request-nt-key --domain=%{Realm} --username=%{%{Stripped-User-Name}:-%{%{User-Name}:-None}} --password=%{User-Password}"
+	# Moonshot example configuration:
+	# program = "/usr/bin/ntlm_auth --request-nt-key --domain=%{Realm} --username=%{%{Stripped-User-Name}:-%{%{User-Name}:-None}} --password=%{User-Password}"
 }
