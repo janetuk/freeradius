@@ -62,9 +62,7 @@ ProtectKernelTunables=true
 SystemCallArchitectures=native
 
 # We shouldn't be writing to the configuration directory
-# ....But Moonshot requires write permissions on freerad's home folder.
-# Hence we disable this
-# ReadOnlyDirectories=/etc/freeradius/
+ReadOnlyDirectories=/etc/freeradius/
 
 # We can read and write to the log directory.
 ReadWriteDirectories=/var/log/freeradius/
