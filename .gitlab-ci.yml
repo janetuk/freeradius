@@ -72,7 +72,7 @@ before_script:
     - sudo -u tmpuser abuild -r
     - cd ..
     - mkdir apks
-    - mv /home/tmpuser/packages/freeradius-server/* apks
+    - mv /home/tmpuser/packages/*/* apks
   artifacts:
     expire_in: 6 months
     paths:
