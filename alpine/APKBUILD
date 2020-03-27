@@ -29,6 +29,7 @@ source="$_realname-server-$_pkgver.tar.gz
 
 	musl-fix-headers.patch
 	fix-scopeid.patch
+	default-config.patch
 	"
 builddir="$srcdir"/$_realname-server-$_pkgver
 
@@ -112,9 +113,6 @@ package() {
 		"$pkgdir"/etc/conf.d/radiusd
 	#Install misses to create this
 	mkdir -p "${pkgdir}"${_radmodsconfdir}/sql/ippool-dhcp/postgresql
-	# Set user
-	# perl -i -pe 's/^#user =.*$/user = radius/'   "$pkgdir"/etc/raddb/radiusd.conf
-	# perl -i -pe 's/^#group =.*$/group = radius/' "$pkgdir"/etc/raddb/radiusd.conf
 }
 
 _mvdb() {
