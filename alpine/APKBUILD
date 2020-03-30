@@ -2,8 +2,8 @@
 # Maintainer: Alejandro Perez-Mendez <alex.perez-mendez@jisc.ac.uk>
 pkgname=freeradius
 _realname=freeradius
-_pkgver=3.0.20
-pkgver=${_pkgver}_p2
+_pkgver=3.0.21
+pkgver=${_pkgver}_p1
 pkgrel=1
 pkgdesc="RADIUS (Remote Authentication Dial-In User Service) server"
 url="https://freeradius.org/"
@@ -29,6 +29,7 @@ source="$_realname-server-$_pkgver.tar.gz
 
 	musl-fix-headers.patch
 	fix-scopeid.patch
+	default-config.patch
 	"
 builddir="$srcdir"/$_realname-server-$_pkgver
 

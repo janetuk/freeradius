@@ -2474,13 +2474,12 @@ static int process_proxy_reply(REQUEST *request, RADIUS_PACKET *reply)
 	}
 
 	old_server = request->server;
-	rad_assert(request->home_server != NULL);
 
 	/*
 	 *	If the home server is virtual, just run pre_proxy from
 	 *	that section.
 	 */
-	if (request->home_server->server) {
+	if (request->home_server && request->home_server->server) {
 		request->server = request->home_server->server;
 
 	} else {
@@ -3181,13 +3180,12 @@ do_home:
 	}
 
 	old_server = request->server;
-	rad_assert(request->home_server != NULL);
 
 	/*
 	 *	If the home server is virtual, just run pre_proxy from
 	 *	that section.
 	 */
-	if (request->home_server->server) {
+	if (request->home_server && request->home_server->server) {
 		request->server = request->home_server->server;
 
 	} else {

@@ -7,6 +7,7 @@ command_args="$RADIUSD_OPTS"
 pidfile="$run_dir/radiusd.pid"
 name="Freeradius"
 conf="/etc/raddb/radiusd.conf"
+command_user="radius:radius"
 user="$(grep -v '#' $conf | grep 'user =' | awk -F " = " '{ print $2 }')"
 group="$(grep -v '#' $conf |grep 'group =' | awk -F " = " '{ print $2 }')"
 

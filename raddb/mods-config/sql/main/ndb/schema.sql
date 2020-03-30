@@ -23,7 +23,7 @@ CREATE TABLE radacct (
   username varchar(64) NOT NULL default '',
   realm varchar(64) default '',
   nasipaddress varchar(15) NOT NULL default '',
-  nasportid varchar(15) default NULL,
+  nasportid varchar(32) default NULL,
   nasporttype varchar(32) default NULL,
   acctstarttime datetime NULL default NULL,
   acctupdatetime datetime NULL default NULL,
@@ -138,6 +138,6 @@ CREATE TABLE radpostauth (
   username varchar(64) NOT NULL default '',
   pass varchar(64) NOT NULL default '',
   reply varchar(32) NOT NULL default '',
-  authdate timestamp NOT NULL,
+  authdate timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
   PRIMARY KEY  (id)
 ) ENGINE=ndbcluster;

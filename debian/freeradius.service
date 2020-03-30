@@ -37,6 +37,8 @@ ExecStartPre=/usr/sbin/freeradius $FREERADIUS_OPTIONS -Cx -lstdout
 ExecStart=/usr/sbin/freeradius -f $FREERADIUS_OPTIONS
 Restart=on-failure
 RestartSec=5
+ExecReload=/usr/sbin/freeradius $FREERADIUS_OPTIONS -Cxm -lstdout
+ExecReload=/bin/kill -HUP $MAINPID
 
 #  Don't elevate privileges after starting
 NoNewPrivileges=true
@@ -60,9 +62,7 @@ ProtectKernelTunables=true
 SystemCallArchitectures=native
 
 # We shouldn't be writing to the configuration directory
-# ....But Moonshot requires write permissions on freerad's home folder.
-# Hence we disable this
-# ReadOnlyDirectories=/etc/freeradius/
+ReadOnlyDirectories=/etc/freeradius/
 
 # We can read and write to the log directory.
 ReadWriteDirectories=/var/log/freeradius/
