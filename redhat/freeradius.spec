@@ -229,6 +229,12 @@ Requires: %{name} = %{version}-%{release}
 %{!?el8:BuildRequires: python-devel}
 %{?el8:BuildRequires: python2-devel}
 
+%{!?el6:Requires: python34}
+%{?el6:Requires: python3}
+%{!?el6:BuildRequires: python3-devel}
+%{?el6:BuildRequires: python34-devel}
+
+
 %description python
 This plugin provides Python support for the FreeRADIUS server project.
 
@@ -833,6 +839,7 @@ fi
 %files python
 %defattr(-,root,root)
 %{_libdir}/freeradius/rlm_python.so
+%{_libdir}/freeradius/rlm_python3.so
 
 %files mysql
 %defattr(-,root,root)
