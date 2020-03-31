@@ -229,14 +229,20 @@ Requires: %{name} = %{version}-%{release}
 %{!?el8:BuildRequires: python-devel}
 %{?el8:BuildRequires: python2-devel}
 
-%{!?el6:Requires: python34}
-%{?el6:Requires: python3}
+%description python
+This plugin provides Python support for the FreeRADIUS server project.
+
+%package python3
+Summary: Python3 support for FreeRADIUS
+Group: System Environment/Daemons
+Requires: %{name} = %{version}-%{release}
+%{!?el6:Requires: python3}
+%{?el6:Requires: python34}
 %{!?el6:BuildRequires: python3-devel}
 %{?el6:BuildRequires: python34-devel}
 
-
-%description python
-This plugin provides Python support for the FreeRADIUS server project.
+%description python3
+This plugin provides Python3 support for the FreeRADIUS server project.
 
 %package mysql
 Summary: MySQL support for FreeRADIUS
@@ -727,6 +733,8 @@ fi
 %attr(640,root,radiusd) %config(noreplace) %{_sysconfdir}/raddb/mods-config/preprocess/*
 %dir %attr(750,root,radiusd) %{_sysconfdir}/raddb/mods-config/python
 %attr(640,root,radiusd) %config(noreplace) %{_sysconfdir}/raddb/mods-config/python/*
+%dir %attr(750,root,radiusd) %{_sysconfdir}/raddb/mods-config/python3
+%attr(640,root,radiusd) %config(noreplace) %{_sysconfdir}/raddb/mods-config/python3/*
 %dir %attr(750,root,radiusd) %{_sysconfdir}/raddb/mods-enabled
 %attr(640,root,radiusd) %config(noreplace) %{_sysconfdir}/raddb/mods-enabled/*
 
@@ -839,6 +847,9 @@ fi
 %files python
 %defattr(-,root,root)
 %{_libdir}/freeradius/rlm_python.so
+
+%files python3
+%defattr(-,root,root)
 %{_libdir}/freeradius/rlm_python3.so
 
 %files mysql
