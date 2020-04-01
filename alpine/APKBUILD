@@ -10,7 +10,7 @@ url="https://freeradius.org/"
 arch="all"
 license="GPL-2.0-or-later"
 makedepends="openssl-dev mariadb-connector-c-dev postgresql-dev gdbm-dev readline-dev
-	bash libtool autoconf automake perl-dev python2-dev openldap-dev krb5-dev
+	bash libtool autoconf automake perl-dev python2-dev python3-dev openldap-dev krb5-dev
 	unixodbc-dev linux-pam-dev sqlite-dev talloc-dev libpcap-dev
 	linux-headers curl-dev hiredis-dev json-c-dev net-snmp-tools trust_router-dev"
 pkggroups="radius"
@@ -19,7 +19,7 @@ install="$pkgname.pre-install"
 depends="trust_router"
 subpackages="$pkgname-dbg $pkgname-doc $pkgname-dev $pkgname-ldap $pkgname-lib
 	$pkgname-mssql $pkgname-mysql $pkgname-sql $pkgname-perl
-	$pkgname-postgresql $pkgname-python $pkgname-radclient $pkgname-sqlite
+	$pkgname-postgresql $pkgname-python $pkgname-python3 $pkgname-radclient $pkgname-sqlite
 	$pkgname-unixodbc $pkgname-pam $pkgname-eap $pkgname-krb5
 	$pkgname-rest $pkgname-redis $pkgname-checkrad $pkgname-abfab"
 provides="freeradius3=$pkgver-r$pkgrel"
@@ -244,10 +244,22 @@ python() {
 	provides="freeradius3-python=$pkgver-r$pkgrel"
 	pkgdesc="Python module for FreeRADIUS server"
 	mkdir -p "${subpkgdir}"${_radlibdir}
-	mv "${pkgdir}"${_radlibdir}/rlm_python* "${subpkgdir}"${_radlibdir}
+	mv "${pkgdir}"${_radlibdir}/rlm_python.* "${subpkgdir}"${_radlibdir}
 	for dir in $_radmodsdir $_radmodsconfdir; do
 		mkdir -p "${subpkgdir}"$dir
 		mv "${pkgdir}"$dir/python "${subpkgdir}"$dir
+	done
+}
+
+python3() {
+	depends="freeradius=$pkgver-r$pkgrel python3"
+	provides="freeradius3-python3=$pkgver-r$pkgrel"
+	pkgdesc="Python 3 module for FreeRADIUS server"
+	mkdir -p "${subpkgdir}"${_radlibdir}
+	mv "${pkgdir}"${_radlibdir}/rlm_python3* "${subpkgdir}"${_radlibdir}
+	for dir in $_radmodsdir $_radmodsconfdir; do
+		mkdir -p "${subpkgdir}"$dir
+		mv "${pkgdir}"$dir/python3 "${subpkgdir}"$dir
 	done
 }
 
