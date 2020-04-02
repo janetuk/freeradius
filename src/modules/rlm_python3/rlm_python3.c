@@ -44,6 +44,7 @@ RCSID("$Id$")
 /* Since version 3.8, the "m" suffix is no longer available.
    https://bugs.python.org/issue36707 */
 #if PY_MINOR_VERSION >= 8
+#define LIBPYTHON_LINKER_NAME \
 	"libpython" STRINGIFY(PY_MAJOR_VERSION) "." STRINGIFY(PY_MINOR_VERSION) LT_SHREXT
 #else
 #define LIBPYTHON_LINKER_NAME \
