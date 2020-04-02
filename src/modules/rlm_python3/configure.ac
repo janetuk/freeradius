@@ -58,7 +58,12 @@ if test x$with_[]modname != xno; then
 			'`
 		AC_MSG_NOTICE([Sanitized cflags were \"${mod_cflags}\"])
 
-		python3_ldflags=`${PYTHON3_CONFIG_BIN} --ldflags`
+		# if python 3.8, we need to add --embed
+		if test x"$(python3 --version | cut -c -10)" = "xPython 3.8"; then
+			EMBED="--embed"
+		fi
+
+		python3_ldflags=`${PYTHON3_CONFIG_BIN} --ldflags $EMBED`
 		AC_MSG_NOTICE([${PYTHON3_CONFIG_BIN}'s ldflags were \"$python3_ldflags}\"])
 
 		dnl # Strip -Wl,-O1... Is -O even a valid linker flag??
