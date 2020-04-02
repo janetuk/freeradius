@@ -7,6 +7,7 @@ if test x$with_[]modname != xno; then
 
 	AC_PROG_CC
 	AC_PROG_CPP
+    AM_PATH_PYTHON([3.0],, [:])
 
 	dnl extra argument: --with-rlm-python3-config-bin
 	PYTHON3_CONFIG_BIN=
@@ -58,8 +59,9 @@ if test x$with_[]modname != xno; then
 			'`
 		AC_MSG_NOTICE([Sanitized cflags were \"${mod_cflags}\"])
 
-		# if python 3.8, we need to add --embed
-		if test x"$(python3 --version | cut -c -10)" = "xPython 3.8"; then
+		# From python 3.8, --embed is required
+		# https://bugs.python.org/issue36721
+		if test x"$PYTHON_VERSION" = x"3.8"; then
 			EMBED="--embed"
 		fi
 
