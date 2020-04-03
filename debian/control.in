@@ -28,8 +28,7 @@ Build-Depends: @BUILDDEPS@ debhelper (>= 9),
  libmemcached-dev,
  libhiredis-dev,
  moonshot-trust-router-dev (>= 1.3),
- openssl,
- python-dev | python2-dev,
+ python-dev,
  dh-systemd,
  samba-dev | samba4-dev
 Section: net
