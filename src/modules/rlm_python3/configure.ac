@@ -7,7 +7,7 @@ if test x$with_[]modname != xno; then
 
 	AC_PROG_CC
 	AC_PROG_CPP
-    AM_PATH_PYTHON([3.0],, [:])
+	AM_PATH_PYTHON([3.0],, [:])
 
 	dnl extra argument: --with-rlm-python3-config-bin
 	PYTHON3_CONFIG_BIN=
