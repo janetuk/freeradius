@@ -1,8 +1,9 @@
 freeradius (3.0.21+moonshot2.DIST) unstable; urgency=medium
 
-  * TBD
+  * Build python3 module
+  * Fixes to python3 module
 
- -- Jisc <moonshot@jisc.ac.uk>  Mon, 30 Mar 2020 00:00:00 +0000
+ -- Jisc <moonshot@jisc.ac.uk>  Mon, 6 Apr 2020 00:00:00 +0000
 
 freeradius (3.0.21+moonshot1.DIST) unstable; urgency=medium
 
