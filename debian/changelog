@@ -1,3 +1,9 @@
+freeradius (3.0.21+moonshot3.DIST) unstable; urgency=medium
+
+  * Fix upstream typo in raddb/mods-config/sql/main/postgresql/queries.conf
+
+ -- Jisc <moonshot@jisc.ac.uk>  Mon, 6 Apr 2020 00:00:00 +0000
+
 freeradius (3.0.21+moonshot2.DIST) unstable; urgency=medium
 
   * Build python3 module
