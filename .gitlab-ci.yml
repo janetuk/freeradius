@@ -4,9 +4,6 @@ variables:
 stages:
 - build
 
-before_script:
-    - rm -fr build SOURCES RPMS
-
 .centoscommon: &centoscommon
   stage: build
   except:
@@ -43,7 +40,7 @@ before_script:
     - debuild -us -uc
     - rm -fr build deps.zip
     - mkdir build
-    - cp ../*.deb ../*.dsc ../*tar* build
+    - mv ../*.deb ../*.dsc ../*tar* build
   artifacts:
     expire_in: 6 months
     paths:
@@ -88,20 +85,12 @@ centos8:
   image: $DOCKER_REGISTRY_URL/centos8:latest
   <<: *centoscommon
 
-debian8:
-  image: $DOCKER_REGISTRY_URL/debian8:latest
-  <<: *debiancommon
-
 debian9:
   image: $DOCKER_REGISTRY_URL/debian9:latest
   <<: *debiancommon
 
 debian10:
   image: $DOCKER_REGISTRY_URL/debian10:latest
-  <<: *debiancommon
-
-raspbian8:
-  image: $DOCKER_REGISTRY_URL/raspbian8:latest
   <<: *debiancommon
 
 raspbian9:
